@@ -1,0 +1,913 @@
+import { AboutSlint, Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct SessionRowData {
+    selection-key: string,
+    client: string,
+    session: string,
+    model: string,
+    last-activity: string,
+    input: string,
+    output: string,
+    cache: string,
+    reasoning: string,
+    tracked-tokens: string,
+}
+
+export struct SourceHealthRowData {
+    name: string,
+    format: string,
+    status: string,
+    detail: string,
+    severity: int,
+}
+
+export struct TrendRowData {
+    label: string,
+    total: string,
+    permille: int,
+}
+
+export struct ModelRowData {
+    label: string,
+    total: string,
+    permille: int,
+}
+
+export struct SettingsClientRowData {
+    id: string,
+    label: string,
+    enabled: bool,
+    committed: bool,
+}
+
+export struct SettingsSourceRowData {
+    id: string,
+    name: string,
+    client: string,
+    selected: bool,
+    committed: bool,
+    status: string,
+}
+
+export struct ImportReportRowData {
+    artifact: string,
+    preservation: string,
+    semantic-import: string,
+    activation: string,
+    records: string,
+}
+
+component MetricLabel inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    background: #121820;
+    border-radius: 6px;
+    height: 56px;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: #91a0af;
+            font-size: 12px;
+        }
+        Text {
+            text: root.value;
+            color: #f2f6fa;
+            font-size: 14px;
+            font-family: "monospace";
+            font-weight: 600;
+            overflow: elide;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Token Monitor";
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    min-width: 880px;
+    min-height: 600px;
+    background: #0b0f14;
+
+    callback refresh();
+    callback check-updates();
+    callback install-update();
+    callback navigate(int);
+    callback search-changed(string);
+    callback period-changed(int);
+    callback previous-page();
+    callback next-page();
+    callback select-session(string);
+    callback clear-session-selection();
+    callback settings-timezone-changed(string);
+    callback settings-client-changed(string, bool);
+    callback settings-source-changed(string, bool);
+    callback select-all-sources();
+    callback save-settings();
+    callback cancel-settings();
+
+    in-out property <int> active-view: 0;
+    in property <string> tracked-tokens: "0";
+    in property <string> input-tokens: "0";
+    in property <string> output-tokens: "0";
+    in property <string> cache-tokens: "0";
+    in property <string> reasoning-tokens: "0";
+    in property <string> cost: "Unavailable";
+    in property <string> empty-message: "No sources configured";
+    in property <string> source-headline: "No configured sources";
+    in property <string> period-heading: "TRACKED TOKENS · TODAY";
+    in property <int> period-index: 0;
+    in property <string> watch-status: "No sources configured";
+    in property <string> update-status: "Check GitHub Releases for a newer version.";
+    in property <bool> update-available: false;
+    in property <bool> update-busy: false;
+    in property <string> page-label: "1 / 1";
+    in property <string> selection-notice: "";
+    in property <bool> has-usage: false;
+    in property <bool> refresh-available: false;
+    in property <bool> can-previous: false;
+    in property <bool> can-next: false;
+    in property <int> input-permille: 0;
+    in property <int> output-permille: 0;
+    in property <int> cache-permille: 0;
+    in property <int> reasoning-permille: 0;
+    in property <[SessionRowData]> recent-sessions;
+    in property <[SessionRowData]> sessions;
+    in property <[TrendRowData]> trends;
+    in property <string> trends-headline: "";
+    in property <[ModelRowData]> models;
+    in property <string> models-headline: "";
+    in property <bool> detail-visible: false;
+    in property <string> detail-heading: "";
+    in property <string> detail-model: "";
+    in property <string> detail-tracked: "";
+    in property <string> detail-input: "";
+    in property <string> detail-output: "";
+    in property <string> detail-cache: "";
+    in property <string> detail-reasoning: "";
+    in property <string> detail-first-seen: "";
+    in property <string> detail-last-seen: "";
+    in property <[ModelRowData]> detail-models;
+    in property <[SourceHealthRowData]> sources;
+    in property <string> settings-committed-timezone: "UTC";
+    in property <string> settings-timezone: "UTC";
+    in property <string> settings-validation-notice: "";
+    in property <string> settings-notice: "";
+    in property <string> credential-status: "Unavailable";
+    in property <bool> settings-save-enabled: false;
+    in property <bool> settings-cancel-enabled: false;
+    in property <[SettingsClientRowData]> settings-clients;
+    in property <[SettingsSourceRowData]> settings-sources;
+    in property <[ImportReportRowData]> import-report;
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            width: 208px;
+            background: #121820;
+            border-width: 1px;
+            border-color: #293542;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                Text {
+                    text: "∑  Token Monitor";
+                    color: #f2f6fa;
+                    font-size: 18px;
+                    font-weight: 700;
+                    height: 42px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "LEDGER RAIL";
+                    color: #69a7ff;
+                    font-size: 11px;
+                    height: 20px;
+                }
+
+                Button {
+                    text: root.active-view == 0 ? "●  Home" : "Home";
+                    accessible-role: button;
+                    accessible-id: "navigation-home";
+                    accessible-label: "Home";
+                    clicked => { root.navigate(0); }
+                }
+                Button {
+                    text: root.active-view == 1 ? "●  Sessions" : "Sessions";
+                    accessible-role: button;
+                    accessible-id: "navigation-sessions";
+                    accessible-label: "Sessions";
+                    clicked => { root.navigate(1); }
+                }
+                Button {
+                    text: root.active-view == 2 ? "●  Source health" : "Source health";
+                    accessible-role: button;
+                    accessible-id: "navigation-source-health";
+                    accessible-label: "Source health";
+                    clicked => { root.navigate(2); }
+                }
+
+                Rectangle { height: 10px; background: transparent; }
+                Button {
+                    text: root.active-view == 5 ? "●  Trends" : "Trends";
+                    accessible-role: button;
+                    accessible-id: "navigation-trends";
+                    accessible-label: "Trends";
+                    clicked => { root.navigate(5); }
+                }
+                Button {
+                    text: root.active-view == 6 ? "●  Models" : "Models";
+                    accessible-role: button;
+                    accessible-id: "navigation-models";
+                    accessible-label: "Models";
+                    clicked => { root.navigate(6); }
+                }
+                Button { text: "Limits     Soon"; enabled: false; }
+                Button {
+                    text: root.active-view == 3 ? "●  Settings" : "Settings";
+                    accessible-role: button;
+                    accessible-id: "navigation-settings";
+                    accessible-label: "Settings";
+                    clicked => { root.navigate(3); }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                Text {
+                    text: root.watch-status;
+                    accessible-role: text;
+                    accessible-id: "watch-status";
+                    accessible-label: root.watch-status;
+                    color: root.refresh-available ? #91a0af : #f5a65b;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: "↻  Refresh sources";
+                    accessible-role: button;
+                    accessible-id: "refresh-sources";
+                    accessible-label: "Refresh sources";
+                    enabled: root.refresh-available;
+                    clicked => { root.refresh(); }
+                }
+                Button {
+                    text: root.active-view == 4 ? "●  About" : "About";
+                    accessible-role: button;
+                    accessible-id: "navigation-about";
+                    accessible-label: "About";
+                    clicked => { root.navigate(4); }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #0b0f14;
+            horizontal-stretch: 1;
+
+            if root.active-view == 0 : VerticalLayout {
+                padding: 24px;
+                spacing: 18px;
+
+                HorizontalLayout {
+                    Text {
+                        text: "Home";
+                        color: #f2f6fa;
+                        font-size: 20px;
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: root.period-index == 0 ? "Day  ✓" : "Day";
+                        accessible-role: button;
+                        accessible-id: "period-today";
+                        accessible-label: "Show today";
+                        clicked => { root.period-changed(0); }
+                    }
+                    Button { text: "Week  Soon"; enabled: false; }
+                    Button {
+                        text: root.period-index == 1 ? "Month  ✓" : "Month";
+                        accessible-role: button;
+                        accessible-id: "period-month";
+                        accessible-label: "Show this month";
+                        clicked => { root.period-changed(1); }
+                    }
+                    Button {
+                        text: root.period-index == 2 ? "All  ✓" : "All";
+                        accessible-role: button;
+                        accessible-id: "period-all-time";
+                        accessible-label: "Show all captured";
+                        clicked => { root.period-changed(2); }
+                    }
+                }
+
+                Rectangle {
+                    height: 190px;
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+
+                    HorizontalLayout {
+                        padding: 20px;
+                        spacing: 18px;
+
+                        Rectangle {
+                            width: 14px;
+                            height: 142px;
+                            background: #293542;
+                            border-radius: 6px;
+
+                            Rectangle {
+                                y: 0px;
+                                width: 14px;
+                                height: 142px * root.input-permille / 1000;
+                                background: #67e8b4;
+                            }
+                            Rectangle {
+                                y: 142px * root.input-permille / 1000;
+                                width: 14px;
+                                height: 142px * root.output-permille / 1000;
+                                background: #69a7ff;
+                            }
+                            Rectangle {
+                                y: 142px * (root.input-permille + root.output-permille) / 1000;
+                                width: 14px;
+                                height: 142px * root.cache-permille / 1000;
+                                background: #b89cff;
+                            }
+                            Rectangle {
+                                y: 142px * (root.input-permille + root.output-permille + root.cache-permille) / 1000;
+                                width: 14px;
+                                height: 142px * root.reasoning-permille / 1000;
+                                background: #f5a65b;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 5px;
+                            horizontal-stretch: 1;
+                            Text { text: root.period-heading; color: #91a0af; font-size: 12px; }
+                            Text {
+                                text: root.tracked-tokens;
+                                color: #f2f6fa;
+                                font-family: "monospace";
+                                font-size: 32px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: root.has-usage ? root.source-headline : root.empty-message;
+                                accessible-role: text;
+                                accessible-id: "home-source-summary";
+                                accessible-label: root.has-usage ? root.source-headline : root.empty-message;
+                                color: root.has-usage ? #91a0af : #f5a65b;
+                                font-size: 13px;
+                            }
+                            Text { text: "Cost  " + root.cost; color: #91a0af; font-size: 12px; }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    MetricLabel { label: "Input"; value: root.input-tokens; horizontal-stretch: 1; }
+                    MetricLabel { label: "Output"; value: root.output-tokens; horizontal-stretch: 1; }
+                    MetricLabel { label: "Cache"; value: root.cache-tokens; horizontal-stretch: 1; }
+                    MetricLabel { label: "Reasoning"; value: root.reasoning-tokens; horizontal-stretch: 1; }
+                }
+
+                Text { text: "Recent sessions"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 6px;
+                        if root.recent-sessions.length == 0 : Text {
+                            text: root.empty-message;
+                            accessible-role: text;
+                            accessible-id: "home-empty-state";
+                            accessible-label: root.empty-message;
+                            color: #91a0af;
+                            vertical-stretch: 1;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        for row in root.recent-sessions : Button {
+                            text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.tracked-tokens + "  ·  " + row.last-activity;
+                            accessible-role: button;
+                            accessible-label: self.text;
+                            clicked => { root.select-session(row.selection-key); }
+                        }
+                    }
+                }
+            }
+
+            if root.active-view == 1 : VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Sessions"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                LineEdit {
+                    placeholder-text: "Search captured client, session, or model";
+                    accessible-role: text-input;
+                    accessible-id: "session-search";
+                    accessible-label: "Search sessions";
+                    accessible-placeholder-text: self.placeholder-text;
+                    edited(text) => { root.search-changed(text); }
+                }
+                if root.selection-notice != "" : Text {
+                    text: root.selection-notice;
+                    color: #f5a65b;
+                    font-size: 12px;
+                }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 5px;
+                            if root.sessions.length == 0 : Text {
+                                text: root.empty-message;
+                                accessible-role: text;
+                                accessible-id: "sessions-empty-state";
+                                accessible-label: root.empty-message;
+                                color: #91a0af;
+                                height: 80px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            for row in root.sessions : Button {
+                                text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.input + " in  ·  " + row.output + " out  ·  " + row.cache + " cache  ·  " + row.reasoning + " reasoning  ·  " + row.tracked-tokens;
+                                accessible-role: button;
+                                accessible-label: self.text;
+                                clicked => { root.select-session(row.selection-key); }
+                            }
+                        }
+                    }
+                }
+                if root.detail-visible : Rectangle {
+                    height: 196px;
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 5px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Session detail · " + root.detail-heading;
+                                accessible-role: text;
+                                accessible-id: "session-detail-heading";
+                                accessible-label: "Session detail · " + root.detail-heading;
+                                color: #f2f6fa;
+                                font-size: 14px;
+                                font-weight: 600;
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "Close detail";
+                                accessible-role: button;
+                                accessible-id: "session-detail-close";
+                                accessible-label: "Close session detail";
+                                clicked => { root.clear-session-selection(); }
+                            }
+                        }
+                        Text { text: "Selected model · " + root.detail-model; color: #69a7ff; font-size: 12px; }
+                        Text { text: "Tracked " + root.detail-tracked + " · Input " + root.detail-input + " · Output " + root.detail-output; color: #91a0af; font-size: 12px; font-family: "monospace"; }
+                        Text { text: "Cache " + root.detail-cache + " · Reasoning " + root.detail-reasoning; color: #91a0af; font-size: 12px; font-family: "monospace"; }
+                        Text { text: "First " + root.detail-first-seen + " · Last " + root.detail-last-seen; color: #91a0af; font-size: 11px; }
+                        ScrollView {
+                            height: 60px;
+                            VerticalLayout {
+                                spacing: 2px;
+                                for model in root.detail-models : Text {
+                                    text: model.label + " · " + model.total + " tokens";
+                                    accessible-role: text;
+                                    accessible-label: model.label + " · " + model.total + " tokens";
+                                    color: #f2f6fa;
+                                    font-size: 11px;
+                                    font-family: "monospace";
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    Button { text: "Previous"; accessible-role: button; accessible-id: "sessions-previous"; accessible-label: "Previous"; enabled: root.can-previous; clicked => { root.previous-page(); } }
+                    Text {
+                        text: root.page-label;
+                        accessible-role: text;
+                        accessible-id: "sessions-page";
+                        accessible-label: root.page-label;
+                        color: #91a0af;
+                        font-family: "monospace";
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button { text: "Next"; accessible-role: button; accessible-id: "sessions-next"; accessible-label: "Next"; enabled: root.can-next; clicked => { root.next-page(); } }
+                }
+            }
+
+            if root.active-view == 2 : VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Source health"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: root.source-headline; accessible-role: text; accessible-id: "source-headline"; accessible-label: root.source-headline; color: #91a0af; font-size: 13px; }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 8px;
+                            if root.sources.length == 0 : Text {
+                                text: "No sources configured";
+                                color: #91a0af;
+                                height: 80px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            for source in root.sources : Rectangle {
+                                height: 66px;
+                                background: #18212b;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: source.severity == 0 ? #67e8b4 : source.severity == 2 ? #f5a65b : source.severity == 4 ? #f16d7a : #69a7ff;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        Text { text: source.name + "  ·  " + source.format; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                                        Text { text: source.detail; color: #91a0af; font-size: 12px; overflow: elide; }
+                                    }
+                                    Text { text: source.status; accessible-role: text; accessible-label: source.status; color: #f2f6fa; font-size: 12px; vertical-alignment: center; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.active-view == 3 : VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Settings"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                if root.settings-notice != "" : Text {
+                    text: root.settings-notice;
+                    color: #f5a65b;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    height: 280px;
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        Text { text: "MONITORING CONFIGURATION"; color: #69a7ff; font-size: 11px; }
+                        Text {
+                            text: "Saved timezone  " + root.settings-committed-timezone;
+                            accessible-role: text;
+                            accessible-id: "settings-saved-timezone";
+                            accessible-label: self.text;
+                            color: #91a0af;
+                            font-size: 12px;
+                        }
+                        Text {
+                            text: "Credential storage  " + root.credential-status;
+                            color: #91a0af;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 18px;
+                            Text { text: "Clients"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            for client in root.settings-clients : Button {
+                                text: client.label + (client.enabled ? "  · Enabled" : "  · Disabled") + (client.committed == client.enabled ? "" : "  · edited");
+                                accessible-role: button;
+                                accessible-label: self.text;
+                                clicked => { root.settings-client-changed(client.id, !client.enabled); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Timezone"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            LineEdit {
+                                text: root.settings-timezone;
+                                placeholder-text: "IANA timezone, for example UTC";
+                                accessible-role: text-input;
+                                accessible-id: "settings-timezone";
+                                accessible-label: "Timezone";
+                                accessible-placeholder-text: self.placeholder-text;
+                                horizontal-stretch: 1;
+                                edited(text) => { root.settings-timezone-changed(text); }
+                            }
+                        }
+                        if root.settings-validation-notice != "" : Text {
+                            text: root.settings-validation-notice;
+                            accessible-role: text;
+                            accessible-id: "settings-validation";
+                            accessible-label: root.settings-validation-notice;
+                            color: #f16d7a;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            Text { text: "Sources"; color: #f2f6fa; font-size: 13px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button {
+                                text: "Select all sources";
+                                accessible-role: button;
+                                accessible-id: "settings-select-all";
+                                accessible-label: "Select all sources";
+                                clicked => { root.select-all-sources(); }
+                            }
+                        }
+                        if root.settings-sources.length == 0 : Text {
+                            text: "No supported sources discovered";
+                            color: #f5a65b;
+                            font-size: 12px;
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            for source in root.settings-sources : Button {
+                                text: source.name + " · " + source.client + (source.selected ? " · Selected" : " · Not selected") + " · " + source.status;
+                                accessible-role: button;
+                                accessible-label: self.text;
+                                enabled: source.status == "Available";
+                                clicked => { root.settings-source-changed(source.id, !source.selected); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        HorizontalLayout {
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: "Cancel"; accessible-role: button; accessible-id: "settings-cancel"; accessible-label: "Cancel"; enabled: root.settings-cancel-enabled; clicked => { root.cancel-settings(); } }
+                            Button { text: "Save"; accessible-role: button; accessible-id: "settings-save"; accessible-label: "Save"; enabled: root.settings-save-enabled; clicked => { root.save-settings(); } }
+                        }
+                    }
+                }
+                Text { text: "Migration report"; accessible-role: text; accessible-id: "migration-report"; accessible-label: "Migration report"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 7px;
+                            if root.import-report.length == 0 : Text {
+                                text: "No legacy artifacts were found";
+                                color: #91a0af;
+                                height: 70px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            for item in root.import-report : Rectangle {
+                                height: 58px;
+                                background: #18212b;
+                                border-radius: 6px;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 12px;
+                                    Text { text: item.artifact; color: #f2f6fa; font-size: 13px; width: 180px; vertical-alignment: center; }
+                                    Text { text: item.preservation; color: #67e8b4; font-size: 12px; width: 130px; vertical-alignment: center; }
+                                    Text { text: item.semantic-import; color: #69a7ff; font-size: 12px; width: 130px; vertical-alignment: center; }
+                                    Text { text: item.activation; color: item.activation == "Active" ? #67e8b4 : #f5a65b; font-size: 12px; width: 110px; vertical-alignment: center; }
+                                    Text { text: item.records + " records"; color: #91a0af; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: right; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.active-view == 4 : VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "About"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 8px;
+                        Text { text: "Token Monitor Lite 0.1.0"; accessible-role: text; accessible-id: "about-version"; accessible-label: "Token Monitor Lite 0.1.0"; color: #f2f6fa; font-size: 18px; font-weight: 700; }
+                        Text { text: "Native Rust + Slint migration · compiled subset"; color: #91a0af; font-size: 13px; }
+                        Text { text: "MIT © 2026 Sandeep Khadka"; color: #f2f6fa; font-size: 13px; }
+                        Text { text: "Token Monitor © 2026 Javis · Tokscale © 2025 Junho Yeo · MIT."; color: #91a0af; font-size: 12px; wrap: word-wrap; }
+                        Rectangle { height: 12px; background: transparent; }
+                        Text { text: "Updates"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                        Text {
+                            text: root.update-status;
+                            accessible-role: text;
+                            accessible-id: "update-status";
+                            accessible-label: root.update-status;
+                            color: #91a0af;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Check for updates";
+                                accessible-role: button;
+                                accessible-id: "check-updates";
+                                accessible-label: "Check for updates";
+                                enabled: !root.update-busy;
+                                clicked => { root.check-updates(); }
+                            }
+                            if root.update-available : Button {
+                                text: "Download & install";
+                                accessible-role: button;
+                                accessible-id: "install-update";
+                                accessible-label: "Download and install update";
+                                enabled: !root.update-busy;
+                                clicked => { root.install-update(); }
+                            }
+                        }
+                        Rectangle { height: 12px; background: transparent; }
+                        AboutSlint { }
+                    }
+                }
+            }
+
+            if root.active-view == 5 : VerticalLayout {
+                padding: 24px;
+                spacing: 10px;
+                Text { text: "Trends"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text {
+                    text: root.trends-headline;
+                    accessible-role: text;
+                    accessible-id: "trends-headline";
+                    accessible-label: root.trends-headline;
+                    color: #91a0af;
+                    font-size: 13px;
+                }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 4px;
+                            if root.trends.length == 0 : Text {
+                                text: "No daily history yet";
+                                color: #91a0af;
+                                height: 80px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            for row in root.trends : Rectangle {
+                                height: 26px;
+                                background: #0f1620;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: row.label;
+                                        accessible-role: text;
+                                        accessible-label: row.label + " · " + row.total + " tokens";
+                                        color: #91a0af;
+                                        font-size: 11px;
+                                        font-family: "monospace";
+                                        width: 88px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle {
+                                        height: 10px;
+                                        background: #1e2a36;
+                                        border-radius: 3px;
+                                        horizontal-stretch: 1;
+                                        Rectangle {
+                                            width: parent.width * row.permille / 1000;
+                                            height: 10px;
+                                            background: #67e8b4;
+                                            border-radius: 3px;
+                                        }
+                                    }
+                                    Text {
+                                        text: row.total;
+                                        color: #f2f6fa;
+                                        font-size: 11px;
+                                        font-family: "monospace";
+                                        width: 100px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.active-view == 6 : VerticalLayout {
+                padding: 24px;
+                spacing: 10px;
+                Text { text: "Models"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text {
+                    text: root.models-headline;
+                    accessible-role: text;
+                    accessible-id: "models-headline";
+                    accessible-label: root.models-headline;
+                    color: #91a0af;
+                    font-size: 13px;
+                }
+                Rectangle {
+                    background: #121820;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #293542;
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 4px;
+                            if root.models.length == 0 : Text {
+                                text: "No model usage in this period";
+                                color: #91a0af;
+                                height: 80px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            for row in root.models : Rectangle {
+                                height: 30px;
+                                background: #0f1620;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: row.label;
+                                        accessible-role: text;
+                                        accessible-label: row.label + " · " + row.total + " tokens";
+                                        color: #f2f6fa;
+                                        font-size: 12px;
+                                        width: 320px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle {
+                                        height: 10px;
+                                        background: #1e2a36;
+                                        border-radius: 3px;
+                                        horizontal-stretch: 1;
+                                        Rectangle {
+                                            width: parent.width * row.permille / 1000;
+                                            height: 10px;
+                                            background: #69a7ff;
+                                            border-radius: 3px;
+                                        }
+                                    }
+                                    Text {
+                                        text: row.total;
+                                        color: #f2f6fa;
+                                        font-size: 12px;
+                                        font-family: "monospace";
+                                        width: 120px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
