@@ -1,0 +1,60 @@
+[package]
+name = "token-monitor-lite"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+description = "Native token usage monitor — staged Rust and Slint migration"
+
+[lib]
+name = "token_monitor_lite"
+path = "src/lib.rs"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:slint", "dep:slint-build"]
+
+[[bin]]
+name = "token-monitor-lite"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[dependencies]
+anyhow = "=1.0.104"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = "=0.10.4"
+notify = "=8.2.0"
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "backup"] }
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std", "hash"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.1"
+semver = "=1.0.28"
+thiserror = "=2.0.20"
+tracing = "=0.1.44"
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+slint = { version = "=1.18.0", optional = true, default-features = false, features = ["std", "compat-1-18", "backend-winit", "renderer-software", "accessibility"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["sync-secret-service"] }
+
+[build-dependencies]
+slint-build = { version = "=1.18.0", optional = true }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
