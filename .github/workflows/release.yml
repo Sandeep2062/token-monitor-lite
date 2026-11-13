@@ -1,0 +1,99 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - run: sudo apt-get update && sudo apt-get install -y zstd
+      - run: cargo test --locked --all-targets --all-features
+      - run: cargo build --locked --release --all-features
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/build-linux-packages.py \
+            --binary target/release/token-monitor-lite \
+            --desktop packaging/linux/token-monitor-lite.desktop \
+            --metainfo packaging/linux/io.github.sandeep2062.TokenMonitorLite.metainfo.xml \
+            --icon packaging/linux/token-monitor-lite.svg \
+            --license LICENSE \
+            --output dist \
+            --version "$version"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-release
+          path: |
+            dist/*.deb
+            dist/*.tar.zst
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - run: cargo test --locked --all-targets --all-features
+      - run: cargo build --locked --release --all-features
+      - run: choco install innosetup --yes --no-progress
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging/windows/token-monitor-lite.iss
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release
+          path: dist/*.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - run: cargo test --locked --all-targets --all-features
+      - run: cargo build --locked --release --all-features
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          TOKEN_MONITOR_VERSION="$version" sh packaging/macos/bundle.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-release
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "Token Monitor Lite $GITHUB_REF_NAME" \
+            --generate-notes
