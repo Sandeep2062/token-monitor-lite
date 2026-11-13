@@ -426,3 +426,168 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# =============================================================================
+# Universal AI Coding Agents, Harnesses & Assistants Ignore Policy
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. AI Agent Instructions, Prompts, and Rules Files
+# -----------------------------------------------------------------------------
+AGENTS.md
+AGENT.md
+agent.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+CODEX.md
+copilot-instructions.md
+.github/copilot-instructions.md
+.cursorrules
+.windsurfrules
+.clinerules
+.clinerules-*
+.roomodes
+.traerules
+*.agent.md
+*.rules.md
+*.rules
+
+# -----------------------------------------------------------------------------
+# 2. AI Coding Harness Directories & Local Tool Configurations
+# -----------------------------------------------------------------------------
+# Google Antigravity & Gemini CLI
+.gemini/
+.antigravity/
+.gemini-session/
+
+# Cursor IDE
+.cursor/
+.cursorindexing/
+.cursor-server/
+
+# Windsurf & Codeium
+.windsurf/
+.codeium/
+
+# Claude Code (Anthropic CLI)
+.claude/
+.claude.json
+
+# OpenAI Codex & ChatGPT
+.codex/
+.openai/
+.chatgpt/
+
+# GitHub Copilot
+.copilot/
+.copilot-debug/
+
+# Cline & Roo Code
+.cline/
+.clinerules/
+.roo/
+.roocode/
+
+# Aider AI
+.aider/
+.aider*
+
+# Continue.dev
+.continue/
+
+# Trae & Codebuff
+.trae/
+.codebuff/
+
+# Autonomous agents & auxiliary harnesses (Devin, OpenHands, Supermaven, Amazon Q, Tabnine, Qodo, Cody, etc.)
+.devin/
+.openhands/
+.opendevin/
+.supermaven/
+.amazonq/
+.aws/amazonq/
+.tabnine/
+.qodo/
+.codium/
+.codiumai/
+.cody/
+.augment/
+.melty/
+.bito/
+.blackbox/
+.pieces/
+.promptfoo/
+.superpowers/
+.codegraph/
+.agents/
+.agent/
+
+# -----------------------------------------------------------------------------
+# 3. Generated Agent Artifacts, Sessions, Histories, Scratchpads, Logs & Caches
+# -----------------------------------------------------------------------------
+# Conversation histories and chat transcripts
+*.chat.history.md
+*.session.json
+*.conversation.json
+.chat/
+chat-history/
+
+# Ephemeral prompts and context dumps
+*.prompt.tmp
+*.prompt.bak
+.prompt/
+.prompts/
+
+# Agent task plans, scratchpads, and execution manifests
+agent-plan.md
+agent-scratchpad.md
+task-plan.md
+*.scratchpad.md
+scratchpad.md
+.scratchpad/
+
+# Agent execution logs and debugging traces
+*.agent.log
+*.ai.log
+aider*.log
+copilot-debug.log
+*.tabnine.log
+
+# Agent local cache, indexes, and vector stores
+.agent-cache/
+.ai-cache/
+.vector_store/
+.chroma/
+
+# Harness-specific metadata and local locks
+skills-lock.json
+promptfoo-*.json
+
+# -----------------------------------------------------------------------------
+# 4. Legitimate Project File & Documentation Protections
+# Prevents over-eager matching (e.g. Windows case-insensitivity or generic names)
+# from accidentally ignoring legitimate documentation, source, tests, or assets.
+# -----------------------------------------------------------------------------
+!docs/**
+!**/docs/**
+!src/**
+!**/src/**
+!tests/**
+!**/tests/**
+!assets/**
+!**/assets/**
+!site/**
+!**/site/**
+
+# Read-only upstream reference checkout (never ship or commit it).
+/token-monitor/
+
+# Native application build output.
+/target/
+
+# Local packaging, database and test artifacts
+/dist/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
