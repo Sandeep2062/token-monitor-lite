@@ -1,0 +1,61 @@
+name: windows-acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, native-rust-foundation]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x86-64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check --locked --all-targets --all-features
+      - name: Test
+        run: cargo test --locked --all-targets --all-features
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Release build
+        run: cargo build --locked --release --all-features
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/token-monitor-lite.iss
+      - name: Install and uninstall lifecycle
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist/*.exe | Select-Object -First 1
+          if (-not $installer) { throw "installer missing" }
+          $target = Join-Path $env:RUNNER_TEMP "token-monitor-lite-install"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$target" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "install failed: $($process.ExitCode)" }
+          if (-not (Test-Path (Join-Path $target 'token-monitor-lite.exe'))) { throw "installed binary missing" }
+          $uninstaller = Join-Path $target 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw "uninstaller missing" }
+          $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "uninstall failed: $($process.ExitCode)" }
+          if (Test-Path (Join-Path $target 'token-monitor-lite.exe')) { throw "uninstall left the binary behind" }
+      - name: Inspect artifact
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "{0} {1} bytes {2}" -f $hash.Hash.ToLower(), $_.Length, $_.Name
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x86-64-installer
+          path: dist/*.exe
+          if-no-files-found: error

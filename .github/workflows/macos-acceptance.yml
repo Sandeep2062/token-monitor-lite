@@ -1,0 +1,42 @@
+name: macos-acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, native-rust-foundation]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check --locked --all-targets --all-features
+      - name: Test
+        run: cargo test --locked --all-targets --all-features
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Release build
+        run: cargo build --locked --release --all-features
+      - name: Bundle and ad-hoc sign
+        run: sh packaging/macos/bundle.sh
+      - name: Inspect bundle
+        run: |
+          file "dist/Token Monitor Lite.app/Contents/MacOS/token-monitor-lite"
+          codesign -dv --verbose=4 "dist/Token Monitor Lite.app" 2>&1 || true
+          otool -L "dist/Token Monitor Lite.app/Contents/MacOS/token-monitor-lite" || true
+          strings "dist/Token Monitor Lite.app/Contents/MacOS/token-monitor-lite" | grep -Ei 'electron|chromium|webview|tokscale-core' && exit 1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-unsigned-app
+          path: dist/*.zip
+          if-no-files-found: error
