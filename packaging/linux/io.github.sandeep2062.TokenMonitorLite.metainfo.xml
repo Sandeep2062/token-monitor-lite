@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.sandeep2062.TokenMonitorLite</id>
+  <name>Token Monitor Lite</name>
+  <summary>Native token usage monitor</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Monitor supported local AI coding-session token usage with a native Rust and Slint desktop application.</p>
+  </description>
+  <launchable type="desktop-id">token-monitor-lite.desktop</launchable>
+  <provides>
+    <binary>token-monitor-lite</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-11-10"/>
+  </releases>
+</component>
