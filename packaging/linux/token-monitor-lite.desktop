@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Token Monitor Lite
+Comment=Native token usage monitor
+Exec=token-monitor-lite
+Icon=token-monitor-lite
+Terminal=false
+Categories=Utility;System;
+Keywords=tokens;usage;Claude;Codex;
+StartupNotify=true

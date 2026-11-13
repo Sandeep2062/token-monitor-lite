@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://token-monitor-lite.invalid/schemas/acceptance-evidence-v1.json",
+  "title": "Token Monitor Lite redacted acceptance evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "phase",
+    "status",
+    "sourceSnapshotSha256",
+    "fixture",
+    "platform",
+    "checks",
+    "artifacts",
+    "blockers",
+    "cleanup"
+  ],
+  "properties": {
+    "schema": { "const": "token-monitor-lite-evidence-v1" },
+    "phase": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 64 },
+    "status": { "enum": ["passed", "failed", "blocked", "diagnostic"] },
+    "sourceSnapshotSha256": { "$ref": "#/$defs/sha256" },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "revision", "manifestSha256", "configuredSources", "canonicalSessions", "usageObservations", "releaseTargetMet"],
+      "properties": {
+        "schema": { "enum": ["token-monitor-lite-acceptance-v1", "token-monitor-lite-acceptance-v2"] },
+        "revision": { "type": "string", "maxLength": 128 },
+        "manifestSha256": { "$ref": "#/$defs/sha256" },
+        "configuredSources": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "canonicalSessions": { "type": "integer", "minimum": 0 },
+        "usageObservations": { "type": "integer", "minimum": 0 },
+        "canonicalObservations": { "type": "integer", "minimum": 0 },
+        "physicalBytes": { "type": "integer", "minimum": 0 },
+        "decodedBytes": { "type": "integer", "minimum": 0 },
+        "releaseTargetMet": { "type": "boolean" }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "renderer"],
+      "properties": {
+        "os": { "type": "string", "maxLength": 128 },
+        "architecture": { "type": "string", "maxLength": 64 },
+        "desktop": { "type": ["string", "null"], "maxLength": 128 },
+        "renderer": { "type": "string", "maxLength": 64 },
+        "cpuCount": { "type": "integer", "minimum": 1 },
+        "memoryMiB": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 96 },
+          "status": { "enum": ["passed", "failed", "blocked", "not-applicable"] },
+          "durationMs": { "type": "integer", "minimum": 0 },
+          "measurement": { "type": ["integer", "number", "string", "null"], "maxLength": 128 }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "sha256", "bytes"],
+        "properties": {
+          "role": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 64 },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "maxLength": 96 }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["processesStopped", "credentialRemoved", "temporaryRootsRemoved"],
+      "properties": {
+        "processesStopped": { "type": "boolean" },
+        "credentialRemoved": { "type": "boolean" },
+        "temporaryRootsRemoved": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
