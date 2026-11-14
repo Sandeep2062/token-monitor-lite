@@ -21,6 +21,7 @@ pub enum SourceFormat {
     CodexCli,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
+    OpenCodeSqlite,
 }
 
 impl SourceFormat {
@@ -29,6 +30,7 @@ impl SourceFormat {
             Self::ClaudeCli => "claude",
             Self::CodexCli | Self::CodexLocalUsageSqlite => "codex",
             Self::SessionArchiveSqlite => "mixed",
+            Self::OpenCodeSqlite => "opencode",
         }
     }
 
@@ -38,6 +40,7 @@ impl SourceFormat {
             Self::CodexCli => "codex-jsonl",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
+            Self::OpenCodeSqlite => "opencode-sqlite",
         }
     }
 
@@ -47,6 +50,7 @@ impl SourceFormat {
             "codex-jsonl" => Some(Self::CodexCli),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
+            "opencode-sqlite" => Some(Self::OpenCodeSqlite),
             _ => None,
         }
     }
@@ -54,7 +58,7 @@ impl SourceFormat {
     pub(crate) fn is_sqlite(self) -> bool {
         matches!(
             self,
-            Self::SessionArchiveSqlite | Self::CodexLocalUsageSqlite
+            Self::SessionArchiveSqlite | Self::CodexLocalUsageSqlite | Self::OpenCodeSqlite
         )
     }
 }
@@ -530,7 +534,9 @@ impl SourceReader {
                     CodexReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
-            SourceFormat::SessionArchiveSqlite | SourceFormat::CodexLocalUsageSqlite => {
+            SourceFormat::SessionArchiveSqlite
+            | SourceFormat::CodexLocalUsageSqlite
+            | SourceFormat::OpenCodeSqlite => {
                 unreachable!("SQLite sources do not use text readers")
             }
         }
@@ -544,6 +550,7 @@ impl SourceReader {
         };
         let (rows, retained): (Arc<[ResponseUsage]>, Arc<[RetainedPeriodUsage]>) = match data {
             crate::source_inputs::SqliteInputData::CodexLocalUsage(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::OpenCode(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::SessionArchive(snapshot) => {
                 let mut retained = Vec::new();
                 for session in snapshot.sessions.iter() {

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
-const SUPPORTED_CLIENTS: &[&str] = &["claude", "codex"];
+const SUPPORTED_CLIENTS: &[&str] = &["claude", "codex", "opencode"];
 const COMMAND_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1133,6 +1133,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::ClaudeCli => "claude",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
         SourceFormat::SessionArchiveSqlite => "mixed",
+        SourceFormat::OpenCodeSqlite => "opencode",
     }
 }
 
@@ -1174,6 +1175,7 @@ mod credential_tests {
                 app_data: None,
                 local_app_data: None,
                 xdg_config_home: None,
+                xdg_data_home: None,
                 xdg_state_home: None,
                 legacy_shared_override: Some(self.0.join("legacy-shared")),
                 native_data_override: Some(self.0.join("native-private")),

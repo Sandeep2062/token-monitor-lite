@@ -30,6 +30,7 @@ All arithmetic is checked. Invalid signs, non-integral or unsafe values, inconsi
 | Codex unkeyed | Opaque source ID + source observation ordinal | Always distinct. |
 | Session archive retained aggregate | Period + normalized client + session ID | Latest complete retained snapshot wins, including explicit zero. It is not additive with a live row of the same period/session. |
 | Codex local-usage row | Source-local `(account_key, thread_id, checkpoint_total)` | Account prevents collisions but is not persisted or shown. The canonical session is `codex:<thread_id>`. No continuation/fork identity is inferred. |
+| OpenCode message | Canonical client + row session ID + row message ID | The message ID is stable across the current and legacy SQLite representations, so the same ID in two channel databases is one observation. Content-fingerprint merging of forked copies with different IDs is not implemented and stays unsupported. |
 
 Opaque source IDs, never lexical paths, order provenance. Paths exist only in discovery/watch memory and are absent from SQLite, diagnostics, exports, Slint, and value-bearing `Debug` output.
 
@@ -74,6 +75,29 @@ Opaque source IDs, never lexical paths, order provenance. Paths exist only in di
 | Supplemental ledger row proven to duplicate native rollout usage | ignored non-usage | Mark native-backed overlap; do not add it. | Exact native thread/response identity required. |
 | Cost-only, unknown usage-like, malformed/inconsistent counter, unresolved model, unsupported fork/record, invalid UTF-8/JSON, oversized record, or cap breach | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 
+## OpenCode SQLite matrix
+
+OpenCode has no JSONL transcript. Current databases keep metadata in `session_v2` and messages in `session_message`, where the `type` column carries the role. Older/legacy databases use the `session`/`message`/`part` triple. After migration the legacy triple is frozen while `session_message` keeps growing. Only the exact SQLite main-file roles below are admitted; OpenCode's older JSON message directory is not an admitted source.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `session_message` row with `type='assistant'` (or `type='compaction'`) and explicit usable `$.tokens` | supported | One OpenCode observation. `$.model.id` (v2) or top-level `$.modelID` (v1) supplies the model; `$.model.providerID` or top-level `$.providerID` supplies the optional provider hint. `$.tokens.input`, inclusive `output`, `reasoning`, `$.tokens.cache.read`, and `$.tokens.cache.write` are checked non-negative components; reasoning is split out of inclusive output exactly once. `$.time.created` is the millisecond timestamp. | Current row session ID. Row message ID is the stable identity. Contradictory role, missing/partial cache, reasoning greater than output, negative or fractional counters, missing model/time, and malformed JSON reject the complete candidate. |
+| `session_message` row with `type='compaction'` and no usable tokens | ignored non-usage | No usage row. | Current transcript state only. |
+| Current `user`, `idle`, `system`, settings-switch, and other non-assistant rows | ignored non-usage | No usage row. | No ownership change. |
+| Legacy-only session: `message` rows with `$.role='assistant'` and usable tokens, where the session has no `session_message` rows | supported | Same OpenCode observation using top-level model/provider fields and the `time_created` column when `$.time.created` is absent. | Legacy row session ID. |
+| Legacy assistant rows for a session that already has current rows | ignored non-usage | The frozen legacy history is not added a second time. A non-current legacy summary or subtask assistant that the v1 migration would have restored is visible unsupported instead. | Current transcript wins. |
+| Migrated legacy summary/subtask assistant that would supply omitted compaction or task usage | visible unsupported | No row; the reader does not reconstruct the two histories. | Prior source generation retained. |
+| Assistant payload with `tokens` absent or `null` | ignored non-usage | No usage row. A `cost`-only payload is also ignored because Gate 3 owns pricing. | No usage row. |
+| Assistant payload where `tokens` exists but `input`, `output`, `cache.read`, or `cache.write` is missing, non-integral, negative, or unsafe | visible unsupported | Discard the candidate. The pinned reader clamps negatives and truncates fractional timestamps; the native contract deliberately does not. | Prior committed generation remains active. |
+| `$.time.created` missing but a non-negative `time_created` column exists | supported | Use the column value as milliseconds. Fractional millisecond values, negative values, and overflow are visible unsupported. Epoch seconds are not guessed or scaled. | Same row session. |
+| Same message ID in two admitted channel databases | supported | Identical rows collapse through the stable message identity. Conflicting content for the same identity is a candidate conflict, not a merge. | Source-qualified provenance is retained. |
+| Forked copies with different message IDs but identical content | visible unsupported | No content-fingerprint merge is implemented, so the native reader does not silently choose one copy. | Prior source generation retained. |
+| Agent/mode, duration, workspace, title, cost/currency, and provider canonicalization | ignored non-selection | These fields are not persisted or projected. Only the explicit provider ID is retained as a bounded non-secret hint. | No usage mutation. |
+| Missing required table columns, a malformed `session_message`/`message` table, invalid UTF-8/JSON, an oversized row, or a cap breach | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| OpenCode legacy JSON message files, `OPENCODE_DB` path overrides, and unknown SQLite shapes | visible unsupported | Not discovered or admitted; no format guessing. | No source slot is created. |
+
+OpenCode's stored components follow the common inclusive-parent rule: `input` excludes cache read/write, and `reasoning` is a subset of inclusive `output`. The native boundary keeps input/cache components as stored and splits reasoning out of output exactly once, so the canonical component sum matches `input + output + cache_read + cache_write` without double-counting reasoning.
+
 ## Input and source matrix
 
 | Source/input shape | Status | Exact contract |
@@ -83,6 +107,7 @@ Opaque source IDs, never lexical paths, order provenance. Paths exist only in di
 | `.zst` outside an admitted Codex rollout role, non-JSONL archive name, gzip/zip, reserved/future/unsupported magic, required dictionary, corrupt/truncated frame or checksum, trailing undecodable data, or decoded/physical cap breach | visible unsupported | No format guessing or decompressor fallback. A stream of only skippable frames is not a rollout. Retain last-good rows. |
 | Schema-v1 `session-usage-archive.sqlite` main/WAL/SHM logical source | supported | Exact schema below; read-only revision-fenced snapshot; many sessions per source. Sidecars consume no separate source slot. |
 | Exact unversioned Token Monitor `0.88.0` `codex-local-usage.sqlite` main/WAL/SHM logical source | supported | Exact structural schema below; joined request/thread rows only; many sessions per source. |
+| OpenCode `opencode.db` or `opencode-<channel>.db` main/WAL/SHM logical source under the XDG data root | supported | Structural `session_v2`/`session_message` (current) or `session`/`message`/`part` (legacy) detection; read-only fenced snapshot; many sessions per source. Exact filename roles below. |
 | Other SQLite database, unsupported schema/version, missing/inconsistent sidecar, busy/locked/denied/replaced/changing database, or source requiring a write/checkpoint to read | visible unsupported | Open read-only with `query_only=ON`; never migrate, checkpoint, create a sidecar, chmod, vacuum, rename, or delete. |
 | Recognized non-usage side file (`-shm`, `-wal`, journals, indexes) encountered independently | ignored non-usage | It can trigger coalesced reconciliation of its admitted logical main source but is never parsed or counted independently. |
 
@@ -115,6 +140,19 @@ Gate 2A reads only deterministic pages of `requests` joined to `threads` on acco
 
 `observed_at` is the request observation time, stored model is retained (`unknown` stays literal), and the source-local identity is `(account_key, thread_id, checkpoint_total)`. The schema contains no parent/fork/continuation, provider, or service-tier fact, so none is invented. `account_key`, metadata, checkpoint, cwd, turn content, title, environment, observer state, and process data are not persisted or projected. A row marked native-backed, or whose thread UUID is already represented by an exact native Codex session, is ignored non-usage rather than added.
 
+### OpenCode SQLite structural contract
+
+Discovery admits only regular `opencode.db` or `opencode-<channel>.db` files directly under the OpenCode data root: `$XDG_DATA_HOME/opencode` when that variable is a non-empty absolute path, otherwise `<home>/.local/share/opencode` on Windows, macOS, and Linux. The channel suffix uses the `[A-Za-z0-9._-]` character class that OpenCode's channel path sanitizer produces. `-wal`, `-shm`, and `-journal` sidecars are never separate sources. The reference application uses the same XDG root on every host, so no Application Support/AppData fallback is guessed. The `OPENCODE_DB` override is not implemented.
+
+The reader detects shapes structurally, not by a version table:
+
+- **current**: `session_message(id, session_id, data, type, ...)` exists. `time_created` is optional because `$.time.created` normally supplies the timestamp.
+- **legacy**: `message(id, session_id, data, ...)` exists. `time_created` is optional for the same reason.
+- `part` is optional. When it has `message_id`, `session_id`, and `data`, it is used only to detect a restorable migrated subtask/summary; it is never a usage source.
+- `session_v2`/`session` metadata tables are not required and are not persisted.
+
+A table with the expected name but missing the required columns is visible unsupported, not silently skipped. If a session has current rows, only current usage is read; legacy assistant rows for that session are frozen history and are not added again. Sessions with no current rows use legacy assistant rows. A non-current legacy assistant that would need the v1 migration's summary/subtask restoration makes the whole candidate visible unsupported. Invalid legacy JSON rows are ignored as non-usage, mirroring the reference query's `json_valid` filter.
+
 ## Native safety bounds
 
 These are acceptance limits, not truncation targets:
@@ -133,7 +171,7 @@ SQLite is read in deterministic pages no larger than the framing row limit. Rele
 
 ## Current implementation delta at freeze
 
-The existing native readers implement bounded ordinary JSONL, bounded streaming Codex `.jsonl.zst`, read-only Codex local-usage normalization/discovery, ordinary Claude assistant assembly, Claude advisor iterations, explicit Claude tool-result input accounting, bounded headless/result streams, sidechain parent attribution with agent provenance, cc-mirror client ownership, anthropic-prefix model normalization, and file-mtime timestamp fallback. Schema-v1 archive retained periods are discovered, fenced, persisted separately in schema v4, and exposed through canonical retained-period rollups without being folded into request rows. Codex now settles pending `token_usage_record` rows against token_count/compaction/turn boundaries, suppresses replayed fork/subagent history until the child's own turn, buffers model-less usage until a later model, attributes subagent/guardian/headless agent provenance, and ignores supplemental local-usage rows for threads already represented by a native rollout. The readers still intentionally reject arbitrary model-alias tables, Claude Desktop IndexedDB, OpenClaw ownership, non-rollout headless documents, and unverifiable fork/record ownership.
+The existing native readers implement bounded ordinary JSONL, bounded streaming Codex `.jsonl.zst`, read-only Codex local-usage normalization/discovery, ordinary Claude assistant assembly, Claude advisor iterations, explicit Claude tool-result input accounting, bounded headless/result streams, sidechain parent attribution with agent provenance, cc-mirror client ownership, anthropic-prefix model normalization, and file-mtime timestamp fallback. The OpenCode SQLite reader implements current `session_message` assistant/compaction usage, legacy-only `message` assistant usage, stable row-message identity, strict cache/model/time/counter validation, and active detection of restorable migrated summary/subtask usage. Schema-v1 archive retained periods are discovered, fenced, persisted separately in schema v5, and exposed through canonical retained-period rollups without being folded into request rows. Codex now settles pending `token_usage_record` rows against token_count/compaction/turn boundaries, suppresses replayed fork/subagent history until the child's own turn, buffers model-less usage until a later model, attributes subagent/guardian/headless agent provenance, and ignores supplemental local-usage rows for threads already represented by a native rollout. The readers still intentionally reject arbitrary model-alias tables, Claude Desktop IndexedDB, OpenClaw ownership, non-rollout headless documents, unverifiable fork/record ownership, OpenCode legacy JSON stores, OpenCode content-fingerprint fork merging, and migrated OpenCode summary/subtask restoration.
 
 ## Runtime and persistence boundary (Gate 2A Tasks 9–11)
 
@@ -141,8 +179,8 @@ The existing native readers implement bounded ordinary JSONL, bounded streaming 
 - Settings/day/timezone replacements use a settings snapshot commit so the application never accepts a snapshot under the wrong generation. A commit prepared under a replaced generation is never published.
 - Fixed health states are `Pending`, `Healthy`, `Retained`, `ReadFailed`, `DecodingFailed`, `SourceBusy`, `Unsupported`, `CapacityExceeded`, `CanonicalizationFailed`, and `PersistenceDelayed`. Paths, raw errors, SQL, rows, and source identities never cross the UI boundary.
 - Restart rehydrates committed source/canonical state before source I/O. Unavailable sources stay retained/stale rather than zero; a later successful read returns to healthy without duplicate observations. Unchanged parsed contents reuse the committed source generation, so ordinary restarts and single-source updates avoid full re-commits.
-- Schema v4 persists runtime sources, request observations, SQLite retained periods/models/provenance, settings generations, imports, and credentials. Before migration it creates a verified backup. Missing/corrupt active databases restore the newest verified compatible backup; without one, startup reports recovery required and does not create an empty database.
+- Schema v5 persists runtime sources, request observations, SQLite retained periods/models/provenance, settings generations, imports, and credentials. Before migration it creates a verified backup. Missing/corrupt active databases restore the newest verified compatible backup; without one, startup reports recovery required and does not create an empty database.
 - Source files are read-only throughout: ordinary/compressed JSONL is streamed (16 MiB record, 256 KiB/1,024-record steps, 256 MiB physical, 1 GiB decoded, 64 MiB zstd window); SQLite main/WAL/SHM is copied into a private `0700` snapshot without opening the original. Archive retained data and request observations remain separate.
-- The mixed release fixture carries exactly 100 discovered sources and 1,000 canonical sessions (33 Claude JSONL, 33 Codex JSONL, 32 zstd Codex, one archive SQLite/WAL, one Codex local-usage SQLite/WAL), 2,786 parsed / 2,784 canonical observations, and 120 retained periods. Production ingestion, reopen without sources, restoration without duplicates, mutation/failure scenarios, backup/corruption recovery, and native-file sentinel scans pass remotely.
+- The mixed release fixture carries exactly 100 discovered sources and 1,000 canonical sessions (33 Claude JSONL, 32 Codex JSONL, 32 zstd Codex, one OpenCode SQLite, one archive SQLite/WAL, one Codex local-usage SQLite/WAL), 2,786 parsed / 2,784 canonical observations, and 120 retained periods. Production ingestion, reopen without sources, restoration without duplicates, mutation/failure scenarios, backup/corruption recovery, and native-file sentinel scans pass remotely.
 
 The pinned differentials cover the complete supported Codex prefix, including `token_usage_record` settlement and compaction, plus transport equivalence between ordinary JSONL and streaming zstd. No fixture result is a full-reader, live-account, platform, pricing, GUI, or packaging claim.

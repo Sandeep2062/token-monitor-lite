@@ -766,7 +766,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 }
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
-    ["claude", "codex"]
+    ["claude", "codex", "opencode"]
         .into_iter()
         .map(|client| SettingsClientRow {
             id: client.to_owned(),
@@ -816,17 +816,18 @@ fn safe_source(source: &SourceChoice) -> bool {
 }
 
 fn is_selectable_source_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex" | "mixed")
+    matches!(client, "claude" | "codex" | "opencode" | "mixed")
 }
 
 fn is_supported_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex")
+    matches!(client, "claude" | "codex" | "opencode")
 }
 
 fn client_label(client: &str) -> &'static str {
     match client {
         "claude" => "Claude CLI",
         "codex" => "Codex CLI",
+        "opencode" => "OpenCode",
         "mixed" => "Session archive",
         _ => "Unavailable client",
     }

@@ -61,6 +61,7 @@ fn host(platform: HostPlatform, home: &str) -> HostPaths {
         app_data: None,
         local_app_data: None,
         xdg_config_home: None,
+        xdg_data_home: None,
         xdg_state_home: None,
         legacy_shared_override: None,
         native_data_override: None,
@@ -70,6 +71,54 @@ fn host(platform: HostPlatform, home: &str) -> HostPaths {
 
 fn zstd(bytes: &[u8]) -> Vec<u8> {
     compress_to_vec(bytes, CompressionLevel::Fastest)
+}
+
+fn opencode_database(path: &Path, session: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_v2 (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                directory TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+             ) STRICT;
+             CREATE TABLE session_message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                time_created INTEGER NOT NULL,
+                data TEXT NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_v2 (id, title, directory, time_created) VALUES (?1, '', '', 1763000000000)",
+            [session],
+        )
+        .unwrap();
+    let data = serde_json::json!({
+        "role": "assistant",
+        "model": {"id": "claude-sonnet-4-5", "providerID": "anthropic"},
+        "time": {"created": 1_763_000_000_000_i64},
+        "tokens": {
+            "input": 10,
+            "output": 5,
+            "reasoning": 1,
+            "cache": {"read": 2, "write": 1}
+        }
+    })
+    .to_string();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES (?1, ?2, 'assistant', 0, 1763000000000, ?3)",
+            rusqlite::params![format!("{session}-message"), session, data],
+        )
+        .unwrap();
 }
 
 fn codex_rollout(session: &str) -> Vec<u8> {
@@ -546,6 +595,34 @@ fn sqlite_archive_and_local_usage_are_discovered_as_main_file_sources() {
         source.format == SourceFormat::CodexLocalUsageSqlite && source.session == "codex-local"
     }));
     assert!(!format!("{:?}", report.sources).contains(tree.0.to_str().unwrap()));
+}
+
+#[test]
+fn opencode_databases_are_discovered_only_at_the_xdg_data_role() {
+    let tree = Tree::new();
+    let root = tree.directory(".local/share/opencode");
+    opencode_database(&root.join("opencode.db"), "session-a");
+    opencode_database(&root.join("opencode-stable.db"), "session-b");
+    tree.file(".local/share/opencode/opencode.db-journal", b"sidecar");
+    tree.file(".local/share/opencode/unrelated.db", b"ignored");
+    tree.file(".local/share/opencode/opencode-nightly.db", b"not sqlite");
+
+    let mut paths = tree.paths(&["opencode"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(report.sources.iter().all(|source| {
+        source.format == SourceFormat::OpenCodeSqlite && source.session == "opencode"
+    }));
+    assert!(report.notices.iter().any(|notice| matches!(
+        notice,
+        DiscoveryNotice::SourceInvalid {
+            client: "opencode",
+            ..
+        }
+    )));
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
 }
 
 #[test]

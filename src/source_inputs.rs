@@ -4,8 +4,13 @@
 //! intentionally not folded into the request-like canonical runtime yet.
 
 use crate::accounting::{SessionKey, TokenCounts};
-use crate::parsers::jsonl::{JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, SourceStamp};
-use crate::parsers::{CostStatus, ResponseUsage};
+use crate::parsers::jsonl::{
+    JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
+};
+use crate::parsers::opencode::{
+    MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
+};
+use crate::parsers::{CostStatus, ReaderError, ResponseUsage};
 use crate::runtime::MonitoredSource;
 use crate::sources::SourceFormat;
 use chrono::DateTime;
@@ -37,14 +42,35 @@ static NEXT_SQLITE_SNAPSHOT: AtomicU64 = AtomicU64::new(0);
 pub enum SqliteSourceRole {
     SessionArchive,
     CodexLocalUsage,
+    OpenCode,
 }
 
 pub fn classify_sqlite_source(path: &Path) -> Option<SqliteSourceRole> {
-    match path.file_name()?.to_str()? {
+    let name = path.file_name()?.to_str()?;
+    match name {
         "session-usage-archive.sqlite" => Some(SqliteSourceRole::SessionArchive),
         "codex-local-usage.sqlite" => Some(SqliteSourceRole::CodexLocalUsage),
+        _ if is_opencode_db_filename(name) => Some(SqliteSourceRole::OpenCode),
         _ => None,
     }
+}
+
+/// OpenCode picks `opencode.db` or `opencode-<channel>.db` at build time.
+/// Sidecars (`-wal`, `-shm`, `-journal`) do not end in `.db` and are excluded.
+pub(crate) fn is_opencode_db_filename(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".db") else {
+        return false;
+    };
+    if stem == "opencode" {
+        return true;
+    }
+    let Some(channel) = stem.strip_prefix("opencode-") else {
+        return false;
+    };
+    !channel.is_empty()
+        && channel
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +136,8 @@ pub enum SqliteSourceError {
     Busy,
     #[error("sqlite source schema is unsupported")]
     Schema,
+    #[error("sqlite source contains an unsupported shape")]
+    Unsupported,
     #[error("sqlite source data is invalid")]
     Invalid,
     #[error("sqlite source capacity exceeded")]
@@ -189,6 +217,24 @@ impl CodexLocalUsageAdapter {
     }
 }
 
+pub struct OpenCodeAdapter {
+    path: PathBuf,
+}
+
+impl OpenCodeAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_opencode(&self.path)
+    }
+}
+
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const ZSTD_SKIPPABLE_MIN: u32 = 0x184D_2A50;
 const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
@@ -199,11 +245,13 @@ pub enum InputAdapterStatus {
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
+    OpenCodeSqlite,
 }
 
 pub(crate) enum SqliteInputData {
     SessionArchive(SessionArchiveSnapshot),
     CodexLocalUsage(Arc<[ResponseUsage]>),
+    OpenCode(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -271,6 +319,7 @@ pub enum SourceInput {
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
+    OpenCode(OpenCodeAdapter),
 }
 
 impl SourceInput {
@@ -286,6 +335,7 @@ impl SourceInput {
             SourceFormat::CodexLocalUsageSqlite => {
                 Self::CodexLocalUsage(CodexLocalUsageAdapter::new(path))
             }
+            SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -321,6 +371,7 @@ impl SourceInput {
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
+            Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
         }
     }
 
@@ -328,7 +379,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
             Self::CompressedJsonl(input) => input.reset(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) => {}
+            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {}
         }
     }
 
@@ -336,7 +387,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
             Self::CompressedJsonl(input) => input.is_current(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) => Ok(true),
+            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => Ok(true),
         }
     }
 
@@ -348,6 +399,7 @@ impl SourceInput {
             Self::CodexLocalUsage(adapter) => {
                 Ok(Some(SqliteInputData::CodexLocalUsage(adapter.read()?)))
             }
+            Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::OrdinaryJsonl(_) | Self::CompressedJsonl(_) => Ok(None),
         }
     }
@@ -358,6 +410,7 @@ impl SourceInput {
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
+            Self::OpenCode(adapter) => Some(adapter.path()),
         }
     }
 
@@ -375,7 +428,7 @@ impl SourceInput {
                 })
             }
             Self::CompressedJsonl(input) => input.read_batch(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) => {
+            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {
                 Err(invalid("sqlite input has no JSONL batch"))
             }
         }
@@ -1036,6 +1089,288 @@ fn read_codex_local_usage(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSou
     Ok(usage_rows.into())
 }
 
+fn read_opencode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    let session_message = table_columns(&transaction, "session_message")?;
+    let message = table_columns(&transaction, "message")?;
+    let current = session_message
+        .as_ref()
+        .is_some_and(|columns| has_columns(columns, &["id", "session_id", "data", "type"]));
+    let legacy = message
+        .as_ref()
+        .is_some_and(|columns| has_columns(columns, &["id", "session_id", "data"]));
+    if session_message.is_some() && !current {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    if message.is_some() && !legacy {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    if !current && !legacy {
+        return Err(SqliteSourceError::Schema);
+    }
+
+    let mut reader = OpenCodeReader::new();
+    let current_sessions = if current {
+        read_opencode_current(&transaction, &mut reader)?
+    } else {
+        BTreeSet::new()
+    };
+    if legacy {
+        let columns = message.as_ref().expect("legacy columns validated");
+        if current && !current_sessions.is_empty() {
+            detect_opencode_legacy_supplements(&transaction)?;
+        }
+        read_opencode_legacy(&transaction, columns, &current_sessions, &mut reader)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_opencode_current(
+    connection: &Connection,
+    reader: &mut OpenCodeReader,
+) -> Result<BTreeSet<String>, SqliteSourceError> {
+    let candidates: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM session_message WHERE type IN ('assistant', 'compaction')",
+        [],
+        |row| row.get(0),
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > MAX_OPENCODE_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+
+    let mut sessions = BTreeSet::new();
+    let mut statement = connection.prepare("SELECT DISTINCT session_id FROM session_message")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        sessions.insert(row.get::<_, String>(0)?);
+    }
+    drop(rows);
+    drop(statement);
+
+    let time_created = table_columns(connection, "session_message")?
+        .is_some_and(|columns| columns.contains("time_created"));
+    let time_column = if time_created { "time_created" } else { "NULL" };
+    let sql = format!(
+        "SELECT id, session_id, type, data, {time_column}
+         FROM session_message
+         WHERE type IN ('assistant', 'compaction')
+         ORDER BY session_id, id LIMIT ?1 OFFSET ?2"
+    );
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let session: String = row.get(1)?;
+            let kind: String = row.get(2)?;
+            let data = row
+                .get_ref(3)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            if data.len() > MAX_RECORD_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            let kind = match kind.as_str() {
+                "assistant" => OpenCodeKind::Assistant,
+                "compaction" => OpenCodeKind::Compaction,
+                _ => continue,
+            };
+            reader
+                .ingest(OpenCodeRecord {
+                    message_id: &id,
+                    session_id: &session,
+                    kind,
+                    data,
+                    fallback_timestamp_ms: row.get(4)?,
+                })
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    Ok(sessions)
+}
+
+fn read_opencode_legacy(
+    connection: &Connection,
+    columns: &BTreeSet<String>,
+    current_sessions: &BTreeSet<String>,
+    reader: &mut OpenCodeReader,
+) -> Result<(), SqliteSourceError> {
+    let filter = if current_sessions.is_empty() {
+        String::new()
+    } else {
+        "AND session_id NOT IN (SELECT DISTINCT session_id FROM session_message)".to_owned()
+    };
+    let candidates: i64 = connection.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM message
+             WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant' {filter}"
+        ),
+        [],
+        |row| row.get(0),
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > MAX_OPENCODE_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let time_column = if columns.contains("time_created") {
+        "time_created"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT id, session_id, data, {time_column}
+         FROM message
+         WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant' {filter}
+         ORDER BY session_id, id LIMIT ?1 OFFSET ?2"
+    );
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let session: String = row.get(1)?;
+            let data = row
+                .get_ref(2)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            if data.len() > MAX_RECORD_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            reader
+                .ingest(OpenCodeRecord {
+                    message_id: &id,
+                    session_id: &session,
+                    kind: OpenCodeKind::Assistant,
+                    data,
+                    fallback_timestamp_ms: row.get(3)?,
+                })
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    Ok(())
+}
+
+/// The v1 migration replaced compacted prompt/summary usage and dropped
+/// subtask assistants from the current transcript. Restoring either form is
+/// unsupported here, so a restorable non-current legacy row rejects the whole
+/// candidate instead of silently undercounting it.
+fn detect_opencode_legacy_supplements(connection: &Connection) -> Result<(), SqliteSourceError> {
+    let part_columns = table_columns(connection, "part")?;
+    let parts = part_columns
+        .as_ref()
+        .is_some_and(|columns| has_columns(columns, &["message_id", "session_id", "data"]));
+    let parent_compaction_part = if parts {
+        "OR EXISTS (
+             SELECT 1 FROM message AS parent
+             JOIN part AS parent_part
+               ON parent_part.message_id = parent.id AND parent_part.session_id = parent.session_id
+             WHERE parent.session_id = m.session_id
+               AND parent.id = json_extract(m.data, '$.parentID')
+               AND json_valid(parent.data) AND json_extract(parent.data, '$.role') = 'user'
+               AND json_valid(parent_part.data) AND json_extract(parent_part.data, '$.type') = 'compaction'
+         )"
+    } else {
+        ""
+    };
+    let summary = format!(
+        "SELECT 1 FROM message AS m
+         WHERE m.session_id IN (SELECT DISTINCT session_id FROM session_message)
+           AND NOT EXISTS (
+             SELECT 1 FROM session_message AS current
+             WHERE current.id = m.id AND current.session_id = m.session_id
+           )
+           AND json_valid(m.data)
+           AND json_extract(m.data, '$.role') = 'assistant'
+           AND json_extract(m.data, '$.summary') = 1
+           AND (
+             EXISTS (
+               SELECT 1 FROM session_message AS compaction
+               WHERE compaction.session_id = m.session_id
+                 AND compaction.type = 'compaction'
+                 AND compaction.id = json_extract(m.data, '$.parentID')
+             )
+             {parent_compaction_part}
+           )
+         LIMIT 1"
+    );
+    if connection
+        .query_row(&summary, [], |_| Ok(()))
+        .optional()?
+        .is_some()
+    {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    if !parts {
+        return Ok(());
+    }
+    let subtask = "SELECT 1 FROM message AS m
+         WHERE m.session_id IN (SELECT DISTINCT session_id FROM session_message)
+           AND NOT EXISTS (
+             SELECT 1 FROM session_message AS current
+             WHERE current.id = m.id AND current.session_id = m.session_id
+           )
+           AND json_valid(m.data)
+           AND json_extract(m.data, '$.role') = 'assistant'
+           AND EXISTS (
+             SELECT 1 FROM part AS owned
+             WHERE owned.session_id = m.session_id AND owned.message_id = m.id
+               AND json_valid(owned.data) AND json_extract(owned.data, '$.type') = 'tool'
+               AND json_extract(owned.data, '$.tool') = 'task'
+           )
+           AND EXISTS (
+             SELECT 1 FROM message AS parent
+             JOIN part AS parent_part
+               ON parent_part.message_id = parent.id AND parent_part.session_id = parent.session_id
+             WHERE parent.session_id = m.session_id
+               AND parent.id = json_extract(m.data, '$.parentID')
+               AND json_valid(parent.data) AND json_extract(parent.data, '$.role') = 'user'
+               AND json_valid(parent_part.data) AND json_extract(parent_part.data, '$.type') = 'subtask'
+           )
+         LIMIT 1";
+    if connection
+        .query_row(subtask, [], |_| Ok(()))
+        .optional()?
+        .is_some()
+    {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    Ok(())
+}
+
+fn map_opencode_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Unsupported(_) => SqliteSourceError::Unsupported,
+        ReaderError::Capacity(_) | ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord | ReaderError::InvalidTimestamp => SqliteSourceError::Invalid,
+    }
+}
+
 fn parse_archive_entry(entry: &[u8]) -> Result<ArchiveSession, SqliteSourceError> {
     let value: Value = serde_json::from_slice(entry).map_err(|_| SqliteSourceError::Invalid)?;
     let object = value.as_object().ok_or(SqliteSourceError::Invalid)?;
@@ -1225,6 +1560,24 @@ fn require_columns(
         return Err(SqliteSourceError::Schema);
     }
     Ok(())
+}
+
+/// `None` means the table is absent; an empty set is impossible for a real table.
+fn table_columns(
+    connection: &Connection,
+    table: &str,
+) -> Result<Option<BTreeSet<String>>, SqliteSourceError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+    let mut columns = BTreeSet::new();
+    while let Some(row) = rows.next()? {
+        columns.insert(row.get::<_, String>(1)?);
+    }
+    Ok((!columns.is_empty()).then_some(columns))
+}
+
+fn has_columns(columns: &BTreeSet<String>, required: &[&str]) -> bool {
+    required.iter().all(|column| columns.contains(*column))
 }
 
 fn require_index(

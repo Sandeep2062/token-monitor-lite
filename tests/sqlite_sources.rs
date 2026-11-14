@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use token_monitor_lite::source_inputs::{
-    ArchivePeriod, CodexLocalUsageAdapter, MAX_ARCHIVE_ENTRY_BYTES, SessionArchiveAdapter,
-    SqliteSourceError, SqliteSourceRole, classify_sqlite_source,
+    ArchivePeriod, CodexLocalUsageAdapter, MAX_ARCHIVE_ENTRY_BYTES, OpenCodeAdapter,
+    SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole, classify_sqlite_source,
 };
 use token_monitor_lite::sources::{SourceFormat, SourceProgress, SourceReader};
 
@@ -280,6 +280,256 @@ fn source_reader_publishes_archive_retained_rows_and_local_usage_requests() {
     assert!(local_snapshot.retained.is_empty());
 }
 
+fn opencode_message(
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    reasoning: u64,
+    created: i64,
+) -> String {
+    json!({
+        "role": "assistant",
+        "model": {"id": "claude-sonnet-4-5", "providerID": "anthropic"},
+        "time": {"created": created},
+        "tokens": {
+            "input": input,
+            "output": output,
+            "reasoning": reasoning,
+            "cache": {"read": cache_read, "write": cache_write}
+        },
+        "cost": 0.5
+    })
+    .to_string()
+}
+
+fn create_opencode_current(root: &Root, name: &str) -> (PathBuf, Connection) {
+    let path = root.path(name);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_v2 (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, directory TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+             ) STRICT;
+             CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                seq INTEGER NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_v2 (id, title, directory, time_created)
+             VALUES ('session-a', '', '', 1763000000000)",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES (?1, 'session-a', 'assistant', ?2, ?3, ?4)",
+            params![
+                "message-a1",
+                0_i64,
+                1_763_000_000_000_i64,
+                opencode_message(100, 40, 20, 5, 10, 1_763_000_000_000)
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES (?1, 'session-a', 'assistant', ?2, ?3, ?4)",
+            params![
+                "message-a2",
+                1_i64,
+                1_763_000_001_000_i64,
+                opencode_message(50, 10, 0, 0, 2, 1_763_000_001_000)
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES ('message-user', 'session-a', 'user', 2, 1763000002000, '{}')",
+            [],
+        )
+        .unwrap();
+    (path, connection)
+}
+
+#[test]
+fn opencode_current_rows_are_published_without_source_mutation() {
+    let root = Root::new();
+    let (path, _writer) = create_opencode_current(&root, "opencode.db");
+    let before = fingerprint(&path);
+    let mut reader = SourceReader::new(path.clone(), SourceFormat::OpenCodeSqlite, "opencode");
+    let step = reader.step().unwrap();
+    assert!(matches!(step.progress, SourceProgress::Published { .. }));
+    let snapshot = reader.last_good().unwrap();
+    assert_eq!(snapshot.rows.len(), 2);
+    assert!(snapshot.retained.is_empty());
+    assert_eq!(snapshot.rows[0].key.client, "opencode");
+    assert_eq!(snapshot.rows[0].key.session, "session-a");
+    assert_eq!(snapshot.rows[0].model, "claude-sonnet-4-5");
+    assert_eq!(
+        snapshot.rows[0].dedup_key.as_deref(),
+        Some("opencode:session-a:message-a1")
+    );
+    assert_eq!(
+        snapshot.rows[0].tokens,
+        token_monitor_lite::accounting::TokenCounts {
+            input: 100,
+            output: 30,
+            cache_read: 20,
+            cache_write: 5,
+            reasoning: 10,
+        }
+    );
+    assert_eq!(fingerprint(&path), before);
+}
+
+#[test]
+fn opencode_legacy_rows_are_read_only_for_sessions_absent_from_the_current_transcript() {
+    let root = Root::new();
+    let path = root.path("opencode-legacy.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                seq INTEGER NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL
+             ) STRICT;
+             CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES ('current-message', 'session-current', 'assistant', 0, 1763000000000, ?1)",
+            [opencode_message(10, 5, 1, 0, 0, 1_763_000_000_000)],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data, time_created)
+             VALUES ('legacy-current', 'session-current', ?1, 1763000000000)",
+            [opencode_message(999, 999, 0, 0, 0, 1_763_000_000_000)],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data, time_created)
+             VALUES ('legacy-only', 'session-legacy', ?1, 1763000000000)",
+            [opencode_message(7, 3, 2, 1, 1, 1_763_000_000_000)],
+        )
+        .unwrap();
+    drop(connection);
+
+    let rows = OpenCodeAdapter::new(&path).read().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row.key.session == "session-current"
+        && row.dedup_key.as_deref() == Some("opencode:session-current:current-message")));
+    assert!(rows.iter().any(|row| row.key.session == "session-legacy"
+        && row.dedup_key.as_deref() == Some("opencode:session-legacy:legacy-only")));
+}
+
+#[test]
+fn opencode_migrated_summary_is_visible_unsupported() {
+    let root = Root::new();
+    let path = root.path("opencode-summary.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                seq INTEGER NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL
+             ) STRICT;
+             CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES ('compaction-1', 'session-a', 'compaction', 0, 1763000000000, '{}')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data, time_created)
+             VALUES ('summary-1', 'session-a', ?1, 1763000000000)",
+            [json!({
+                "role": "assistant",
+                "summary": 1,
+                "parentID": "compaction-1",
+                "modelID": "m",
+                "time": {"created": 1_763_000_000_000_i64},
+                "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+            })
+            .to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_eq!(
+        OpenCodeAdapter::new(&path).read(),
+        Err(SqliteSourceError::Unsupported)
+    );
+}
+
+#[test]
+fn opencode_rejects_schema_drift_and_invalid_usage() {
+    let root = Root::new();
+    let drifted = root.path("opencode-drift.db");
+    let connection = Connection::open(&drifted).unwrap();
+    connection
+        .execute_batch("CREATE TABLE session_message (id TEXT, data TEXT);")
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        OpenCodeAdapter::new(&drifted).read(),
+        Err(SqliteSourceError::Unsupported)
+    );
+
+    let invalid = root.path("opencode-invalid.db");
+    let connection = Connection::open(&invalid).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_message (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                seq INTEGER NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+    let negative = json!({
+        "role": "assistant",
+        "model": {"id": "m"},
+        "time": {"created": 1_763_000_000_000_i64},
+        "tokens": {"input": -1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+    })
+    .to_string();
+    connection
+        .execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, data)
+             VALUES ('negative', 'session-a', 'assistant', 0, 1763000000000, ?1)",
+            [negative],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        OpenCodeAdapter::new(&invalid).read(),
+        Err(SqliteSourceError::Invalid)
+    );
+}
+
 #[test]
 fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
@@ -289,6 +539,26 @@ fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
         classify_sqlite_source(Path::new("/data/codex-local-usage.sqlite")),
         Some(SqliteSourceRole::CodexLocalUsage)
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/opencode.db")),
+        Some(SqliteSourceRole::OpenCode)
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/opencode-stable.db")),
+        Some(SqliteSourceRole::OpenCode)
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/opencode.db-wal")),
+        None
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/opencode-.db")),
+        None
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/opencode-stable.db-journal")),
+        None
     );
     assert_eq!(
         classify_sqlite_source(Path::new("/data/session-usage-archive.sqlite-wal")),

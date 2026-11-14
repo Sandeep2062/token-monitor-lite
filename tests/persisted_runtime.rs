@@ -40,6 +40,7 @@ impl NativeTree {
             app_data: None,
             local_app_data: None,
             xdg_config_home: None,
+            xdg_data_home: None,
             xdg_state_home: None,
             legacy_shared_override: Some(self.0.join("legacy")),
             native_data_override: Some(self.0.join("native")),
@@ -156,6 +157,67 @@ fn sqlite_local_usage_rows_commit_and_rehydrate_as_request_observations() {
 }
 
 #[test]
+fn opencode_sqlite_rows_commit_and_rehydrate_as_request_observations() {
+    let tree = NativeTree::new();
+    let (store, _) = StoreHandle::open(tree.paths()).unwrap();
+    let usage = ResponseUsage {
+        key: SessionKey::new("opencode", "session-a"),
+        model: "claude-sonnet-4-5".to_owned(),
+        tokens: TokenCounts {
+            input: 10,
+            output: 4,
+            cache_read: 2,
+            cache_write: 1,
+            reasoning: 1,
+        },
+        cache_write_1h: 0,
+        timestamp_ms: 1_763_000_000_000,
+        dedup_key: Some("opencode:session-a:message-a".to_owned()),
+        billing_provider_hint: Some("anthropic".to_owned()),
+        service_tier: None,
+        agent: None,
+        cost: CostStatus::Unavailable,
+    };
+    let source = Arc::new(SourceSnapshot {
+        source_id: SourceId::from_bytes([11; 16]),
+        format: SourceFormat::OpenCodeSqlite,
+        parser_pin: "fixture-pin".to_owned(),
+        generation: 1,
+        rows: Arc::from([usage]),
+        retained: Arc::from([]),
+        totals: TokenCounts {
+            input: 10,
+            output: 4,
+            cache_read: 2,
+            cache_write: 1,
+            reasoning: 1,
+        },
+        cache_write_1h: 0,
+        incomplete_tail: false,
+        has_supported_usage: true,
+        source_state: ObservationSourceState::Live,
+    });
+    let ledger = CanonicalLedger::new("UTC".parse().unwrap());
+    let (_, commit) = commit_for(&ledger, source, 0);
+    store.commit_runtime(commit).unwrap();
+    store.shutdown().unwrap();
+
+    let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
+    assert_eq!(snapshot.runtime.sources.len(), 1);
+    assert_eq!(
+        snapshot.runtime.sources[0].format,
+        SourceFormat::OpenCodeSqlite
+    );
+    assert_eq!(snapshot.runtime.sources[0].rows.len(), 1);
+    assert_eq!(snapshot.runtime.sources[0].rows[0].key.client, "opencode");
+    assert_eq!(
+        snapshot.runtime.sources[0].rows[0].dedup_key.as_deref(),
+        Some("opencode:session-a:message-a")
+    );
+    store.shutdown().unwrap();
+}
+
+#[test]
 fn sqlite_retained_periods_commit_and_rehydrate_without_request_rows() {
     let tree = NativeTree::new();
     let (store, _) = StoreHandle::open(tree.paths()).unwrap();
@@ -248,7 +310,7 @@ fn commit_for(
 fn fresh_schema_has_nine_strict_path_and_secret_free_runtime_roles() {
     let tree = NativeTree::new();
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 4);
+    assert_eq!(snapshot.schema_version, 5);
     let runtime = store.runtime_snapshot().unwrap();
     assert_eq!(runtime.generation, 0);
     assert!(!runtime.initialized);
@@ -353,7 +415,7 @@ fn v2_upgrade_preserves_existing_bytes_and_starts_uninitialized_runtime() {
     drop(connection);
 
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 4);
+    assert_eq!(snapshot.schema_version, 5);
     assert_eq!(snapshot.settings.unwrap().json_bytes(), settings);
     assert!(!store.runtime_snapshot().unwrap().initialized);
     store.shutdown().unwrap();

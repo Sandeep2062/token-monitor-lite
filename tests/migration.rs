@@ -42,6 +42,7 @@ impl Tree {
             app_data: None,
             local_app_data: None,
             xdg_config_home: None,
+            xdg_data_home: None,
             xdg_state_home: None,
             legacy_shared_override: Some(self.0.join("legacy-shared")),
             native_data_override: Some(self.0.join("native-private")),

@@ -150,10 +150,15 @@ impl Fixture {
             app_data: None,
             local_app_data: None,
             xdg_config_home: Some(home.join(".config")),
+            xdg_data_home: Some(home.join(".local/share")),
             xdg_state_home: Some(home.join(".local/state")),
             legacy_shared_override: Some(home.join(".config/Token Monitor")),
             native_data_override: Some(self.root.join("native")),
-            enabled_clients: BTreeSet::from(["claude".to_owned(), "codex".to_owned()]),
+            enabled_clients: BTreeSet::from([
+                "claude".to_owned(),
+                "codex".to_owned(),
+                "opencode".to_owned(),
+            ]),
         }
     }
 }
@@ -198,6 +203,7 @@ fn source_format(format: &str) -> SourceFormat {
         "codex-cli" | "codex-cli-zstd" => SourceFormat::CodexCli,
         "session-archive-sqlite" => SourceFormat::SessionArchiveSqlite,
         "codex-local-usage-sqlite" => SourceFormat::CodexLocalUsageSqlite,
+        "opencode-sqlite" => SourceFormat::OpenCodeSqlite,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -294,8 +300,9 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 33),
+            ("codex-cli".to_owned(), 32),
             ("codex-cli-zstd".to_owned(), 32),
+            ("opencode-sqlite".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])

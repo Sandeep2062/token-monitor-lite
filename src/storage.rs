@@ -37,7 +37,7 @@ pub const BACKUP_DIRECTORY_NAME: &str = "backups";
 pub const RECOVERY_DIRECTORY_NAME: &str = "recovery";
 
 const RECOVERY_MARKER_NAME: &str = "recovery-required";
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const PARSER_CONTRACT_REVISION: &str = "gate-2a-v1";
 const COMMAND_CAPACITY: usize = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -225,8 +225,7 @@ CREATE TABLE canonical_provenance (
 ) STRICT;
 "#;
 
-const SCHEMA_V4: &str = r#"
-ALTER TABLE source_observations ADD COLUMN agent TEXT CHECK (agent IS NULL OR length(agent) BETWEEN 1 AND 4096);
+const SCHEMA_V4: &str = r#"ALTER TABLE source_observations ADD COLUMN agent TEXT CHECK (agent IS NULL OR length(agent) BETWEEN 1 AND 4096);
 ALTER TABLE canonical_observations ADD COLUMN agent TEXT CHECK (agent IS NULL OR length(agent) BETWEEN 1 AND 4096);
 
 CREATE TABLE runtime_sqlite_sources (
@@ -318,6 +317,39 @@ CREATE TABLE canonical_sqlite_provenance (
     FOREIGN KEY (source_id, source_generation, observation_ordinal)
         REFERENCES source_sqlite_observations(source_id, source_generation, ordinal)
 ) STRICT;
+"#;
+
+// SQLite cannot alter a CHECK constraint in place. The parent table is rebuilt
+// with the broadened format domain; child foreign keys reference the stable
+// table name and are revalidated after the swap.
+const SCHEMA_V5: &str = r#"
+CREATE TABLE runtime_sqlite_sources_v5 (
+    source_id TEXT PRIMARY KEY CHECK (length(source_id) = 42),
+    format TEXT NOT NULL CHECK (format IN ('session-archive-sqlite', 'codex-local-usage-sqlite', 'opencode-sqlite')),
+    client TEXT NOT NULL CHECK (length(client) BETWEEN 1 AND 64),
+    parser_pin TEXT NOT NULL CHECK (length(parser_pin) BETWEEN 1 AND 128),
+    source_generation INTEGER NOT NULL CHECK (source_generation > 0),
+    source_state TEXT NOT NULL CHECK (source_state IN ('live', 'retained')),
+    observation_count INTEGER NOT NULL CHECK (observation_count >= 0 AND observation_count <= 262144),
+    retained_period_count INTEGER NOT NULL CHECK (retained_period_count >= 0 AND retained_period_count <= 10000),
+    session_count INTEGER NOT NULL CHECK (session_count >= 0 AND session_count <= 10000),
+    last_observed_at INTEGER,
+    incomplete_tail INTEGER NOT NULL CHECK (incomplete_tail IN (0, 1)),
+    has_supported_usage INTEGER NOT NULL CHECK (has_supported_usage IN (0, 1)),
+    UNIQUE (source_id, source_generation)
+) STRICT;
+
+INSERT INTO runtime_sqlite_sources_v5
+    (source_id, format, client, parser_pin, source_generation, source_state,
+     observation_count, retained_period_count, session_count, last_observed_at,
+     incomplete_tail, has_supported_usage)
+SELECT source_id, format, client, parser_pin, source_generation, source_state,
+       observation_count, retained_period_count, session_count, last_observed_at,
+       incomplete_tail, has_supported_usage
+FROM runtime_sqlite_sources;
+
+DROP TABLE runtime_sqlite_sources;
+ALTER TABLE runtime_sqlite_sources_v5 RENAME TO runtime_sqlite_sources;
 "#;
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -1110,6 +1142,7 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
             migrate_one_to_two(&mut connection)?;
             migrate_two_to_three(&mut connection)?;
             migrate_three_to_four(&mut connection)?;
+            migrate_four_to_five(&mut connection)?;
             let snapshot = load_snapshot(&connection)?;
             return Ok((connection, snapshot));
         }
@@ -1137,6 +1170,8 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
         create_backup_internal(&connection, root, "pre-migration-v2", 2, 0)?;
     } else if version == 3 {
         create_backup_internal(&connection, root, "pre-migration-v3", 3, 0)?;
+    } else if version == 4 {
+        create_backup_internal(&connection, root, "pre-migration-v4", 4, 0)?;
     }
     configure_connection(&connection)?;
     if version == 0 {
@@ -1150,6 +1185,9 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
     }
     if version <= 3 {
         migrate_three_to_four(&mut connection)?;
+    }
+    if version <= 4 {
+        migrate_four_to_five(&mut connection)?;
     }
     let snapshot = match load_snapshot(&connection) {
         Ok(snapshot) => snapshot,
@@ -1237,10 +1275,36 @@ fn migrate_three_to_four(connection: &mut Connection) -> Result<(), StoreError> 
     sqlite(transaction.execute_batch(SCHEMA_V4))?;
     sqlite(transaction.execute(
         "UPDATE schema_meta SET version = ?1, applied_at = ?2 WHERE id = 1",
-        params![i64::from(SCHEMA_VERSION), now_seconds()?],
+        params![4_i64, now_seconds()?],
     ))?;
-    sqlite(transaction.pragma_update(None, "user_version", SCHEMA_VERSION))?;
+    sqlite(transaction.pragma_update(None, "user_version", 4))?;
     sqlite(transaction.commit())?;
+    Ok(())
+}
+
+fn migrate_four_to_five(connection: &mut Connection) -> Result<(), StoreError> {
+    sqlite(connection.pragma_update(None, "foreign_keys", false))?;
+    let migrated = (|| {
+        let transaction =
+            sqlite(connection.transaction_with_behavior(TransactionBehavior::Exclusive))?;
+        sqlite(transaction.execute_batch(SCHEMA_V5))?;
+        sqlite(transaction.execute(
+            "UPDATE schema_meta SET version = ?1, applied_at = ?2 WHERE id = 1",
+            params![5_i64, now_seconds()?],
+        ))?;
+        sqlite(transaction.pragma_update(None, "user_version", 5))?;
+        sqlite(transaction.commit())
+    })();
+    sqlite(connection.pragma_update(None, "foreign_keys", true))?;
+    migrated?;
+    let violations: i64 = sqlite(connection.query_row(
+        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+        [],
+        |row| row.get(0),
+    ))?;
+    if violations != 0 {
+        return Err(StoreError::Sqlite);
+    }
     Ok(())
 }
 

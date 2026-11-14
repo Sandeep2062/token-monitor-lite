@@ -69,6 +69,7 @@ impl SourceHealthStatus {
             SourceError::Sqlite(SqliteSourceError::Busy | SqliteSourceError::Changed) => {
                 Self::SourceBusy
             }
+            SourceError::Sqlite(SqliteSourceError::Unsupported) => Self::Unsupported,
             SourceError::Sqlite(SqliteSourceError::Schema | SqliteSourceError::Conflict) => {
                 Self::Unsupported
             }

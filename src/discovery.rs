@@ -5,8 +5,8 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    CodexLocalUsageAdapter, MAX_DECODED_BYTES, SessionArchiveAdapter, SourceInput, has_zstd_suffix,
-    is_compressed_source_path,
+    CodexLocalUsageAdapter, MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter, SourceInput,
+    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -39,6 +39,7 @@ pub struct HostPaths {
     pub app_data: Option<PathBuf>,
     pub local_app_data: Option<PathBuf>,
     pub xdg_config_home: Option<PathBuf>,
+    pub xdg_data_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
     pub legacy_shared_override: Option<PathBuf>,
     pub native_data_override: Option<PathBuf>,
@@ -84,6 +85,7 @@ impl HostPaths {
             app_data: path("APPDATA"),
             local_app_data: path("LOCALAPPDATA"),
             xdg_config_home: path("XDG_CONFIG_HOME"),
+            xdg_data_home: path("XDG_DATA_HOME"),
             xdg_state_home: path("XDG_STATE_HOME"),
             legacy_shared_override: path("TOKEN_MONITOR_SHARED_DIR"),
             native_data_override: path("TOKEN_MONITOR_LITE_DATA_DIR"),
@@ -791,6 +793,40 @@ fn discover_sources(
     discover_sources_with_id(inputs, notices, SourceId::for_path)
 }
 
+/// OpenCode resolves its data directory through the XDG data root on every
+/// supported host (`XDG_DATA_HOME`, else `<home>/.local/share`), then appends
+/// `opencode`. The reference implementation does not use an Application
+/// Support/AppData root, so none is guessed here.
+fn opencode_data_dir(inputs: &HostPaths) -> Result<PathBuf, DiscoveryError> {
+    let base = match inputs.xdg_data_home.as_deref() {
+        Some(root) if !root.as_os_str().is_empty() => checked_root(inputs.platform, root, false)?,
+        _ => join_many(inputs.platform, &inputs.home, &[".local", "share"]),
+    };
+    Ok(join(inputs.platform, &base, "opencode"))
+}
+
+fn collect_opencode_candidates(
+    root: &Path,
+    candidates: &mut Vec<PathBuf>,
+) -> Result<(), DiscoveryError> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(is_opencode_db_filename)
+        {
+            candidates.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
 fn discover_sources_with_id(
     inputs: &HostPaths,
     notices: &mut Vec<DiscoveryNotice>,
@@ -800,6 +836,63 @@ fn discover_sources_with_id(
     let mut admitted_ids = BTreeSet::new();
     let mut rejected_ids = BTreeSet::new();
     for client in &inputs.enabled_clients {
+        if client == "opencode" {
+            let root = opencode_data_dir(inputs)?;
+            let mut candidates = Vec::new();
+            collect_opencode_candidates(&root, &mut candidates)?;
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "opencode",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "opencode",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match OpenCodeAdapter::new(&path).read() {
+                    Ok(rows) if !rows.is_empty() => {
+                        let source_id = source_id_for(SourceFormat::OpenCodeSqlite, &path);
+                        if rejected_ids.contains(&source_id) {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        if !admitted_ids.insert(source_id) {
+                            sources
+                                .retain(|source: &DiscoveredSource| source.source_id != source_id);
+                            admitted_ids.remove(&source_id);
+                            rejected_ids.insert(source_id);
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::OpenCodeSqlite,
+                            session: "opencode".to_owned(),
+                            path,
+                        });
+                    }
+                    _ => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "opencode",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
                 "claude",
@@ -1064,7 +1157,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                         None
                     }
                 }
-                SourceFormat::SessionArchiveSqlite | SourceFormat::CodexLocalUsageSqlite => None,
+                SourceFormat::SessionArchiveSqlite
+                | SourceFormat::CodexLocalUsageSqlite
+                | SourceFormat::OpenCodeSqlite => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {
                 return Ok(session.to_owned());
@@ -1096,6 +1191,55 @@ mod tests {
 
     static NEXT_COLLISION_TREE: AtomicUsize = AtomicUsize::new(0);
 
+    fn host(platform: HostPlatform, home: &str) -> HostPaths {
+        HostPaths {
+            platform,
+            home: PathBuf::from(home),
+            app_data: None,
+            local_app_data: None,
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_state_home: None,
+            legacy_shared_override: None,
+            native_data_override: None,
+            enabled_clients: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn opencode_data_dir_uses_xdg_then_home_on_unix_hosts() {
+        assert_eq!(
+            opencode_data_dir(&host(HostPlatform::Linux, "/home/tester")).unwrap(),
+            PathBuf::from("/home/tester/.local/share/opencode")
+        );
+        assert_eq!(
+            opencode_data_dir(&host(HostPlatform::MacOs, "/Users/tester")).unwrap(),
+            PathBuf::from("/Users/tester/.local/share/opencode")
+        );
+        let mut linux = host(HostPlatform::Linux, "/home/tester");
+        linux.xdg_data_home = Some(PathBuf::from("/xdg-data"));
+        assert_eq!(
+            opencode_data_dir(&linux).unwrap(),
+            PathBuf::from("/xdg-data/opencode")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn opencode_data_dir_uses_xdg_then_home_on_windows() {
+        assert_eq!(
+            opencode_data_dir(&host(HostPlatform::Windows, r"C:\Users\tester")).unwrap(),
+            PathBuf::from(r"C:\Users\tester\.local\share\opencode")
+        );
+        let mut windows = host(HostPlatform::Windows, r"C:\Users\tester");
+        windows.xdg_data_home = Some(PathBuf::from(r"D:\xdg-data"));
+        assert_eq!(
+            opencode_data_dir(&windows).unwrap(),
+            PathBuf::from(r"D:\xdg-data\opencode")
+        );
+    }
+
     #[test]
     fn injected_source_id_collision_rejects_every_alias() {
         let root = env::temp_dir().join(format!(
@@ -1121,6 +1265,7 @@ mod tests {
             app_data: None,
             local_app_data: None,
             xdg_config_home: None,
+            xdg_data_home: None,
             xdg_state_home: None,
             legacy_shared_override: Some(root.join("legacy")),
             native_data_override: Some(root.join("native")),

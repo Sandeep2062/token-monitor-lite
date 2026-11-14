@@ -3,18 +3,19 @@
 The fixture contains exactly 100 discovered logical sources and exactly 1,000
 distinct canonical ``(client, session)`` identities after production
 deduplication. It exercises ordinary Claude/Codex JSONL, streaming zstd Codex,
-one schema-v1 retained session archive (SQLite/WAL), and one supported Codex
-local-usage ledger (SQLite/WAL).
+one OpenCode SQLite database (``session_v2``/``session_message`` current
+shape), one schema-v1 retained session archive (SQLite/WAL), and one supported
+Codex local-usage ledger (SQLite/WAL).
 
 The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below therefore preserves the required totals:
-98 JSONL/zstd sources supply 98 canonical sessions and the single local-usage
-ledger supplies the remaining 902 after one suppressed native-duplicate thread.
-The archive source contributes retained history without fabricating request
-rows.
+sessions. The distribution below preserves the required totals: 32 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode source supply 65 canonical sessions,
+33 Claude sources supply 33, and the single local-usage ledger supplies the
+remaining 902 after one suppressed native-duplicate thread. The archive source
+contributes retained history without fabricating request rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -46,12 +47,18 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 33
+CODEX_SOURCES = 32
 ZSTD_SOURCES = 32
+OPENCODE_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
-    CLAUDE_SOURCES + CODEX_SOURCES + ZSTD_SOURCES + LOCAL_USAGE_SOURCES + ARCHIVE_SOURCES
+    CLAUDE_SOURCES
+    + CODEX_SOURCES
+    + ZSTD_SOURCES
+    + OPENCODE_SOURCES
+    + LOCAL_USAGE_SOURCES
+    + ARCHIVE_SOURCES
 )
 OBSERVATIONS_PER_JSONL = 10
 LOCAL_THREADS = 903
@@ -169,6 +176,81 @@ def _codex_source(index: int, session: str) -> tuple[str, bytes, dict[str, int],
             )
         )
     return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _opencode_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """Create the current OpenCode v2 shape: session_v2 + session_message."""
+    session = "opencode-fixture-000"
+    totals = _counts()
+    created = 1_763_000_000_000
+
+    def build(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE session_v2 (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                directory TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+            ) STRICT;
+            CREATE TABLE session_message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                time_created INTEGER NOT NULL,
+                data TEXT NOT NULL
+            ) STRICT;
+            """
+        )
+        connection.execute(
+            "INSERT INTO session_v2 (id, title, directory, time_created) VALUES (?, ?, ?, ?)",
+            (session, "Synthetic", "/synthetic", created),
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 250 + observation,
+                "output": 25 + observation,
+                "cacheRead": 7,
+                "cacheWrite": 3,
+                "reasoning": 2,
+            }
+            _add_counts(totals, counts)
+            timestamp = created + observation * 1_000
+            data = {
+                "role": "assistant",
+                "model": {"id": "claude-sonnet-4-5", "providerID": "anthropic"},
+                "time": {"created": timestamp},
+                # OpenCode stores inclusive output; the reader splits reasoning
+                # out once, so expectedTotals keeps the non-reasoning portion.
+                "tokens": {
+                    "input": counts["input"],
+                    "output": counts["output"] + counts["reasoning"],
+                    "reasoning": counts["reasoning"],
+                    "cache": {"read": counts["cacheRead"], "write": counts["cacheWrite"]},
+                },
+                "cost": 0.001,
+            }
+            connection.execute(
+                "INSERT INTO session_message "
+                "(id, session_id, type, seq, time_created, data) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    f"opencode-message-{observation:02d}",
+                    session,
+                    "assistant",
+                    observation,
+                    timestamp,
+                    json.dumps(data, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+
+    connection = sqlite3.connect(path)
+    try:
+        build(connection)
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -713,6 +795,31 @@ def generate(raw_root: str) -> Path:
         _add_counts(canonical_aggregate, totals)
         physical_bytes += len(compressed)
         decoded_bytes += len(data)
+
+    opencode_target = (
+        root / "home" / ".local" / "share" / "opencode" / "opencode.db"
+    )
+    opencode_target.parent.mkdir(parents=True, exist_ok=True)
+    opencode_session, opencode_totals, opencode_rows = _opencode_database(opencode_target)
+    opencode_entry = dict(
+        _existing_entry(
+            root, "home/.local/share/opencode/opencode.db", opencode_target
+        ),
+        format="opencode-sqlite",
+        session=opencode_session,
+        observations=opencode_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=opencode_target.stat().st_size,
+        physicalBytes=opencode_target.stat().st_size,
+        expectedTotals=opencode_totals,
+        retainedPeriods=0,
+    )
+    sources.append(opencode_entry)
+    _add_counts(aggregate, opencode_totals)
+    _add_counts(canonical_aggregate, opencode_totals)
+    physical_bytes += opencode_target.stat().st_size
+    decoded_bytes += opencode_target.stat().st_size
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

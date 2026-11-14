@@ -89,6 +89,7 @@ fn open_store(root: &std::path::Path) -> StoreHandle {
         app_data: None,
         local_app_data: None,
         xdg_config_home: None,
+        xdg_data_home: None,
         xdg_state_home: None,
         legacy_shared_override: Some(root.join("legacy")),
         native_data_override: Some(root.join("native")),
