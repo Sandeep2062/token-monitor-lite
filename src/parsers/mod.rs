@@ -30,6 +30,7 @@ pub mod senpi;
 pub mod tencent_buddy;
 pub mod timestamps;
 pub mod workbuddy;
+pub mod zcode;
 pub mod zed;
 
 use crate::accounting::{SessionKey, TokenCounts};

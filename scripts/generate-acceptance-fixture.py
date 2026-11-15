@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 26
+CLAUDE_SOURCES = 25
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -67,6 +67,7 @@ KIMI_SOURCES = 1
 GROK_SOURCES = 1
 COMMANDCODE_SOURCES = 1
 MIMO_SOURCES = 1
+ZCODE_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -100,6 +101,7 @@ SOURCE_COUNT = (
     + GROK_SOURCES
     + COMMANDCODE_SOURCES
     + MIMO_SOURCES
+    + ZCODE_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1162,6 +1164,85 @@ def _commandcode_source() -> tuple[str, bytes, dict[str, int], int]:
     return f"{slug}/{session}", data, totals, OBSERVATIONS_PER_JSONL
 
 
+def _zcode_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One ZCode `model_usage` store: cache-inclusive rows with a reported total."""
+    session = "zcode-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                turn_id TEXT,
+                model_id TEXT,
+                started_at INTEGER,
+                completed_at INTEGER,
+                duration_ms INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER,
+                computed_total_tokens INTEGER,
+                agent TEXT,
+                mode TEXT
+            );
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, path TEXT);
+            """
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 140 + observation,
+                "output": 45 + observation,
+                "cacheRead": 20,
+                "cacheWrite": 4,
+                "reasoning": 6,
+            }
+            _add_counts(totals, counts)
+            # ZCode reports input/output cache- and reasoning-inclusive, and
+            # `computed_total_tokens` equals input+output. That is what proves
+            # the inclusive shape to the reader, which then subtracts the
+            # overlap so the canonical total stays additive. The expected totals
+            # above therefore hold the *net* buckets, while the row stores the
+            # inclusive ones.
+            raw_input = counts["input"] + counts["cacheRead"] + counts["cacheWrite"]
+            raw_output = counts["output"] + counts["reasoning"]
+            connection.execute(
+                """
+                INSERT INTO model_usage (
+                    id, session_id, turn_id, model_id, started_at, completed_at,
+                    duration_ms, input_tokens, output_tokens, reasoning_tokens,
+                    cache_read_input_tokens, cache_creation_input_tokens,
+                    computed_total_tokens, agent, mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"usage-{observation:03d}",
+                    session,
+                    f"turn-{observation:03d}",
+                    "glm-5.2",
+                    1782718000000 + observation * 1000,
+                    1782718000500 + observation * 1000,
+                    500,
+                    raw_input,
+                    raw_output,
+                    counts["reasoning"],
+                    counts["cacheRead"],
+                    counts["cacheWrite"],
+                    raw_input + raw_output,
+                    "zcode-agent",
+                    "yolo",
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
+
+
 def _mimo_database(path: Path) -> tuple[str, dict[str, int], int]:
     """One MiMo database: assistant rows in OpenCode's `message` schema."""
     session = "mimo-fixture-000"
@@ -2133,6 +2214,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, mimo_totals)
     physical_bytes += mimo_target.stat().st_size
     decoded_bytes += mimo_target.stat().st_size
+
+    zcode_target = root / "home" / ".zcode" / "cli" / "db" / "db.sqlite"
+    zcode_totals, zcode_rows = _zcode_database(zcode_target)[1:]
+    zcode_entry = dict(
+        _existing_entry(root, "home/.zcode/cli/db/db.sqlite", zcode_target),
+        format="zcode-sqlite",
+        session="db",
+        observations=zcode_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=zcode_target.stat().st_size,
+        physicalBytes=zcode_target.stat().st_size,
+        expectedTotals=zcode_totals,
+        retainedPeriods=0,
+    )
+    sources.append(zcode_entry)
+    _add_counts(aggregate, zcode_totals)
+    _add_counts(canonical_aggregate, zcode_totals)
+    physical_bytes += zcode_target.stat().st_size
+    decoded_bytes += zcode_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

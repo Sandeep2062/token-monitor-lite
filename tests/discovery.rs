@@ -261,6 +261,44 @@ fn mimo_database(path: &Path) {
         .unwrap();
 }
 
+fn zcode_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                turn_id TEXT,
+                model_id TEXT,
+                started_at INTEGER,
+                completed_at INTEGER,
+                duration_ms INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER,
+                computed_total_tokens INTEGER,
+                agent TEXT,
+                mode TEXT
+             );
+             CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, path TEXT);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO model_usage (id, session_id, turn_id, model_id, started_at,
+                completed_at, duration_ms, input_tokens, output_tokens, reasoning_tokens,
+                cache_read_input_tokens, cache_creation_input_tokens, computed_total_tokens,
+                agent, mode)
+             VALUES ('usage_1', 'sess_1', 'turn_1', 'GLM-5.2', 1782718000000,
+                1782718001000, 1000, 100, 20, 5, 7, 3, 120, 'zcode-agent', 'yolo')",
+            [],
+        )
+        .unwrap();
+}
+
 fn goose_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();
@@ -1028,6 +1066,45 @@ fn mimo_databases_are_discovered_at_the_xdg_data_role() {
         .map(|source| source.session.as_str())
         .collect::<BTreeSet<_>>();
     assert_eq!(sessions, BTreeSet::from(["mimocode", "mimocode-beta"]));
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn zcode_projects_and_the_cli_database_are_discovered() {
+    let tree = Tree::new();
+    // Transcript store: `<slug>/<session>.jsonl`.
+    tree.file(
+        ".zcode/projects/demo/session-a.jsonl",
+        concat!(
+            r#"{"role":"assistant","sessionId":"session-a","timestamp":"2026-06-20T10:00:05Z","model":"glm-5.2","usage":{"input_tokens":10,"output_tokens":5}}"#,
+            "\n"
+        )
+        .as_bytes(),
+    );
+    // Authoritative per-request store.
+    zcode_database(&tree.0.join(".zcode/cli/db/db.sqlite"));
+    // Anything that is not project JSONL is not admitted.
+    tree.file(".zcode/settings.json", b"{}");
+
+    let mut paths = tree.paths(&["zcode"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert_eq!(
+        report
+            .sources
+            .iter()
+            .map(|source| source.format)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([SourceFormat::ZcodeJsonl, SourceFormat::ZcodeSqlite])
+    );
+    let transcript = report
+        .sources
+        .iter()
+        .find(|source| source.format == SourceFormat::ZcodeJsonl)
+        .unwrap();
+    assert_eq!(transcript.session, "session-a");
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

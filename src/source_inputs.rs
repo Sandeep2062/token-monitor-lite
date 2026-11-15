@@ -17,6 +17,7 @@ use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
 use crate::parsers::workbuddy::sqlite_row_to_usage;
+use crate::parsers::zcode;
 use crate::parsers::zed::ZedReader;
 use crate::parsers::{CostStatus, ReaderError, ResponseUsage};
 use crate::runtime::MonitoredSource;
@@ -265,6 +266,24 @@ impl MimoAdapter {
     }
 }
 
+pub struct ZcodeAdapter {
+    path: PathBuf,
+}
+
+impl ZcodeAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_zcode(&self.path)
+    }
+}
+
 pub struct KiloAdapter {
     path: PathBuf,
 }
@@ -414,6 +433,8 @@ pub enum InputAdapterStatus {
     OpenCodeSqlite,
     KiloSqlite,
     MimoSqlite,
+    ZcodeJsonl,
+    ZcodeSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -428,6 +449,7 @@ pub(crate) enum SqliteInputData {
     OpenCode(Arc<[ResponseUsage]>),
     Kilo(Arc<[ResponseUsage]>),
     Mimo(Arc<[ResponseUsage]>),
+    Zcode(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -523,6 +545,7 @@ pub enum SourceInput {
     Kimi(OrdinaryJsonlInput),
     CommandCode(OrdinaryJsonlInput),
     Grok(OrdinaryJsonlInput),
+    ZcodeJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
     Cursor(CursorInput),
     Cline(DocumentInput),
@@ -536,6 +559,7 @@ pub enum SourceInput {
     OpenCode(OpenCodeAdapter),
     Kilo(KiloAdapter),
     Mimo(MimoAdapter),
+    Zcode(ZcodeAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -560,6 +584,7 @@ impl SourceInput {
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::MimoSqlite => Self::Mimo(MimoAdapter::new(path)),
+            SourceFormat::ZcodeSqlite => Self::Zcode(ZcodeAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -585,6 +610,10 @@ impl SourceInput {
                     cursor: JsonlCursor::default(),
                 })
             }
+            SourceFormat::ZcodeJsonl => Self::ZcodeJsonl(OrdinaryJsonlInput {
+                path,
+                cursor: JsonlCursor::default(),
+            }),
             SourceFormat::KimiJsonl
                 if path
                     .file_name()
@@ -700,6 +729,7 @@ impl SourceInput {
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
+            Self::ZcodeJsonl(_) => InputAdapterStatus::ZcodeJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::Cline(_) => InputAdapterStatus::ClineJson,
@@ -713,6 +743,7 @@ impl SourceInput {
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Mimo(_) => InputAdapterStatus::MimoSqlite,
+            Self::Zcode(_) => InputAdapterStatus::ZcodeSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -727,6 +758,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
+            Self::ZcodeJsonl(input) => input.cursor.reset(),
             Self::Kimi(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
             Self::Cursor(input) => input.reset(),
@@ -741,6 +773,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Mimo(_)
+            | Self::Zcode(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -755,6 +788,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
+            Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
             Self::Kimi(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
             Self::Cursor(input) => input.is_current(),
@@ -769,6 +803,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Mimo(_)
+            | Self::Zcode(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -789,6 +824,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Mimo(adapter) => Ok(Some(SqliteInputData::Mimo(adapter.read()?))),
+            Self::Zcode(adapter) => Ok(Some(SqliteInputData::Zcode(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -803,6 +839,7 @@ impl SourceInput {
             | Self::Kimi(_)
             | Self::CommandCode(_)
             | Self::Grok(_)
+            | Self::ZcodeJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
             | Self::Cline(_)
@@ -819,6 +856,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
+            Self::ZcodeJsonl(input) => Some(&input.path),
             Self::Kimi(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
             Self::Cursor(input) => Some(&input.path),
@@ -833,6 +871,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Some(adapter.path()),
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Mimo(adapter) => Some(adapter.path()),
+            Self::Zcode(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -856,6 +895,17 @@ impl SourceInput {
                 })
             }
             Self::Grok(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
+            Self::ZcodeJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
                     records: batch.records,
@@ -911,6 +961,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Mimo(_)
+            | Self::Zcode(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2348,6 +2399,116 @@ fn read_mimo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "model_usage",
+        &["id", "session_id", "input_tokens", "output_tokens"],
+    )?;
+    // Probe the column directly rather than inferring a legacy schema from the
+    // modern query failing to prepare: that query also LEFT JOINs `session`, so
+    // it can fail for reasons unrelated to this column. Conflating the two would
+    // send modern rows with NULL totals through the unconditional subtraction.
+    let legacy_schema = {
+        let mut statement = transaction.prepare("PRAGMA table_info(model_usage)")?;
+        let mut rows = statement.query([])?;
+        let mut columns = BTreeSet::new();
+        while let Some(row) = rows.next()? {
+            columns.insert(row.get::<_, String>(1)?);
+        }
+        !columns.contains("computed_total_tokens")
+    };
+    let candidates: i64 = connection_query_count(
+        &transaction,
+        "SELECT COUNT(*) FROM model_usage
+         WHERE COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+             + COALESCE(reasoning_tokens, 0)
+             + COALESCE(cache_read_input_tokens, 0)
+             + COALESCE(cache_creation_input_tokens, 0) > 0",
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > zcode::MAX_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let total_column = if legacy_schema {
+        "NULL"
+    } else {
+        "computed_total_tokens"
+    };
+    let sql = format!(
+        "SELECT id, session_id, model_id, started_at, completed_at,
+                input_tokens, output_tokens, reasoning_tokens,
+                cache_read_input_tokens, cache_creation_input_tokens,
+                {total_column}
+         FROM model_usage
+         WHERE COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+             + COALESCE(reasoning_tokens, 0)
+             + COALESCE(cache_read_input_tokens, 0)
+             + COALESCE(cache_creation_input_tokens, 0) > 0
+         ORDER BY COALESCE(completed_at, started_at, 0), id LIMIT ?1 OFFSET ?2"
+    );
+    let mut responses = Vec::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let session: Option<String> = row.get(1)?;
+            let model: Option<String> = row.get(2)?;
+            let Some(usage) = zcode::normalize_row(&zcode::ZcodeUsageRow {
+                id: &id,
+                session_id: session.as_deref(),
+                model_id: model.as_deref(),
+                started_at: row.get(3)?,
+                completed_at: row.get(4)?,
+                fallback_timestamp_ms: source_modified_ms(path).unwrap_or(0),
+                input: row.get(5)?,
+                output: row.get(6)?,
+                reasoning: row.get(7)?,
+                cache_read: row.get(8)?,
+                cache_write: row.get(9)?,
+                computed_total: row.get(10)?,
+                legacy_schema,
+            })
+            .map_err(map_zcode_error)?
+            else {
+                page_rows += 1;
+                continue;
+            };
+            if responses.len() == zcode::MAX_RESPONSES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            responses.push(usage);
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(responses))
+}
+
+fn map_zcode_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
 }
 
 fn connection_query_count(connection: &Connection, sql: &str) -> Result<i64, SqliteSourceError> {

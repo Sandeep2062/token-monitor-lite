@@ -813,6 +813,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "kimi",
         "mcode",
         "mimo",
+        "zcode",
         "muse",
         "omp",
         "openclaw",
@@ -893,6 +894,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "kimi"
             | "mcode"
             | "mimo"
+            | "zcode"
             | "muse"
             | "omp"
             | "openclaw"
@@ -928,6 +930,7 @@ fn is_supported_client(client: &str) -> bool {
             | "kimi"
             | "mcode"
             | "mimo"
+            | "zcode"
             | "muse"
             | "omp"
             | "openclaw"
@@ -961,6 +964,7 @@ fn client_label(client: &str) -> &'static str {
         "commandcode" => "Command Code",
         "mcode" => "MiniMax Code",
         "mimo" => "Xiaomi MiMo",
+        "zcode" => "ZCode",
         "openclaw" => "OpenClaw",
         "muse" => "Muse Code",
         "omp" => "Oh My Pi",
@@ -1425,6 +1429,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::MuseJsonl => "Muse Code",
         SourceFormat::McodeJsonl => "MiniMax Code",
         SourceFormat::MimoSqlite => "Xiaomi MiMo",
+        SourceFormat::ZcodeJsonl | SourceFormat::ZcodeSqlite => "ZCode",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "OpenClaw",
         SourceFormat::ZedSqlite => "Zed",
     }

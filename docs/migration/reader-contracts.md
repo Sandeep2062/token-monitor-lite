@@ -183,6 +183,25 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## ZCode matrix
+
+ZCode keeps usage in two stores. Transcript JSONL lives at `~/.zcode/projects/<slug>/<session>.jsonl`; the authoritative per-request store is the `model_usage` table at `~/.zcode/cli/db/db.sqlite`. Both are separate sources. The pinned reader's ~4-chars-per-token estimation fallback, `is_turn_start` assignment, per-request duration, and `agent`/`mode` attribution are not implemented.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant transcript line with a `usage` or `token_usage` block | supported | One observation. The first block that yields non-zero tokens wins, so an empty `usage` cannot shadow a populated `token_usage`. Field aliases (`input_tokens`/`prompt_tokens`/`inputTokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_input_tokens`, `reasoningTokens`, `totalTokens`) are accepted. | Line `sessionId` wins over the caller-supplied session; the file stem is the fallback. |
+| `model_usage` row with a non-zero counter sum | supported | One observation, anchored at `started_at` and falling back to `completed_at` then the file mtime. Model is lowercased; identity is `zcode-sqlite:<row>`. | Row `session_id`, defaulting to `unknown`. |
+| Reported `computed_total_tokens` equal to `input + output` while differing from the fully additive sum | supported | Proves the row is cache/reasoning-inclusive, so the overlap is subtracted exactly once from input and output. | As above. |
+| `computed_total_tokens` present but equal to the additive sum | supported | Already exclusive; counters pass through unchanged. | As above. |
+| Legacy schema with no `computed_total_tokens` column | supported | Every row is assumed inclusive and the overlap is subtracted unconditionally, matching the pinned reader's documented sampled behavior. | As above. |
+| Modern schema row whose `computed_total_tokens` is NULL | supported | The shape cannot be detected, so counters pass through unchanged. Subtracting here would undercount an already-exclusive row. | As above. |
+| Assistant transcript line with no usage block | ignored non-usage | No row. The pinned reader estimates from content here; the native reader does not fabricate a measurement. | No ownership change. |
+| All-zero usage block or row | ignored non-usage | No row. | No ownership change. |
+| Cache overlap larger than the input it was contained in, or a negative/fractional counter | visible unsupported | Discard the candidate. The pinned reader saturates the overlap; the native reader rejects it as internally inconsistent. | Prior committed generation remains active. |
+| Missing model | supported | The documented default `glm-5.2` is used, matching the pinned reader. | As above. |
+| Transcript line with no timestamp and no file mtime | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| `is_turn_start`, `duration_ms`, `agent`/`mode`, and content-based token estimation | visible unsupported / ignored | Not guessed; `is_turn_start` is an aggregation concern in this codebase. | No source slot. |
+
 ## MiMo SQLite matrix
 
 MiMo Code and Xiaomi MiMo AI share one engine, and that engine stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME or home/.local/share>/mimocode/*.db`, most commonly `mimocode.db`. The supported source is the `message(id, session_id, data)` table. Discovery admits every `.db` in that directory, because channel-suffixed databases (`mimocode-<channel>.db`) sit beside the primary store and each is its own source. MiMo's `session.version` desktop split, agent/mode attribution, and duration are not implemented.

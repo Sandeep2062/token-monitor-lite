@@ -7,8 +7,8 @@ use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
     MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, SessionArchiveAdapter,
-    SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZedAdapter, has_zstd_suffix,
-    is_compressed_source_path, is_opencode_db_filename,
+    SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter,
+    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2140,6 +2140,97 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "zcode" {
+            // ZCode keeps two stores: transcript JSONL under
+            // `~/.zcode/projects/<slug>/<session>.jsonl`, and the authoritative
+            // per-request `model_usage` table at `~/.zcode/cli/db/db.sqlite`.
+            // Both are scanned; each file is its own source.
+            let projects = join_many(inputs.platform, &inputs.home, &[".zcode", "projects"]);
+            let mut jsonl = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&projects, 0, &mut inspected, &mut jsonl, &mut overflow)?;
+            jsonl.retain(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+            });
+            jsonl.sort();
+            for (ordinal, path) in jsonl.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::ZcodeJsonl,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "zcode",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::ZcodeJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::ZcodeJsonl,
+                    session,
+                    path,
+                });
+            }
+            let database = join_many(
+                inputs.platform,
+                &inputs.home,
+                &[".zcode", "cli", "db", "db.sqlite"],
+            );
+            let metadata = match fs::symlink_metadata(&database) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(metadata) = metadata {
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "zcode",
+                        ordinal: 1,
+                    });
+                } else if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                } else if metadata.len() > MAX_SOURCE_FILE_BYTES
+                    || ZcodeAdapter::new(&database).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "zcode",
+                        ordinal: 1,
+                    });
+                } else {
+                    let source_id = source_id_for(SourceFormat::ZcodeSqlite, &database);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::ZcodeSqlite,
+                            session: "db".to_owned(),
+                            path: database,
+                        });
+                    } else {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    }
+                }
+            }
+            continue;
+        }
         if client == "zed" {
             for (ordinal, path) in zed_database_paths(inputs).into_iter().enumerate() {
                 let ordinal = ordinal + 1;
@@ -3015,17 +3106,21 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Grok's update stream names no session; the caller derives it
                 // from the `<workspace>/<session-id>/updates.jsonl` path.
                 SourceFormat::GrokJsonl => None,
+                // ZCode's transcript carries an optional sessionId; the caller
+                // derives one from the <slug>/<session>.jsonl path when absent.
+                SourceFormat::ZcodeJsonl => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
                 | SourceFormat::KiloSqlite
+                | SourceFormat::MimoSqlite
+                | SourceFormat::ZcodeSqlite
                 | SourceFormat::GooseSqlite
                 | SourceFormat::HermesSqlite
                 | SourceFormat::OpenClawSqlite
                 | SourceFormat::ZedSqlite
                 | SourceFormat::WorkBuddySqlite
                 | SourceFormat::AntigravitySqlite
-                | SourceFormat::MimoSqlite
                 | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {
@@ -3115,6 +3210,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::McodeJsonl
             | SourceFormat::OpenClawJsonl
             | SourceFormat::CommandCodeJsonl
+            | SourceFormat::ZcodeJsonl
     ) {
         return path
             .file_stem()
