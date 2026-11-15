@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 22
+CLAUDE_SOURCES = 21
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -71,6 +71,7 @@ ZCODE_SOURCES = 1
 KIRO_SOURCES = 1
 PROMA_SOURCES = 1
 QODERCN_SOURCES = 1
+DSH_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -108,6 +109,7 @@ SOURCE_COUNT = (
     + KIRO_SOURCES
     + PROMA_SOURCES
     + QODERCN_SOURCES
+    + DSH_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1204,6 +1206,57 @@ def _proma_source() -> tuple[str, bytes, dict[str, int], int]:
         )
     data = b"".join(_json_line(entry) for entry in lines)
     return f"{session}.jsonl", data, totals, len(lines)
+
+
+def _dsh_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One DSH session: a header plus one settlement per observation."""
+    session = "dsh-fixture-000"
+    totals = _counts()
+    lines = [
+        {
+            "type": "session",
+            "id": session,
+            "cwd": "/work/dsh-fixture",
+            "seq": 0,
+        }
+    ]
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 190 + observation,
+            "output": 38 + observation,
+            "cacheRead": 8,
+            "cacheWrite": 3,
+            "reasoning": 4,
+        }
+        _add_counts(totals, counts)
+        lines.append(
+            {
+                "type": "assistant/message",
+                "time": 1_782_718_000_000 + observation * 1000,
+                "seq": observation + 1,
+                "data": {
+                    "turn": 0,
+                    "step": observation,
+                    "message": {
+                        "id": f"msg-{observation:03d}",
+                        "source": {
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                        },
+                    },
+                    "usage": {
+                        "inputTokens": counts["input"],
+                        # outputTokens includes reasoningTokens.
+                        "outputTokens": counts["output"] + counts["reasoning"],
+                        "cacheReadTokens": counts["cacheRead"],
+                        "cacheWriteTokens": counts["cacheWrite"],
+                        "reasoningTokens": counts["reasoning"],
+                    },
+                },
+            }
+        )
+    data = b"".join(_json_line(entry) for entry in lines)
+    return "session.jsonl", data, totals, len(lines) - 1
 
 
 def _qodercn_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2413,6 +2466,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, qodercn_totals)
     physical_bytes += len(qodercn_data)
     decoded_bytes += len(qodercn_data)
+
+    dsh_path, dsh_data, dsh_totals, dsh_rows = _dsh_source()
+    dsh_entry = _source_entry(
+        root,
+        f"home/.dsh/sessions/work-dsh/dsh-fixture-000/{dsh_path}",
+        dsh_data,
+        format_name="dsh-jsonl",
+        session="dsh-fixture-000",
+        observations=dsh_rows,
+        canonical_sessions=1,
+        expected_totals=dsh_totals,
+        physical_bytes=len(dsh_data),
+    )
+    sources.append(dsh_entry)
+    _add_counts(aggregate, dsh_totals)
+    _add_counts(canonical_aggregate, dsh_totals)
+    physical_bytes += len(dsh_data)
+    decoded_bytes += len(dsh_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

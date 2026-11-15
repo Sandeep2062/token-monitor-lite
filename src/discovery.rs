@@ -2503,6 +2503,69 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "dsh" {
+            // DSH writes one transcript per session under
+            // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
+            // (`<DSH_HOME>` defaults to `~/.dsh`) and appends `.zstd` when the
+            // backend compresses. The suffix marks the physical encoding only,
+            // so both are admitted and the input layer dispatches on the zstd
+            // frame magic rather than on the name.
+            let root = join_many(inputs.platform, &inputs.home, &[".dsh", "sessions"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name == "session.jsonl" || name.eq_ignore_ascii_case("session.jsonl.zstd")
+                    })
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match source_session(&path, SourceFormat::DshJsonl) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "dsh",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let bytes = fs::symlink_metadata(&path)
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                let session = match validate_source(&path, SourceFormat::DshJsonl, bytes) {
+                    Ok(_) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "dsh",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::DshJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::DshJsonl,
+                    session,
+                    path,
+                });
+            }
+            continue;
+        }
         if client == "zed" {
             for (ordinal, path) in zed_database_paths(inputs).into_iter().enumerate() {
                 let ordinal = ordinal + 1;
@@ -3411,6 +3474,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
                 SourceFormat::QodercnSqlite => None,
+                // DSH's transcript directory is named after its session id.
+                SourceFormat::DshJsonl => None,
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
@@ -3488,6 +3553,17 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         return path
             .parent()
             .filter(|parent| parent.file_name().and_then(|name| name.to_str()) != Some("sessions"))
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    // `<encoded-cwd>/<session-id>/session.jsonl[.zstd]`: the session is the
+    // containing directory, since the file itself is always `session.jsonl`.
+    if format == SourceFormat::DshJsonl {
+        return path
+            .parent()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))

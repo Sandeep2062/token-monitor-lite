@@ -183,6 +183,29 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## DSH matrix
+
+DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.
+
+`outputTokens` already includes `reasoningTokens`, so the reasoning bucket is subtracted from output exactly once. DSH never embeds a cost, so pricing is the only cost source.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `assistant/message` with `data.usage` | supported | One observation from `inputTokens`, `outputTokens` minus `reasoningTokens`, `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens`. | Session is the transcript directory name, else `data.id` from the header. |
+| `assistant/message` with no `data.usage` but a `data.stream` carrying a `usage` chunk | supported | The **last** `usage` chunk wins; earlier chunks of the same call are superseded samples, not extra calls. | As above. |
+| `assistant/attempt` | supported | Always settles from its stream, never from a top-level usage object. | As above. |
+| `compaction/summary` | supported | A real provider call: DSH sends the shadowed range to the model. It shares no `(turn, step)` with a loop step, so it is counted **in addition** to its neighbours and never replaces one. | As above. |
+| A later settlement for the same `(turn, step)` | supported, replaced | The later sample replaces the earlier one, because one call that reports twice is one call. Summing both would double-count it. | As above. |
+| `served_model` present on `replayState.response.responseModel` | supported, overriding | Wins over the configured `source.model`, because a floating alias or provider substitution resolves to a different model. Only the known `keepalive` placeholder is discarded; the response id alone is not grounds to discard a genuine model. | As above. |
+| No `source` on the record | supported | Falls back to the most recent `request/header` routing, then to `unknown`. | As above. |
+| Zero usage, or a row with no usable `time` | ignored non-usage | No observation. | No ownership change. |
+| Legacy `seedLength` on the header | supported | Events whose `seq` is below the cut are inherited from the parent and dropped; charging them again would bill the parent's calls twice. A present field owns the decision even at zero. | As above. |
+| Current `isSeeded: true` header | supported | The cut is the **last** tagged `session/end-seed { inherited: true }` marker, because a nested fork can inherit an ancestor's marker. | As above. |
+| `isSeeded: true` with no readable tagged cut | visible unsupported | The whole transcript is refused: inherited usage cannot be distinguished from child-owned usage, so charging the copied prefix to the child is worse than omitting it until a later scan reads the marker. | Prior committed generation remains active. |
+| Identical replayed rows within one file | deduplicated | Dropped by the full identity envelope. A repeated `message.id` with different time, usage or routing still separates, because a non-unique id must not fold two real calls. | As above. |
+| Malformed JSON, a negative or non-integral counter | visible unsupported | Discard the whole candidate. | Prior committed generation remains active. |
+| Per-call generation latency (`duration_ms`), `is_turn_start`, and the compressed-source cache with its fingerprint | visible unsupported | Not guessed. Latency needs the `step/start` anchor and turn-start needs the `(turn, step)` slot map; both are aggregation concerns in this codebase rather than properties of one observation. | No source slot. |
+
 ## Qoder CN matrix
 
 Qoder CN is one opt-in, fork-only client with two lanes. The legacy store is a `chat_message` table at `<app-support>/QoderCN/SharedClientCache/cache/db/local.db`, where the app-support root is `~/Library/Application Support` on macOS, the roaming app-data directory on Windows, and `XDG_CONFIG_HOME` (falling back to `<home>/.config`) elsewhere. The current lane is Claude-compatible JSONL under `~/.qoder-cn/projects`.

@@ -16,6 +16,7 @@ use crate::parsers::{
     copilot::CopilotReader,
     cursor::CursorReader,
     droid::DroidReader,
+    dsh::DshReader,
     gemini::GeminiReader,
     grok::GrokReader,
     kimi::KimiReader,
@@ -72,6 +73,7 @@ pub enum SourceFormat {
     CatpawSqlite,
     QodercnJsonl,
     QodercnSqlite,
+    DshJsonl,
     CommandCodeJsonl,
     GrokJsonl,
     OpenClawJsonl,
@@ -117,6 +119,7 @@ impl SourceFormat {
             Self::ZcodeJsonl | Self::ZcodeSqlite => "zcode",
             Self::CatpawSqlite => "catpaw",
             Self::QodercnJsonl | Self::QodercnSqlite => "qodercn",
+            Self::DshJsonl => "dsh",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -160,6 +163,7 @@ impl SourceFormat {
             Self::CatpawSqlite => "catpaw-sqlite",
             Self::QodercnJsonl => "qodercn-jsonl",
             Self::QodercnSqlite => "qodercn-sqlite",
+            Self::DshJsonl => "dsh-jsonl",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -205,6 +209,7 @@ impl SourceFormat {
             "catpaw-sqlite" => Some(Self::CatpawSqlite),
             "qodercn-jsonl" => Some(Self::QodercnJsonl),
             "qodercn-sqlite" => Some(Self::QodercnSqlite),
+            "dsh-jsonl" => Some(Self::DshJsonl),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -443,6 +448,7 @@ enum ResponseReader {
     OpenClaw(Box<OpenClawReader>),
     Zcode(Box<ZcodeReader>),
     Qodercn(Box<QodercnReader>),
+    Dsh(Box<DshReader>),
 }
 
 impl ResponseReader {
@@ -475,6 +481,7 @@ impl ResponseReader {
             Self::OpenClaw(reader) => reader.ingest(record),
             Self::Zcode(reader) => reader.ingest(record),
             Self::Qodercn(reader) => reader.ingest_record(record),
+            Self::Dsh(reader) => reader.ingest(record),
         }
     }
 
@@ -507,6 +514,7 @@ impl ResponseReader {
             Self::OpenClaw(reader) => reader.snapshot(),
             Self::Zcode(reader) => reader.snapshot(),
             Self::Qodercn(reader) => reader.snapshot(),
+            Self::Dsh(reader) => reader.snapshot(),
         }
     }
 
@@ -514,6 +522,7 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => Ok(()),
             Self::Codex(reader) => reader.finish(),
+            Self::Dsh(reader) => reader.finish(),
             Self::Gemini(_)
             | Self::Cursor(_)
             | Self::Cline(_)
@@ -571,6 +580,7 @@ impl ResponseReader {
             Self::OpenClaw(reader) => reader.has_supported_usage(),
             Self::Zcode(reader) => reader.has_supported_usage(),
             Self::Qodercn(reader) => reader.has_supported_usage(),
+            Self::Dsh(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -1003,6 +1013,9 @@ impl SourceReader {
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("unknown");
                 ResponseReader::Qodercn(Box::new(QodercnReader::new(source)))
+            }
+            SourceFormat::DshJsonl => {
+                ResponseReader::Dsh(Box::new(DshReader::new(&self.key.session)))
             }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite

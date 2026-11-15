@@ -1247,6 +1247,40 @@ fn qodercn_projects_and_the_legacy_database_are_discovered() {
 }
 
 #[test]
+fn dsh_session_transcripts_are_discovered_under_the_sessions_role() {
+    let tree = Tree::new();
+    // Plain encoding.
+    tree.file(
+        ".dsh/sessions/work-demo/sess-a/session.jsonl",
+        concat!(
+            r#"{"type":"session","id":"sess-a","cwd":"/work/demo"}"#,
+            "\n",
+            r#"{"type":"assistant/message","time":1782718005000,"seq":1,"data":{"message":{"id":"m1"},"usage":{"inputTokens":10,"outputTokens":5}}}"#,
+            "\n"
+        )
+        .as_bytes(),
+    );
+    // The `.zstd` suffix marks encoding only; the name is admitted either way.
+    tree.file(
+        ".dsh/sessions/work-demo/sess-b/session.jsonl.zstd",
+        b"not a real frame",
+    );
+    // Files that are not `session.jsonl*` are not admitted.
+    tree.file(".dsh/sessions/work-demo/sess-a/other.jsonl", b"{}\n");
+
+    let mut paths = tree.paths(&["dsh"]);
+    let report = discover(&paths).unwrap();
+    // The garbage `.zstd` file fails validation, so only the plain one lands.
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::DshJsonl);
+    // The session is the containing directory, not the always-`session` stem.
+    assert_eq!(report.sources[0].session, "sess-a");
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
 fn goose_database_uses_the_first_existing_or_authoritative_override() {
     let tree = Tree::new();
     goose_database(&tree.0.join(".local/share/goose/sessions/sessions.db"));

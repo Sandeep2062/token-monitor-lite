@@ -296,6 +296,100 @@ impl MimoAdapter {
     }
 }
 
+pub struct DshInput {
+    path: PathBuf,
+    inner: DshInputKind,
+}
+
+/// DSH writes the same rows to `session.jsonl.zstd` or a plain
+/// `session.jsonl` depending on the backend's `compression` setting, so the
+/// encoding is decided by the zstd frame magic rather than the file name.
+enum DshInputKind {
+    Unprobed,
+    Plain(OrdinaryJsonlInput),
+    Compressed(Box<CompressedJsonlInput>),
+}
+
+impl DshInput {
+    fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            inner: DshInputKind::Unprobed,
+        }
+    }
+
+    fn probe(&mut self) -> io::Result<()> {
+        if !matches!(self.inner, DshInputKind::Unprobed) {
+            return Ok(());
+        }
+        let mut magic = [0_u8; 4];
+        let mut file = File::open(&self.path)?;
+        let read = {
+            use std::io::Read as _;
+            let mut filled = 0;
+            while filled < magic.len() {
+                match file.read(&mut magic[filled..])? {
+                    0 => break,
+                    count => filled += count,
+                }
+            }
+            filled
+        };
+        self.inner = if read == magic.len() && magic == ZSTD_MAGIC {
+            DshInputKind::Compressed(Box::new(CompressedJsonlInput {
+                path: self.path.clone(),
+                state: None,
+                framer: JsonlFramer::default(),
+                buffer: vec![0; MAX_BATCH_BYTES].into_boxed_slice(),
+                decoded_total: 0,
+                decoded_limit: MAX_DECODED_BYTES,
+                reset_pending: true,
+            }))
+        } else {
+            DshInputKind::Plain(OrdinaryJsonlInput {
+                path: self.path.clone(),
+                cursor: JsonlCursor::default(),
+            })
+        };
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        match &mut self.inner {
+            DshInputKind::Unprobed => {}
+            DshInputKind::Plain(input) => input.cursor.reset(),
+            DshInputKind::Compressed(input) => input.reset(),
+        }
+    }
+
+    fn is_current(&self) -> io::Result<bool> {
+        match &self.inner {
+            DshInputKind::Unprobed => Ok(false),
+            DshInputKind::Plain(input) => input.cursor.is_current(&input.path),
+            DshInputKind::Compressed(input) => input.is_current(),
+        }
+    }
+
+    fn read_batch(&mut self) -> io::Result<InputBatch> {
+        self.probe()?;
+        match &mut self.inner {
+            DshInputKind::Unprobed => unreachable!("probe resolves the encoding"),
+            DshInputKind::Plain(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
+            DshInputKind::Compressed(input) => input.read_batch(),
+        }
+    }
+}
+
 pub struct QodercnAdapter {
     path: PathBuf,
 }
@@ -487,6 +581,7 @@ pub enum InputAdapterStatus {
     ZcodeSqlite,
     QodercnJsonl,
     QodercnSqlite,
+    DshJsonl,
     CatpawSqlite,
     GooseSqlite,
     HermesSqlite,
@@ -601,6 +696,7 @@ pub enum SourceInput {
     CommandCode(OrdinaryJsonlInput),
     Grok(OrdinaryJsonlInput),
     ZcodeJsonl(OrdinaryJsonlInput),
+    Dsh(DshInput),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
@@ -680,6 +776,7 @@ impl SourceInput {
                 path,
                 cursor: JsonlCursor::default(),
             }),
+            SourceFormat::DshJsonl => Self::Dsh(DshInput::new(path)),
             SourceFormat::QodercnJsonl => Self::QodercnJsonl(OrdinaryJsonlInput {
                 path,
                 cursor: JsonlCursor::default(),
@@ -809,6 +906,7 @@ impl SourceInput {
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
             Self::ZcodeJsonl(_) => InputAdapterStatus::ZcodeJsonl,
             Self::QodercnJsonl(_) => InputAdapterStatus::QodercnJsonl,
+            Self::Dsh(_) => InputAdapterStatus::DshJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::Cline(_) => InputAdapterStatus::ClineJson,
@@ -843,6 +941,7 @@ impl SourceInput {
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
             Self::QodercnJsonl(input) => input.cursor.reset(),
+            Self::Dsh(input) => input.reset(),
             Self::PromaJsonl(input) => input.cursor.reset(),
             Self::Kimi(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
@@ -878,6 +977,7 @@ impl SourceInput {
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
             Self::QodercnJsonl(input) => input.cursor.is_current(&input.path),
+            Self::Dsh(input) => input.is_current(),
             Self::PromaJsonl(input) => input.cursor.is_current(&input.path),
             Self::Kimi(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
@@ -936,6 +1036,7 @@ impl SourceInput {
             | Self::Grok(_)
             | Self::ZcodeJsonl(_)
             | Self::QodercnJsonl(_)
+            | Self::Dsh(_)
             | Self::PromaJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -956,6 +1057,7 @@ impl SourceInput {
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
             Self::QodercnJsonl(input) => Some(&input.path),
+            Self::Dsh(input) => Some(&input.path),
             Self::PromaJsonl(input) => Some(&input.path),
             Self::Kimi(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
@@ -1019,6 +1121,7 @@ impl SourceInput {
                     more_available: batch.more_available,
                 })
             }
+            Self::Dsh(input) => input.read_batch(),
             Self::QodercnJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
