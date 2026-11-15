@@ -661,6 +661,9 @@ impl SourceInput {
             Self::WorkBuddySqlite(adapter) => {
                 Ok(Some(SqliteInputData::WorkBuddySqlite(adapter.read()?)))
             }
+            Self::AntigravitySqlite(adapter) => {
+                Ok(Some(SqliteInputData::AntigravitySqlite(adapter.read()?)))
+            }
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -1546,7 +1549,7 @@ fn read_antigravity_sqlite(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSo
         .filter(|stem| !stem.is_empty())
         .ok_or(SqliteSourceError::Invalid)?
         .to_owned();
-    let mut reader = AntigravityDbReader::new(session, source_modified_ms(path));
+    let mut reader = AntigravityDbReader::new(session, source_modified_ms(path).unwrap_or(0));
     let mut offset = 0_i64;
     loop {
         let mut statement =
@@ -1695,7 +1698,7 @@ fn read_zed(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
 }
 
 fn decode_zed_zstd(data: &[u8], limit: u64) -> Result<Vec<u8>, SqliteSourceError> {
-    let mut decoder =
+    let decoder =
         StreamingDecoder::new_with_max_window_size(Cursor::new(data), MAX_ZSTD_WINDOW_BYTES)
             .map_err(|_| SqliteSourceError::Unsupported)?;
     let mut decoded = Vec::new();

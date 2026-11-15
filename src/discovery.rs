@@ -5,9 +5,9 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_DECODED_BYTES, OpenCodeAdapter,
-    SessionArchiveAdapter, SourceInput, ZedAdapter, has_zstd_suffix, is_compressed_source_path,
-    is_opencode_db_filename,
+    AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_DECODED_BYTES,
+    OpenCodeAdapter, SessionArchiveAdapter, SourceInput, WorkBuddySqliteAdapter, ZedAdapter,
+    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2122,6 +2122,46 @@ fn discover_sources_with_id(
                 SourceFormat::SenpiJsonl,
                 senpi_session_roots(inputs),
             ),
+            "antigravity" => (
+                "antigravity",
+                SourceFormat::AntigravityJsonl,
+                vec![join(
+                    inputs.platform,
+                    &tokscale_config_dir(inputs),
+                    "antigravity-cache",
+                )],
+            ),
+            "qwen" => (
+                "qwen",
+                SourceFormat::QwenJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".qwen", "projects"],
+                )],
+            ),
+            "reasonix" => (
+                "reasonix",
+                SourceFormat::ReasonixJsonl,
+                vec![join(inputs.platform, &reasonix_home(inputs), "stats")],
+            ),
+            "muse" => (
+                "muse",
+                SourceFormat::MuseJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs
+                        .xdg_data_home
+                        .clone()
+                        .unwrap_or_else(|| inputs.home.join(".local").join("share")),
+                    &["muse", "sessions"],
+                )],
+            ),
+            "mcode" => (
+                "mcode",
+                SourceFormat::McodeJsonl,
+                mcode_session_roots(inputs),
+            ),
             _ => {
                 notices.push(DiscoveryNotice::UnsupportedClient {
                     client: redacted_client_id(client),
@@ -2559,6 +2599,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 | SourceFormat::OpenCodeSqlite
                 | SourceFormat::KiloSqlite
                 | SourceFormat::GooseSqlite
+                | SourceFormat::ZedSqlite
+                | SourceFormat::WorkBuddySqlite
+                | SourceFormat::AntigravitySqlite
                 | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {

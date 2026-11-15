@@ -67,6 +67,7 @@ fn inference_log_record_is_supported_without_span_fields() {
         &mut reader,
         json!({
             "timeUnixNano": 1_794_564_000_000_000_000_u64,
+            "timeUnixNano": 1_794_564_000_000_000_000_u64,
             "body": "GenAI inference: gpt-5",
             "attributes": {
                 "event.name": "gen_ai.client.inference.operation.details",
@@ -94,6 +95,7 @@ fn mixed_sources_prefer_chat_spans() {
             "traceId": "trace-1",
             "spanId": "span-1",
             "name": "chat gpt-5",
+            "startTime": "2026-11-13T10:00:00Z",
             "attributes": {
                 "gen_ai.operation.name": "chat",
                 "gen_ai.response.model": "gpt-5",
@@ -107,6 +109,7 @@ fn mixed_sources_prefer_chat_spans() {
     ingest(
         &mut reader,
         json!({
+            "timeUnixNano": 1_794_564_000_000_000_000_u64,
             "body": "GenAI inference: gpt-5",
             "attributes": {
                 "event.name": "gen_ai.client.inference.operation.details",

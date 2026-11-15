@@ -106,7 +106,22 @@ impl CursorReader {
         self.rows
             .iter()
             .zip(keep)
-            .filter_map(|(row, keep)| keep.then_some(row.usage.clone()))
+            .filter_map(|(row, keep)| {
+                if !keep {
+                    return None;
+                }
+                let mut usage = row.usage.clone();
+                if usage.dedup_key.is_none() {
+                    usage.dedup_key = fallback
+                        .get(&(
+                            row.usage.key.session.clone(),
+                            row.usage.model.clone(),
+                            row.usage.timestamp_ms,
+                        ))
+                        .map(|id| format!("cursor-event:{id}"));
+                }
+                Some(usage)
+            })
             .collect()
     }
 

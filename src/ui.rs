@@ -1308,6 +1308,17 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::SessionArchiveSqlite => "Session archive",
         SourceFormat::CodexLocalUsageSqlite => "Codex local usage",
         SourceFormat::OpenCodeSqlite => "OpenCode",
+        SourceFormat::CodeBuddyJsonl => "CodeBuddy",
+        SourceFormat::WorkBuddyJsonl | SourceFormat::WorkBuddySqlite => "WorkBuddy",
+        SourceFormat::PiJsonl => "Pi",
+        SourceFormat::OmpJsonl => "Oh My Pi",
+        SourceFormat::SenpiJsonl => "OmO Native",
+        SourceFormat::AntigravityJsonl | SourceFormat::AntigravitySqlite => "Antigravity",
+        SourceFormat::QwenJsonl => "Qwen",
+        SourceFormat::ReasonixJsonl => "Reasonix",
+        SourceFormat::MuseJsonl => "Muse Code",
+        SourceFormat::McodeJsonl => "MiniMax Code",
+        SourceFormat::ZedSqlite => "Zed",
     }
 }
 

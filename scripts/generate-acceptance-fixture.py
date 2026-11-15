@@ -74,7 +74,7 @@ MCODE_SOURCES = 1
 ZED_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
-EXTRA_CLAUDE_OBSERVATIONS = 9
+EXTRA_CLAUDE_OBSERVATIONS = 18
 SOURCE_COUNT = (
     CLAUDE_SOURCES
     + CODEX_SOURCES
@@ -803,7 +803,7 @@ def _zed_database(path: Path) -> tuple[str, dict[str, int], int]:
         connection.commit()
     finally:
         connection.close()
-    return session, totals, OBSERVATIONS_PER_JSONL
+    return session, totals, 1
 
 
 def _goose_database(path: Path) -> tuple[str, dict[str, int], int]:

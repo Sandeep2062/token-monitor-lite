@@ -128,7 +128,7 @@ impl GeminiReader {
             }
             let model = self
                 .current_model
-                .as_deref()
+                .clone()
                 .ok_or(ReaderError::Unsupported("Gemini event model"))?;
             let tokens = tokens_value.as_object().ok_or(ReaderError::InvalidRecord)?;
             let timestamp = event_timestamp(object)
@@ -137,7 +137,7 @@ impl GeminiReader {
             let usage = normalize_direct_tokens(tokens)?;
             let id = object.get("id").and_then(Value::as_str);
             let session = self.session.clone();
-            return self.push(&session, model, timestamp, usage, id);
+            return self.push(&session, &model, timestamp, usage, id);
         }
         let Some(stats) = object
             .get("stats")
@@ -152,8 +152,9 @@ impl GeminiReader {
             .get("model")
             .and_then(Value::as_str)
             .filter(|value| valid_identity(value))
-            .or(self.current_model.as_deref());
-        self.ingest_stats(stats, hint, timestamp)
+            .map(str::to_owned)
+            .or_else(|| self.current_model.clone());
+        self.ingest_stats(stats, hint.as_deref(), timestamp)
     }
 
     fn ingest_stats(
@@ -162,20 +163,20 @@ impl GeminiReader {
         model_hint: Option<&str>,
         timestamp: i64,
     ) -> Result<(), ReaderError> {
-        if let Some(models) = stats.get("models").and_then(Value::as_object) {
-            if !models.is_empty() {
-                for (model, value) in models {
-                    if !valid_identity(model) {
-                        return Err(ReaderError::InvalidRecord);
-                    }
-                    let tokens = value.get("tokens").unwrap_or(value);
-                    let tokens = tokens.as_object().ok_or(ReaderError::InvalidRecord)?;
-                    let usage = normalize_stats_tokens(value, tokens)?;
-                    let session = self.session.clone();
-                    self.push(&session, model, timestamp, usage, None)?;
+        if let Some(models) = stats.get("models").and_then(Value::as_object)
+            && !models.is_empty()
+        {
+            for (model, value) in models {
+                if !valid_identity(model) {
+                    return Err(ReaderError::InvalidRecord);
                 }
-                return Ok(());
+                let tokens = value.get("tokens").unwrap_or(value);
+                let tokens = tokens.as_object().ok_or(ReaderError::InvalidRecord)?;
+                let usage = normalize_stats_tokens(value, tokens)?;
+                let session = self.session.clone();
+                self.push(&session, model, timestamp, usage, None)?;
             }
+            return Ok(());
         }
         let model = model_hint
             .filter(|value| valid_identity(value))
@@ -267,7 +268,15 @@ fn parse_tokens(object: &Map<String, Value>) -> Result<GeminiTokens, ReaderError
             object,
             &["cached", "cached_tokens", "cachedContentTokenCount"],
         )?,
-        reasoning: first_u64(object, &["thoughts", "reasoning", "thoughts_tokens"])?,
+        reasoning: first_u64(
+            object,
+            &[
+                "thoughts",
+                "reasoning",
+                "thoughts_tokens",
+                "thoughtsTokenCount",
+            ],
+        )?,
         tool: first_u64(object, &["tool", "tool_tokens"])?,
         total: first_u64(object, &["total", "totalTokenCount", "total_tokens"])?,
     })

@@ -253,7 +253,7 @@ fn field_iterator(data: &[u8]) -> Vec<(u64, &[u8], u64)> {
                 let Some((value, next)) = read_varint(data, index) else {
                     break;
                 };
-                fields.push((field, &[], value));
+                fields.push((field, &[] as &[u8], value));
                 index = next;
             }
             1 => {
@@ -302,7 +302,7 @@ fn read_varint(data: &[u8], mut index: usize) -> Option<(u64, usize)> {
     None
 }
 
-fn message_field<'a>(data: &'a [u8], wanted: u64) -> Option<&'a [u8]> {
+fn message_field(data: &[u8], wanted: u64) -> Option<&[u8]> {
     field_iterator(data)
         .into_iter()
         .find(|(field, _, _)| *field == wanted)
@@ -318,7 +318,7 @@ fn varint_field(data: &[u8], wanted: u64) -> Option<u64> {
         .map(|(_, _, value)| value)
 }
 
-fn string_field<'a>(data: &'a [u8], wanted: u64) -> Option<&'a str> {
+fn string_field(data: &[u8], wanted: u64) -> Option<&str> {
     message_field(data, wanted).and_then(|bytes| std::str::from_utf8(bytes).ok())
 }
 

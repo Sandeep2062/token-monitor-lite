@@ -153,3 +153,9 @@ fn parse_created_at(value: &str) -> Option<i64> {
 fn valid_identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_IDENTITY_BYTES && !value.chars().any(char::is_control)
 }
+
+impl Default for GooseReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}

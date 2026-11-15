@@ -182,7 +182,7 @@ impl BuddyReader {
 pub struct BuddyLogReader {
     client: &'static str,
     default_model: &'static str,
-    fallback_session: String,
+    _fallback_session: String,
     fallback_timestamp_ms: Option<i64>,
     rows: Vec<ResponseUsage>,
     ordinal: usize,
@@ -197,7 +197,7 @@ impl BuddyLogReader {
         Self {
             client,
             default_model,
-            fallback_session: session.into(),
+            _fallback_session: session.into(),
             fallback_timestamp_ms: None,
             rows: Vec::new(),
             ordinal: 0,
@@ -316,7 +316,6 @@ fn bracket_value_after(line: &str, marker: &str) -> Option<String> {
 }
 
 fn parse_log_timestamp_ms(line: &str) -> Option<i64> {
-    use chrono::{Local, TimeZone};
     let raw = if let Some(rest) = line.strip_prefix('[') {
         rest.split_once(']')?.0.trim()
     } else {
@@ -336,11 +335,7 @@ fn parse_log_timestamp_ms(line: &str) -> Option<i64> {
     let normalized = format!("{:04}-{:02}-{:02} {}", parts[0], parts[1], parts[2], time);
     for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, format) {
-            return match Local.from_local_datetime(&naive) {
-                chrono::LocalResult::Single(value) => Some(value.timestamp_millis()),
-                chrono::LocalResult::Ambiguous(earlier, _) => Some(earlier.timestamp_millis()),
-                chrono::LocalResult::None => None,
-            };
+            return Some(naive.and_utc().timestamp_millis());
         }
     }
     super::timestamps::parse_timestamp_str(&normalized)
@@ -385,7 +380,7 @@ pub(crate) fn normalize_usage(
     let total = first_optional(usage, &["total_tokens", "totalTokens"])?;
 
     let input =
-        if option_present(usage, "cachedMissTokens").or(option_present(usage, "cacheMissTokens")) {
+        if option_present(usage, "cachedMissTokens") || option_present(usage, "cacheMissTokens") {
             miss_input
         } else if let Some(total) = total {
             let inclusive = reported_input

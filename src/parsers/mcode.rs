@@ -209,3 +209,9 @@ fn normalize_timestamp(timestamp: i64) -> Result<i64, ReaderError> {
         Ok(timestamp)
     }
 }
+
+impl Default for McodeReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}

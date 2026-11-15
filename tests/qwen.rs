@@ -23,7 +23,7 @@ fn prompt_cache_is_split_and_reported_total_splits_reasoning() {
                 "candidatesTokenCount": 20,
                 "thoughtsTokenCount": 5,
                 "cachedContentTokenCount": 30,
-                "totalTokenCount": 100
+                "totalTokenCount": 120
             }
         }),
     );

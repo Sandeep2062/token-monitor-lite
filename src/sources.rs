@@ -849,6 +849,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zed(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::WorkBuddySqlite(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::AntigravitySqlite(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::SessionArchive(snapshot) => {
                 let mut retained = Vec::new();
                 for session in snapshot.sessions.iter() {

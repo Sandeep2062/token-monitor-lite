@@ -665,7 +665,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
     tree.file(".claude/projects/project/zz-broken.jsonl", b"not json\n");
     tree.file("random.jsonl", b"not a conventional source\n");
 
-    let report = discover(&tree.paths(&["codex", "claude", "gemini"])).unwrap();
+    let report = discover(&tree.paths(&["codex", "claude", "hermes"])).unwrap();
     assert_eq!(report.sources.len(), 2);
     assert_eq!(report.sources[0].format, SourceFormat::ClaudeCli);
     assert_eq!(report.sources[0].session, "claude-a");
@@ -685,7 +685,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
         report
             .notices
             .contains(&DiscoveryNotice::UnsupportedClient {
-                client: "gemini".to_owned(),
+                client: "hermes".to_owned(),
             })
     );
     assert!(report.notices.contains(&DiscoveryNotice::SourceInvalid {

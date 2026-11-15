@@ -165,6 +165,17 @@ impl Fixture {
                 "goose".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
+                "codebuddy".to_owned(),
+                "workbuddy".to_owned(),
+                "pi".to_owned(),
+                "omp".to_owned(),
+                "senpi".to_owned(),
+                "antigravity".to_owned(),
+                "qwen".to_owned(),
+                "reasonix".to_owned(),
+                "muse".to_owned(),
+                "mcode".to_owned(),
+                "zed".to_owned(),
             ]),
             env_paths: BTreeMap::new(),
         }
@@ -298,7 +309,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     let fixture = Fixture::generate();
     let manifest = read_manifest(&fixture);
     assert_eq!(manifest.schema, "token-monitor-lite-acceptance-v2");
-    assert_eq!(manifest.revision, "mixed-2026-11-13.2");
+    assert_eq!(manifest.revision, "mixed-2026-11-13.4");
     assert_eq!(manifest.coverage.configured_sources, 100);
     assert_eq!(manifest.coverage.canonical_sessions, 1_000);
     assert_eq!(manifest.coverage.usage_observations, 2_786);

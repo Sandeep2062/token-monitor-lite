@@ -1156,12 +1156,13 @@ fn zed_threads_are_read_from_json_and_zstd_payloads() {
             ],
         )
         .unwrap();
+    let zstd_payload = serde_json::to_vec(&json!({
+        "model": {"provider": "zed.dev", "model": "claude-sonnet-4-6"},
+        "request_token_usage": {"0": {"input_tokens": 3, "output_tokens": 1}}
+    }))
+    .unwrap();
     let compressed = ruzstd::encoding::compress_to_vec(
-        &serde_json::to_vec(&json!({
-            "model": {"provider": "zed.dev", "model": "claude-sonnet-4-6"},
-            "request_token_usage": {"0": {"input_tokens": 3, "output_tokens": 1}}
-        }))
-        .unwrap(),
+        &zstd_payload[..],
         ruzstd::encoding::CompressionLevel::Fastest,
     );
     connection
