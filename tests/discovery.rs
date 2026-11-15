@@ -234,6 +234,36 @@ fn kilo_database(path: &Path) {
         .unwrap();
 }
 
+fn goose_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model_config_json TEXT,
+                provider_name TEXT,
+                created_at TEXT NOT NULL,
+                total_tokens INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                accumulated_total_tokens INTEGER,
+                accumulated_input_tokens INTEGER,
+                accumulated_output_tokens INTEGER
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO sessions VALUES (
+                'goose-session', '{\"model_name\":\"claude-sonnet-4-5\"}', 'anthropic',
+                '2026-11-13T10:00:00Z', 150, 100, 50, 150, 100, 50
+             )",
+            [],
+        )
+        .unwrap();
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -870,6 +900,29 @@ fn kilo_database_is_discovered_at_the_xdg_data_role() {
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].format, SourceFormat::KiloSqlite);
     assert_eq!(report.sources[0].session, "kilo");
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn goose_database_uses_the_first_existing_or_authoritative_override() {
+    let tree = Tree::new();
+    goose_database(&tree.0.join(".local/share/goose/sessions/sessions.db"));
+
+    let mut paths = tree.paths(&["goose"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::GooseSqlite);
+
+    let override_root = tree.directory("goose-override");
+    goose_database(&override_root.join("data/sessions/sessions.db"));
+    paths
+        .env_paths
+        .insert("GOOSE_PATH_ROOT".to_owned(), override_root.clone());
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::GooseSqlite);
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

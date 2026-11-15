@@ -6,6 +6,7 @@ pub mod cline;
 pub mod codex;
 pub mod cursor;
 pub mod gemini;
+pub mod goose;
 pub mod jsonl;
 pub mod kilo;
 pub mod opencode;

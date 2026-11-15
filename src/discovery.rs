@@ -5,8 +5,9 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    CodexLocalUsageAdapter, KiloAdapter, MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter,
-    SourceInput, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_DECODED_BYTES, OpenCodeAdapter,
+    SessionArchiveAdapter, SourceInput, has_zstd_suffix, is_compressed_source_path,
+    is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -989,6 +990,92 @@ fn collect_amp_candidates(
     Ok(())
 }
 
+fn goose_database_path(inputs: &HostPaths) -> Option<PathBuf> {
+    if let Some(root) = inputs.env_paths.get("GOOSE_PATH_ROOT") {
+        let text = root.to_string_lossy();
+        if !text.trim().is_empty()
+            && !text.chars().next().is_some_and(char::is_whitespace)
+            && root.is_absolute()
+        {
+            return Some(join_many(
+                inputs.platform,
+                root,
+                &["data", "sessions", "sessions.db"],
+            ));
+        }
+    }
+    let data_base = match inputs.xdg_data_home.as_deref() {
+        Some(root) if !root.as_os_str().is_empty() && !root.to_string_lossy().trim().is_empty() => {
+            root.to_path_buf()
+        }
+        _ => join_many(inputs.platform, &inputs.home, &[".local", "share"]),
+    };
+    let mut candidates = Vec::new();
+    if inputs.platform == HostPlatform::Windows {
+        if let Some(app_data) = inputs.app_data.as_deref() {
+            candidates.push(join_many(
+                inputs.platform,
+                app_data,
+                &["Block", "goose", "data", "sessions", "sessions.db"],
+            ));
+        }
+        candidates.push(join_many(
+            inputs.platform,
+            &inputs.home,
+            &[
+                "AppData",
+                "Roaming",
+                "Block",
+                "goose",
+                "data",
+                "sessions",
+                "sessions.db",
+            ],
+        ));
+    }
+    candidates.push(join_many(
+        inputs.platform,
+        &data_base,
+        &["goose", "sessions", "sessions.db"],
+    ));
+    candidates.push(join_many(
+        inputs.platform,
+        &inputs.home,
+        &[
+            "Library",
+            "Application Support",
+            "goose",
+            "sessions",
+            "sessions.db",
+        ],
+    ));
+    candidates.push(join_many(
+        inputs.platform,
+        &inputs.home,
+        &[
+            "Library",
+            "Application Support",
+            "Block",
+            "goose",
+            "sessions",
+            "sessions.db",
+        ],
+    ));
+    candidates.push(join_many(
+        inputs.platform,
+        &inputs.home,
+        &[
+            ".local",
+            "share",
+            "Block",
+            "goose",
+            "sessions",
+            "sessions.db",
+        ],
+    ));
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
 fn collect_gemini_candidates(
     root: &Path,
     directory: &Path,
@@ -1421,6 +1508,49 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "goose" {
+            if let Some(path) = goose_database_path(inputs) {
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.file_type().is_file() => {
+                        if metadata.len() <= MAX_SOURCE_FILE_BYTES && sources.len() < MAX_SOURCES {
+                            match GooseAdapter::new(&path).read() {
+                                Ok(rows) if !rows.is_empty() => {
+                                    let source_id = source_id_for(SourceFormat::GooseSqlite, &path);
+                                    if admitted_ids.insert(source_id) {
+                                        sources.push(DiscoveredSource {
+                                            source_id,
+                                            format: SourceFormat::GooseSqlite,
+                                            session: "goose".to_owned(),
+                                            path,
+                                        });
+                                    } else {
+                                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                                    }
+                                }
+                                _ => notices.push(DiscoveryNotice::SourceInvalid {
+                                    client: "goose",
+                                    ordinal: 1,
+                                }),
+                            }
+                        } else if sources.len() >= MAX_SOURCES {
+                            notices.push(DiscoveryNotice::SourceLimitReached);
+                        } else {
+                            notices.push(DiscoveryNotice::SourceInvalid {
+                                client: "goose",
+                                ordinal: 1,
+                            });
+                        }
+                    }
+                    Ok(_) => notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "goose",
+                        ordinal: 1,
+                    }),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            continue;
+        }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
                 "claude",
@@ -1701,6 +1831,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
                 | SourceFormat::KiloSqlite
+                | SourceFormat::GooseSqlite
                 | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {

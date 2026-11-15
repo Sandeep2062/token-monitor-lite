@@ -37,7 +37,7 @@ pub const BACKUP_DIRECTORY_NAME: &str = "backups";
 pub const RECOVERY_DIRECTORY_NAME: &str = "recovery";
 
 const RECOVERY_MARKER_NAME: &str = "recovery-required";
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 const PARSER_CONTRACT_REVISION: &str = "gate-2a-v1";
 const COMMAND_CAPACITY: usize = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -497,6 +497,36 @@ FROM runtime_sqlite_sources;
 
 DROP TABLE runtime_sqlite_sources;
 ALTER TABLE runtime_sqlite_sources_v10 RENAME TO runtime_sqlite_sources;
+"#;
+
+const SCHEMA_V11: &str = r#"
+CREATE TABLE runtime_sqlite_sources_v11 (
+    source_id TEXT PRIMARY KEY CHECK (length(source_id) = 42),
+    format TEXT NOT NULL CHECK (format IN ('session-archive-sqlite', 'codex-local-usage-sqlite', 'opencode-sqlite', 'kilo-sqlite', 'goose-sqlite')),
+    client TEXT NOT NULL CHECK (length(client) BETWEEN 1 AND 64),
+    parser_pin TEXT NOT NULL CHECK (length(parser_pin) BETWEEN 1 AND 128),
+    source_generation INTEGER NOT NULL CHECK (source_generation > 0),
+    source_state TEXT NOT NULL CHECK (source_state IN ('live', 'retained')),
+    observation_count INTEGER NOT NULL CHECK (observation_count >= 0 AND observation_count <= 262144),
+    retained_period_count INTEGER NOT NULL CHECK (retained_period_count >= 0 AND retained_period_count <= 10000),
+    session_count INTEGER NOT NULL CHECK (session_count >= 0 AND session_count <= 10000),
+    last_observed_at INTEGER,
+    incomplete_tail INTEGER NOT NULL CHECK (incomplete_tail IN (0, 1)),
+    has_supported_usage INTEGER NOT NULL CHECK (has_supported_usage IN (0, 1)),
+    UNIQUE (source_id, source_generation)
+) STRICT;
+
+INSERT INTO runtime_sqlite_sources_v11
+    (source_id, format, client, parser_pin, source_generation, source_state,
+     observation_count, retained_period_count, session_count, last_observed_at,
+     incomplete_tail, has_supported_usage)
+SELECT source_id, format, client, parser_pin, source_generation, source_state,
+       observation_count, retained_period_count, session_count, last_observed_at,
+       incomplete_tail, has_supported_usage
+FROM runtime_sqlite_sources;
+
+DROP TABLE runtime_sqlite_sources;
+ALTER TABLE runtime_sqlite_sources_v11 RENAME TO runtime_sqlite_sources;
 "#;
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -1295,6 +1325,7 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
             migrate_seven_to_eight(&mut connection)?;
             migrate_eight_to_nine(&mut connection)?;
             migrate_nine_to_ten(&mut connection)?;
+            migrate_ten_to_eleven(&mut connection)?;
             let snapshot = load_snapshot(&connection)?;
             return Ok((connection, snapshot));
         }
@@ -1334,6 +1365,8 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
         create_backup_internal(&connection, root, "pre-migration-v8", 8, 0)?;
     } else if version == 9 {
         create_backup_internal(&connection, root, "pre-migration-v9", 9, 0)?;
+    } else if version == 10 {
+        create_backup_internal(&connection, root, "pre-migration-v10", 10, 0)?;
     }
     configure_connection(&connection)?;
     if version == 0 {
@@ -1365,6 +1398,9 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
     }
     if version <= 9 {
         migrate_nine_to_ten(&mut connection)?;
+    }
+    if version <= 10 {
+        migrate_ten_to_eleven(&mut connection)?;
     }
     let snapshot = match load_snapshot(&connection) {
         Ok(snapshot) => snapshot,
@@ -1600,6 +1636,32 @@ fn migrate_nine_to_ten(connection: &mut Connection) -> Result<(), StoreError> {
             params![10_i64, now_seconds()?],
         ))?;
         sqlite(transaction.pragma_update(None, "user_version", 10))?;
+        sqlite(transaction.commit())
+    })();
+    sqlite(connection.pragma_update(None, "foreign_keys", true))?;
+    migrated?;
+    let violations: i64 = sqlite(connection.query_row(
+        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+        [],
+        |row| row.get(0),
+    ))?;
+    if violations != 0 {
+        return Err(StoreError::Sqlite);
+    }
+    Ok(())
+}
+
+fn migrate_ten_to_eleven(connection: &mut Connection) -> Result<(), StoreError> {
+    sqlite(connection.pragma_update(None, "foreign_keys", false))?;
+    let migrated = (|| {
+        let transaction =
+            sqlite(connection.transaction_with_behavior(TransactionBehavior::Exclusive))?;
+        sqlite(transaction.execute_batch(SCHEMA_V11))?;
+        sqlite(transaction.execute(
+            "UPDATE schema_meta SET version = ?1, applied_at = ?2 WHERE id = 1",
+            params![11_i64, now_seconds()?],
+        ))?;
+        sqlite(transaction.pragma_update(None, "user_version", 11))?;
         sqlite(transaction.commit())
     })();
     sqlite(connection.pragma_update(None, "foreign_keys", true))?;

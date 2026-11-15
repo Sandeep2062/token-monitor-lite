@@ -4,6 +4,7 @@
 //! intentionally not folded into the request-like canonical runtime yet.
 
 use crate::accounting::{SessionKey, TokenCounts};
+use crate::parsers::goose::{GooseReader, GooseRow};
 use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
@@ -45,6 +46,7 @@ pub enum SqliteSourceRole {
     CodexLocalUsage,
     OpenCode,
     Kilo,
+    Goose,
 }
 
 pub fn classify_sqlite_source(path: &Path) -> Option<SqliteSourceRole> {
@@ -53,6 +55,7 @@ pub fn classify_sqlite_source(path: &Path) -> Option<SqliteSourceRole> {
         "session-usage-archive.sqlite" => Some(SqliteSourceRole::SessionArchive),
         "codex-local-usage.sqlite" => Some(SqliteSourceRole::CodexLocalUsage),
         "kilo.db" => Some(SqliteSourceRole::Kilo),
+        "sessions.db" => Some(SqliteSourceRole::Goose),
         _ if is_opencode_db_filename(name) => Some(SqliteSourceRole::OpenCode),
         _ => None,
     }
@@ -256,6 +259,24 @@ impl KiloAdapter {
     }
 }
 
+pub struct GooseAdapter {
+    path: PathBuf,
+}
+
+impl GooseAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_goose(&self.path)
+    }
+}
+
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const ZSTD_SKIPPABLE_MIN: u32 = 0x184D_2A50;
 const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
@@ -272,6 +293,7 @@ pub enum InputAdapterStatus {
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
     KiloSqlite,
+    GooseSqlite,
 }
 
 pub(crate) enum SqliteInputData {
@@ -279,6 +301,7 @@ pub(crate) enum SqliteInputData {
     CodexLocalUsage(Arc<[ResponseUsage]>),
     OpenCode(Arc<[ResponseUsage]>),
     Kilo(Arc<[ResponseUsage]>),
+    Goose(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -374,6 +397,7 @@ pub enum SourceInput {
     CodexLocalUsage(CodexLocalUsageAdapter),
     OpenCode(OpenCodeAdapter),
     Kilo(KiloAdapter),
+    Goose(GooseAdapter),
 }
 
 impl SourceInput {
@@ -391,6 +415,7 @@ impl SourceInput {
             }
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
+            SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::ClineJson => Self::document(path),
@@ -470,6 +495,7 @@ impl SourceInput {
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
+            Self::Goose(_) => InputAdapterStatus::GooseSqlite,
         }
     }
 
@@ -484,7 +510,8 @@ impl SourceInput {
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
-            | Self::Kilo(_) => {}
+            | Self::Kilo(_)
+            | Self::Goose(_) => {}
         }
     }
 
@@ -499,7 +526,8 @@ impl SourceInput {
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
-            | Self::Kilo(_) => Ok(true),
+            | Self::Kilo(_)
+            | Self::Goose(_) => Ok(true),
         }
     }
 
@@ -513,6 +541,7 @@ impl SourceInput {
             }
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
+            Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -534,6 +563,7 @@ impl SourceInput {
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
             Self::OpenCode(adapter) => Some(adapter.path()),
             Self::Kilo(adapter) => Some(adapter.path()),
+            Self::Goose(adapter) => Some(adapter.path()),
         }
     }
 
@@ -558,7 +588,8 @@ impl SourceInput {
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
-            | Self::Kilo(_) => Err(invalid("sqlite input has no JSONL batch")),
+            | Self::Kilo(_)
+            | Self::Goose(_) => Err(invalid("sqlite input has no JSONL batch")),
         }
     }
 }
@@ -1349,6 +1380,89 @@ fn read_kilo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
             }
             reader
                 .ingest(&id, &session_id, data)
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_goose(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "sessions",
+        &[
+            "id",
+            "model_config_json",
+            "provider_name",
+            "created_at",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "accumulated_total_tokens",
+            "accumulated_input_tokens",
+            "accumulated_output_tokens",
+        ],
+    )?;
+    let candidates: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM sessions
+         WHERE model_config_json IS NOT NULL AND TRIM(model_config_json) != ''",
+        [],
+        |row| row.get(0),
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > MAX_OPENCODE_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let mut reader = GooseReader::new().with_fallback_timestamp(source_modified_ms(path));
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(
+            "SELECT id, model_config_json, provider_name, created_at,
+                    total_tokens, input_tokens, output_tokens,
+                    accumulated_total_tokens, accumulated_input_tokens, accumulated_output_tokens
+             FROM sessions
+             WHERE model_config_json IS NOT NULL AND TRIM(model_config_json) != ''
+             ORDER BY id LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let model_config_json: String = row.get(1)?;
+            let provider_name: Option<String> = row.get(2)?;
+            let created_at: String = row.get(3)?;
+            let total_tokens: Option<i64> = row.get(4)?;
+            let input_tokens: Option<i64> = row.get(5)?;
+            let output_tokens: Option<i64> = row.get(6)?;
+            let accumulated_total_tokens: Option<i64> = row.get(7)?;
+            let accumulated_input_tokens: Option<i64> = row.get(8)?;
+            let accumulated_output_tokens: Option<i64> = row.get(9)?;
+            reader
+                .ingest(&GooseRow {
+                    id: &id,
+                    model_config_json: &model_config_json,
+                    provider_name: provider_name.as_deref(),
+                    created_at: &created_at,
+                    total_tokens,
+                    input_tokens,
+                    output_tokens,
+                    accumulated_total_tokens,
+                    accumulated_input_tokens,
+                    accumulated_output_tokens,
+                })
                 .map_err(map_opencode_error)?;
             page_rows += 1;
         }

@@ -11,12 +11,14 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 27 Codex JSONL
+sessions. The distribution below preserves the required totals: 26 Codex JSONL
 and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor, one Cline,
-one Amp and one Kilo source supply 65 canonical sessions, 33 Claude sources
-supply 33, and the single local-usage ledger supplies the remaining 902 after
-one suppressed native-duplicate thread. The archive source contributes
-retained history without fabricating request rows.
+one Amp, one Kilo and one Goose source supply 65 canonical sessions, 33 Claude
+sources supply 33 (one carries nine extra observations so the session-level
+Goose source does not reduce the observation total), and the single local-usage
+ledger supplies the remaining 902 after one suppressed native-duplicate thread.
+The archive source contributes retained history without fabricating request
+rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -48,7 +50,7 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 27
+CODEX_SOURCES = 26
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
@@ -56,8 +58,10 @@ CURSOR_SOURCES = 1
 CLINE_SOURCES = 1
 AMP_SOURCES = 1
 KILO_SOURCES = 1
+GOOSE_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
+EXTRA_CLAUDE_OBSERVATIONS = 9
 SOURCE_COUNT = (
     CLAUDE_SOURCES
     + CODEX_SOURCES
@@ -68,6 +72,7 @@ SOURCE_COUNT = (
     + CLINE_SOURCES
     + AMP_SOURCES
     + KILO_SOURCES
+    + GOOSE_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -95,11 +100,13 @@ def _add_counts(target: dict[str, int], other: dict[str, int]) -> None:
         target[key] += other[key]
 
 
-def _claude_source(index: int) -> tuple[str, bytes, dict[str, int], int]:
+def _claude_source(
+    index: int, observations: int = OBSERVATIONS_PER_JSONL
+) -> tuple[str, bytes, dict[str, int], int]:
     session = f"claude-fixture-{index:03d}"
     records: list[bytes] = []
     totals = _counts()
-    for observation in range(OBSERVATIONS_PER_JSONL):
+    for observation in range(observations):
         counts = {
             "input": 100 + index * 10 + observation,
             "output": 20 + observation,
@@ -448,6 +455,49 @@ def _kilo_database(path: Path) -> tuple[str, dict[str, int], int]:
     finally:
         connection.close()
     return session, totals, OBSERVATIONS_PER_JSONL
+
+
+def _goose_database(path: Path) -> tuple[str, dict[str, int], int]:
+    session = "goose-fixture-000"
+    totals = _counts()
+    totals["input"] = 5_000
+    totals["output"] = 1_000
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model_config_json TEXT,
+                provider_name TEXT,
+                created_at TEXT NOT NULL,
+                total_tokens INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                accumulated_total_tokens INTEGER,
+                accumulated_input_tokens INTEGER,
+                accumulated_output_tokens INTEGER
+            ) STRICT;"""
+        )
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session,
+                '{"model_name":"claude-sonnet-4-5"}',
+                "anthropic",
+                "2026-11-13T10:00:00Z",
+                6_000,
+                5_000,
+                1_000,
+                6_000,
+                5_000,
+                1_000,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, 1
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -921,7 +971,10 @@ def generate(raw_root: str) -> Path:
     zstd_executable, zstd_version = _zstd_tool()
 
     for index in range(CLAUDE_SOURCES):
-        session, data, totals, rows = _claude_source(index)
+        observations = OBSERVATIONS_PER_JSONL + (
+            EXTRA_CLAUDE_OBSERVATIONS if index == 0 else 0
+        )
+        session, data, totals, rows = _claude_source(index, observations)
         relative = f"home/.claude/projects/acceptance/{session}.jsonl"
         sources.append(
             _source_entry(
@@ -1109,6 +1162,30 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, kilo_totals)
     physical_bytes += kilo_target.stat().st_size
     decoded_bytes += kilo_target.stat().st_size
+
+    goose_target = (
+        root / "home" / ".local" / "share" / "goose" / "sessions" / "sessions.db"
+    )
+    goose_session, goose_totals, goose_rows = _goose_database(goose_target)
+    goose_entry = dict(
+        _existing_entry(
+            root, "home/.local/share/goose/sessions/sessions.db", goose_target
+        ),
+        format="goose-sqlite",
+        session=goose_session,
+        observations=goose_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=goose_target.stat().st_size,
+        physicalBytes=goose_target.stat().st_size,
+        expectedTotals=goose_totals,
+        retainedPeriods=0,
+    )
+    sources.append(goose_entry)
+    _add_counts(aggregate, goose_totals)
+    _add_counts(canonical_aggregate, goose_totals)
+    physical_bytes += goose_target.stat().st_size
+    decoded_bytes += goose_target.stat().st_size
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

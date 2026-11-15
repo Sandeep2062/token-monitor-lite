@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use token_monitor_lite::source_inputs::{
-    ArchivePeriod, CodexLocalUsageAdapter, KiloAdapter, MAX_ARCHIVE_ENTRY_BYTES, OpenCodeAdapter,
-    SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole, classify_sqlite_source,
+    ArchivePeriod, CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_ARCHIVE_ENTRY_BYTES,
+    OpenCodeAdapter, SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole,
+    classify_sqlite_source,
 };
 use token_monitor_lite::sources::{SourceFormat, SourceProgress, SourceReader};
 
@@ -604,6 +605,62 @@ fn kilo_sqlite_rows_are_normalized_without_source_mutation() {
     assert_eq!(fingerprint(&path), before);
 }
 
+fn create_goose(root: &Root, name: &str) -> (PathBuf, Connection) {
+    let path = root.path(name);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model_config_json TEXT,
+                provider_name TEXT,
+                created_at TEXT NOT NULL,
+                total_tokens INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                accumulated_total_tokens INTEGER,
+                accumulated_input_tokens INTEGER,
+                accumulated_output_tokens INTEGER
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO sessions VALUES (
+                'goose-session', '{\"model_name\":\"claude-sonnet-4-5\"}', 'anthropic',
+                '2026-11-13T10:00:00Z', 15, 10, 5, 150, 100, 50
+             )",
+            [],
+        )
+        .unwrap();
+    (path, connection)
+}
+
+#[test]
+fn goose_sessions_are_normalized_without_source_mutation() {
+    let root = Root::new();
+    let (path, _writer) = create_goose(&root, "sessions.db");
+    let before = fingerprint(&path);
+    let rows = GooseAdapter::new(&path).read().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key.client, "goose");
+    assert_eq!(rows[0].key.session, "goose-session");
+    assert_eq!(rows[0].model, "claude-sonnet-4-5");
+    assert_eq!(rows[0].billing_provider_hint.as_deref(), Some("anthropic"));
+    assert_eq!(rows[0].dedup_key.as_deref(), Some("goose:goose-session"));
+    assert_eq!(
+        rows[0].tokens,
+        token_monitor_lite::accounting::TokenCounts {
+            input: 100,
+            output: 50,
+            cache_read: 0,
+            cache_write: 0,
+            reasoning: 0,
+        }
+    );
+    assert_eq!(fingerprint(&path), before);
+}
+
 #[test]
 fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
@@ -625,6 +682,10 @@ fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
         classify_sqlite_source(Path::new("/data/kilo.db")),
         Some(SqliteSourceRole::Kilo)
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/sessions.db")),
+        Some(SqliteSourceRole::Goose)
     );
     assert_eq!(
         classify_sqlite_source(Path::new("/data/opencode.db-wal")),

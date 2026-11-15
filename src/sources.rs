@@ -30,6 +30,7 @@ pub enum SourceFormat {
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
     KiloSqlite,
+    GooseSqlite,
 }
 
 impl SourceFormat {
@@ -44,6 +45,7 @@ impl SourceFormat {
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
+            Self::GooseSqlite => "goose",
         }
     }
 
@@ -59,6 +61,7 @@ impl SourceFormat {
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
             Self::KiloSqlite => "kilo-sqlite",
+            Self::GooseSqlite => "goose-sqlite",
         }
     }
 
@@ -74,6 +77,7 @@ impl SourceFormat {
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
             "kilo-sqlite" => Some(Self::KiloSqlite),
+            "goose-sqlite" => Some(Self::GooseSqlite),
             _ => None,
         }
     }
@@ -85,6 +89,7 @@ impl SourceFormat {
                 | Self::CodexLocalUsageSqlite
                 | Self::OpenCodeSqlite
                 | Self::KiloSqlite
+                | Self::GooseSqlite
         )
     }
 }
@@ -606,7 +611,8 @@ impl SourceReader {
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
-            | SourceFormat::KiloSqlite => {
+            | SourceFormat::KiloSqlite
+            | SourceFormat::GooseSqlite => {
                 unreachable!("SQLite sources do not use text readers")
             }
         }
@@ -622,6 +628,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::CodexLocalUsage(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenCode(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::SessionArchive(snapshot) => {
                 let mut retained = Vec::new();
                 for session in snapshot.sessions.iter() {
