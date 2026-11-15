@@ -3,7 +3,6 @@
 
 use serde_json::json;
 use token_monitor_lite::accounting::TokenCounts;
-use token_monitor_lite::parsers::ReaderError;
 use token_monitor_lite::parsers::zed::ZedReader;
 
 fn thread() -> serde_json::Value {
@@ -102,13 +101,15 @@ fn external_and_imported_threads_are_ignored() {
 }
 
 #[test]
-fn missing_usage_is_visible_unsupported() {
+fn missing_usage_is_an_empty_thread() {
     let mut reader = ZedReader::new();
-    let result = reader.ingest_thread(
-        "thread-3",
-        "2026-11-13T10:00:00Z",
-        None,
-        &json!({"model": {"provider": "zed.dev", "model": "m"}}),
-    );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    reader
+        .ingest_thread(
+            "thread-3",
+            "2026-11-13T10:00:00Z",
+            None,
+            &json!({"model": {"provider": "zed.dev", "model": "m"}}),
+        )
+        .unwrap();
+    assert!(reader.snapshot().is_empty());
 }

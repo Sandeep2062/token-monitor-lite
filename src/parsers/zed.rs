@@ -54,10 +54,9 @@ impl ZedReader {
         if !super::tencent_buddy::valid_identity(thread_id) {
             return Err(ReaderError::InvalidRecord);
         }
-        let tokens = thread_usage(thread)?;
-        if tokens_total(tokens)? == 0 {
+        let Some(tokens) = thread_usage(thread)? else {
             return Ok(());
-        }
+        };
         let timestamp = created_at
             .and_then(parse_timestamp_str)
             .or_else(|| parse_timestamp_str(updated_at))
@@ -101,7 +100,7 @@ impl Default for ZedReader {
     }
 }
 
-fn thread_usage(thread: &Value) -> Result<TokenCounts, ReaderError> {
+fn thread_usage(thread: &Value) -> Result<Option<TokenCounts>, ReaderError> {
     if let Some(request) = thread.get("request_token_usage") {
         let mut total = TokenCounts::default();
         let usages: Box<dyn Iterator<Item = &Value> + '_> = match request {
@@ -112,17 +111,20 @@ fn thread_usage(thread: &Value) -> Result<TokenCounts, ReaderError> {
         for usage in usages {
             let tokens = token_usage(usage)?;
             if tokens_total(tokens)? > 0 {
-                total = total.checked_add(tokens).map_err(|_| ReaderError::Overflow)?;
+                total = total
+                    .checked_add(tokens)
+                    .map_err(|_| ReaderError::Overflow)?;
             }
         }
         if tokens_total(total)? > 0 {
-            return Ok(total);
+            return Ok(Some(total));
         }
     }
-    let cumulative = thread
-        .get("cumulative_token_usage")
-        .ok_or(ReaderError::Unsupported("Zed thread usage"))?;
-    token_usage(cumulative)
+    let Some(cumulative) = thread.get("cumulative_token_usage") else {
+        return Ok(None);
+    };
+    let tokens = token_usage(cumulative)?;
+    Ok((tokens_total(tokens)? > 0).then_some(tokens))
 }
 
 fn token_usage(value: &Value) -> Result<TokenCounts, ReaderError> {
