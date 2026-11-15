@@ -6,8 +6,8 @@ use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
-    MAX_DECODED_BYTES, OpenClawAdapter, OpenCodeAdapter, SessionArchiveAdapter, SourceInput,
-    SqliteSourceError, WorkBuddySqliteAdapter, ZedAdapter, has_zstd_suffix,
+    MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, SessionArchiveAdapter,
+    SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZedAdapter, has_zstd_suffix,
     is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
@@ -2074,6 +2074,72 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "mimo" {
+            // MiMo Code and Xiaomi MiMo AI share one engine, so both resolve the
+            // same XDG data directory. Channel-suffixed databases
+            // (`mimocode-<channel>.db`) sit beside `mimocode.db` and each is its
+            // own source, which is why the reader namespaces identities by file.
+            let data_base = match inputs.xdg_data_home.as_deref() {
+                Some(root) if !root.as_os_str().is_empty() => {
+                    checked_root(inputs.platform, root, false)?
+                }
+                _ => join_many(inputs.platform, &inputs.home, &[".local", "share"]),
+            };
+            let root = join_many(inputs.platform, &data_base, &["mimocode"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_db_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "mimo",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES || MimoAdapter::new(&path).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "mimo",
+                        ordinal,
+                    });
+                    continue;
+                }
+                let source_id = source_id_for(SourceFormat::MimoSqlite, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                let session = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .filter(|stem| !stem.is_empty())
+                    .unwrap_or("mimo")
+                    .to_owned();
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::MimoSqlite,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "zed" {
             for (ordinal, path) in zed_database_paths(inputs).into_iter().enumerate() {
                 let ordinal = ordinal + 1;
@@ -2959,6 +3025,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 | SourceFormat::ZedSqlite
                 | SourceFormat::WorkBuddySqlite
                 | SourceFormat::AntigravitySqlite
+                | SourceFormat::MimoSqlite
                 | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {

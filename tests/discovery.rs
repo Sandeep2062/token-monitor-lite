@@ -234,6 +234,33 @@ fn kilo_database(path: &Path) {
         .unwrap();
 }
 
+fn mimo_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                data TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('m1', 's1', ?1)",
+            [serde_json::json!({
+                "role": "assistant",
+                "modelID": "mimo-v2",
+                "providerID": "xiaomi",
+                "tokens": {"input": 12, "output": 5},
+                "time": {"created": 1_770_983_426_420_i64}
+            })
+            .to_string()],
+        )
+        .unwrap();
+}
+
 fn goose_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();
@@ -972,6 +999,35 @@ fn kilo_database_is_discovered_at_the_xdg_data_role() {
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].format, SourceFormat::KiloSqlite);
     assert_eq!(report.sources[0].session, "kilo");
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn mimo_databases_are_discovered_at_the_xdg_data_role() {
+    let tree = Tree::new();
+    mimo_database(&tree.0.join(".local/share/mimocode/mimocode.db"));
+    // A channel-suffixed database beside the primary one is its own source.
+    mimo_database(&tree.0.join(".local/share/mimocode/mimocode-beta.db"));
+    // Anything that is not a `.db` is not a MiMo store.
+    tree.file(".local/share/mimocode/notes.json", b"{}");
+
+    let mut paths = tree.paths(&["mimo"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::MimoSqlite)
+    );
+    let sessions = report
+        .sources
+        .iter()
+        .map(|source| source.session.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(sessions, BTreeSet::from(["mimocode", "mimocode-beta"]));
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

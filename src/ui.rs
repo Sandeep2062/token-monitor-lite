@@ -812,6 +812,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "kilo",
         "kimi",
         "mcode",
+        "mimo",
         "muse",
         "omp",
         "openclaw",
@@ -891,6 +892,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "kilo"
             | "kimi"
             | "mcode"
+            | "mimo"
             | "muse"
             | "omp"
             | "openclaw"
@@ -925,6 +927,7 @@ fn is_supported_client(client: &str) -> bool {
             | "kilo"
             | "kimi"
             | "mcode"
+            | "mimo"
             | "muse"
             | "omp"
             | "openclaw"
@@ -957,6 +960,7 @@ fn client_label(client: &str) -> &'static str {
         "grok" => "Grok Build",
         "commandcode" => "Command Code",
         "mcode" => "MiniMax Code",
+        "mimo" => "Xiaomi MiMo",
         "openclaw" => "OpenClaw",
         "muse" => "Muse Code",
         "omp" => "Oh My Pi",
@@ -1420,6 +1424,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::ReasonixJsonl => "Reasonix",
         SourceFormat::MuseJsonl => "Muse Code",
         SourceFormat::McodeJsonl => "MiniMax Code",
+        SourceFormat::MimoSqlite => "Xiaomi MiMo",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "OpenClaw",
         SourceFormat::ZedSqlite => "Zed",
     }

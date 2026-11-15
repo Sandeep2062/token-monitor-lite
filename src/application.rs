@@ -1165,6 +1165,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::ReasonixJsonl => "reasonix",
         SourceFormat::MuseJsonl => "muse",
         SourceFormat::McodeJsonl => "mcode",
+        SourceFormat::MimoSqlite => "mimo",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "openclaw",
         SourceFormat::ZedSqlite => "zed",
         SourceFormat::WorkBuddySqlite => "workbuddy",

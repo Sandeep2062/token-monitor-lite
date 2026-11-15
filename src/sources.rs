@@ -60,6 +60,7 @@ pub enum SourceFormat {
     ReasonixJsonl,
     MuseJsonl,
     McodeJsonl,
+    MimoSqlite,
     CommandCodeJsonl,
     GrokJsonl,
     OpenClawJsonl,
@@ -99,6 +100,7 @@ impl SourceFormat {
             Self::ReasonixJsonl => "reasonix",
             Self::MuseJsonl => "muse",
             Self::McodeJsonl => "mcode",
+            Self::MimoSqlite => "mimo",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -134,6 +136,7 @@ impl SourceFormat {
             Self::ReasonixJsonl => "reasonix-jsonl",
             Self::MuseJsonl => "muse-jsonl",
             Self::McodeJsonl => "mcode-jsonl",
+            Self::MimoSqlite => "mimo-sqlite",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -171,6 +174,7 @@ impl SourceFormat {
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
             "muse-jsonl" => Some(Self::MuseJsonl),
             "mcode-jsonl" => Some(Self::McodeJsonl),
+            "mimo-sqlite" => Some(Self::MimoSqlite),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -193,6 +197,7 @@ impl SourceFormat {
                 | Self::CodexLocalUsageSqlite
                 | Self::OpenCodeSqlite
                 | Self::KiloSqlite
+                | Self::MimoSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
                 | Self::OpenClawSqlite
@@ -923,6 +928,7 @@ impl SourceReader {
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
             | SourceFormat::KiloSqlite
+            | SourceFormat::MimoSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
             | SourceFormat::OpenClawSqlite
@@ -944,6 +950,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::CodexLocalUsage(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenCode(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Mimo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),

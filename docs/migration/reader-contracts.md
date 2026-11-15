@@ -183,6 +183,21 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## MiMo SQLite matrix
+
+MiMo Code and Xiaomi MiMo AI share one engine, and that engine stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME or home/.local/share>/mimocode/*.db`, most commonly `mimocode.db`. The supported source is the `message(id, session_id, data)` table. Discovery admits every `.db` in that directory, because channel-suffixed databases (`mimocode-<channel>.db`) sit beside the primary store and each is its own source. MiMo's `session.version` desktop split, agent/mode attribution, and duration are not implemented.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant payload with `modelID` (or nested `model.id`), `tokens.input`, `tokens.output`, optional `tokens.reasoning`, and `time.created` | supported | One observation. Reasoning is split out of inclusive output exactly once; input and cache stay as stored. Provider uses explicit `providerID` (or nested `model.providerID`) only; no inference. | Payload `session_id` owns the observation, and the identity namespaces the database file (`mimo:<db>:<session>:<row>`) so channel-suffixed stores with overlapping row ids stay distinct. |
+| Assistant payload omitting `tokens.cache`, or omitting `read`/`write` inside it | supported | The missing block or member is zero. This is the deliberate `strict_cache: false` departure from OpenCode, which would reject the row and silently drop its usage. | As above. |
+| `time.created` at or below 1e12 | supported | Treated as epoch seconds and scaled to milliseconds (`normalize_epoch_seconds`), because some MiMo builds write seconds where OpenCode writes milliseconds. | As above. |
+| Explicit `cost` value, including `0.0` | supported | Reported nano-USD. A reported zero is authoritative and survives repricing, so a free-promo turn is not silently charged. | As above. |
+| Negative, non-finite, or above-ceiling `cost`; or negative/fractional counter; or reasoning greater than output | visible unsupported | Discard the whole candidate. Neither counter nor cost is clamped. | Prior committed generation remains active. |
+| Missing model, non-assistant role, or control character in an identity string | visible unsupported | Discard the whole candidate. | Prior committed generation remains active. |
+| Row without `tokens`, or non-assistant row | ignored non-usage | Not selected by the query. | No ownership change. |
+| MiMo `session.version` desktop re-stamp, agent/mode attribution, duration, and provider fallback | visible unsupported / ignored | Not guessed. Every MiMo session is reported as the single catalog client `mimo`. | No source slot. |
+
 ## Goose session matrix
 
 Goose stores one cumulative row per session in `sessions.db`. The reader opens the first existing database from the documented ordered candidates, or exactly the `GOOSE_PATH_ROOT` override when it is a raw absolute non-whitespace value. Databases are never unioned.

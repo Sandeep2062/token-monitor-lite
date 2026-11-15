@@ -11,6 +11,7 @@ use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
 use crate::parsers::kilo::KiloReader;
+use crate::parsers::mimo::{self, MimoReader};
 use crate::parsers::openclaw::OpenClawReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
@@ -246,6 +247,24 @@ impl OpenCodeAdapter {
     }
 }
 
+pub struct MimoAdapter {
+    path: PathBuf,
+}
+
+impl MimoAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_mimo(&self.path)
+    }
+}
+
 pub struct KiloAdapter {
     path: PathBuf,
 }
@@ -394,6 +413,7 @@ pub enum InputAdapterStatus {
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
     KiloSqlite,
+    MimoSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -407,6 +427,7 @@ pub(crate) enum SqliteInputData {
     CodexLocalUsage(Arc<[ResponseUsage]>),
     OpenCode(Arc<[ResponseUsage]>),
     Kilo(Arc<[ResponseUsage]>),
+    Mimo(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -514,6 +535,7 @@ pub enum SourceInput {
     CodexLocalUsage(CodexLocalUsageAdapter),
     OpenCode(OpenCodeAdapter),
     Kilo(KiloAdapter),
+    Mimo(MimoAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -537,6 +559,7 @@ impl SourceInput {
             }
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
+            SourceFormat::MimoSqlite => Self::Mimo(MimoAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -689,6 +712,7 @@ impl SourceInput {
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
+            Self::Mimo(_) => InputAdapterStatus::MimoSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -716,6 +740,7 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
+            | Self::Mimo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -743,6 +768,7 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
+            | Self::Mimo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -762,6 +788,7 @@ impl SourceInput {
             }
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
+            Self::Mimo(adapter) => Ok(Some(SqliteInputData::Mimo(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -805,6 +832,7 @@ impl SourceInput {
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
             Self::OpenCode(adapter) => Some(adapter.path()),
             Self::Kilo(adapter) => Some(adapter.path()),
+            Self::Mimo(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -882,6 +910,7 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
+            | Self::Mimo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2233,6 +2262,106 @@ fn read_opencode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError>
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+/// Read MiMo Code's OpenCode-shaped `message` table.
+///
+/// MiMo stores assistant turns in OpenCode's schema, so this selects the same
+/// rows `read_opencode_legacy` does, with two MiMo-specific changes: a missing
+/// `session` table is not an error (the join is optional upstream), and the
+/// database file name is threaded into each record so channel-suffixed
+/// databases with overlapping row ids keep distinct identities.
+fn read_mimo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    let Some(columns) = table_columns(&transaction, "message")? else {
+        return Err(SqliteSourceError::Schema);
+    };
+    if !has_columns(&columns, &["id", "session_id", "data"]) {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    let database = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(SqliteSourceError::Unsupported)?
+        .to_owned();
+
+    let candidates: i64 = connection_query_count(
+        &transaction,
+        "SELECT COUNT(*) FROM message
+         WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
+           AND json_extract(data, '$.tokens') IS NOT NULL",
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > mimo::MAX_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+
+    let time_column = if columns.contains("time_created") {
+        "time_created"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT id, session_id, data, {time_column}
+         FROM message
+         WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
+           AND json_extract(data, '$.tokens') IS NOT NULL
+         ORDER BY session_id, id LIMIT ?1 OFFSET ?2"
+    );
+    let mut reader = MimoReader::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let session: String = row.get(1)?;
+            let data = row
+                .get_ref(2)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            if data.len() > MAX_RECORD_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            reader
+                .ingest(mimo::MimoRecord {
+                    message_id: &id,
+                    session_id: &session,
+                    data,
+                    fallback_timestamp_ms: row.get(3)?,
+                    database: &database,
+                })
+                .map_err(map_mimo_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn connection_query_count(connection: &Connection, sql: &str) -> Result<i64, SqliteSourceError> {
+    Ok(connection.query_row(sql, [], |row| row.get(0))?)
+}
+
+fn map_mimo_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_)
+        | ReaderError::Overflow => SqliteSourceError::Invalid,
+    }
 }
 
 fn read_opencode_current(

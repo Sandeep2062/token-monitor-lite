@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 27
+CLAUDE_SOURCES = 26
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -66,6 +66,7 @@ DROID_SOURCES = 1
 KIMI_SOURCES = 1
 GROK_SOURCES = 1
 COMMANDCODE_SOURCES = 1
+MIMO_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -98,6 +99,7 @@ SOURCE_COUNT = (
     + KIMI_SOURCES
     + GROK_SOURCES
     + COMMANDCODE_SOURCES
+    + MIMO_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1160,6 +1162,53 @@ def _commandcode_source() -> tuple[str, bytes, dict[str, int], int]:
     return f"{slug}/{session}", data, totals, OBSERVATIONS_PER_JSONL
 
 
+def _mimo_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One MiMo database: assistant rows in OpenCode's `message` schema."""
+    session = "mimo-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL) STRICT;"
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 130 + observation,
+                "output": 35 + observation,
+                "cacheRead": 15,
+                "cacheWrite": 3,
+                "reasoning": 0,
+            }
+            _add_counts(totals, counts)
+            data = {
+                "role": "assistant",
+                "modelID": "mimo-v2",
+                "providerID": "xiaomi",
+                "tokens": {
+                    "input": counts["input"],
+                    "output": counts["output"],
+                    "cache": {
+                        "read": counts["cacheRead"],
+                        "write": counts["cacheWrite"],
+                    },
+                },
+                "time": {"created": 1770983426000 + observation},
+            }
+            connection.execute(
+                "INSERT INTO message (id, session_id, data) VALUES (?, ?, ?)",
+                (
+                    f"msg-{observation:03d}",
+                    session,
+                    json.dumps(data, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -2064,6 +2113,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, commandcode_totals)
     physical_bytes += len(commandcode_data)
     decoded_bytes += len(commandcode_data)
+
+    mimo_target = root / "home" / ".local" / "share" / "mimocode" / "mimocode.db"
+    mimo_session, mimo_totals, mimo_rows = _mimo_database(mimo_target)
+    mimo_entry = dict(
+        _existing_entry(root, "home/.local/share/mimocode/mimocode.db", mimo_target),
+        format="mimo-sqlite",
+        session=mimo_session,
+        observations=mimo_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=mimo_target.stat().st_size,
+        physicalBytes=mimo_target.stat().st_size,
+        expectedTotals=mimo_totals,
+        retainedPeriods=0,
+    )
+    sources.append(mimo_entry)
+    _add_counts(aggregate, mimo_totals)
+    _add_counts(canonical_aggregate, mimo_totals)
+    physical_bytes += mimo_target.stat().st_size
+    decoded_bytes += mimo_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(
