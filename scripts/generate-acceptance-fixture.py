@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 32
+CLAUDE_SOURCES = 31
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -61,6 +61,7 @@ AMP_SOURCES = 1
 KILO_SOURCES = 1
 GOOSE_SOURCES = 1
 HERMES_SOURCES = 1
+OPENCLAW_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -88,6 +89,7 @@ SOURCE_COUNT = (
     + KILO_SOURCES
     + GOOSE_SOURCES
     + HERMES_SOURCES
+    + OPENCLAW_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -927,6 +929,67 @@ def _hermes_database(path: Path) -> tuple[str, dict[str, int], int]:
     return session, totals, len(rows)
 
 
+def _openclaw_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One OpenClaw agent store: `transcript_events`, one event per row."""
+    session = "openclaw-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """CREATE TABLE transcript_events (
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, seq)
+            ) STRICT;"""
+        )
+        rows = []
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 400,
+                "output": 80,
+                "cacheRead": 20,
+                "cacheWrite": 0,
+                "reasoning": 10,
+            }
+            _add_counts(totals, counts)
+            event = {
+                "type": "message",
+                "id": f"ev-{observation:03d}",
+                "message": {
+                    "role": "assistant",
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "usage": {
+                        "input": counts["input"],
+                        # OpenClaw stores inclusive output; reasoning is a subset.
+                        "output": counts["output"] + counts["reasoning"],
+                        "cacheRead": counts["cacheRead"],
+                        "cacheWrite": counts["cacheWrite"],
+                        "reasoningTokens": counts["reasoning"],
+                    },
+                    "timestamp": 1_784_000_000_000 + observation,
+                },
+            }
+            rows.append(
+                (
+                    session,
+                    observation,
+                    json.dumps(event, sort_keys=True),
+                    1_784_000_000_000 + observation,
+                )
+            )
+        connection.executemany(
+            "INSERT INTO transcript_events VALUES (?, ?, ?, ?)", rows
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, len(rows)
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -1731,6 +1794,32 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, hermes_totals)
     physical_bytes += hermes_target.stat().st_size
     decoded_bytes += hermes_target.stat().st_size
+
+    openclaw_target = (
+        root / "home" / ".openclaw" / "agents" / "main" / "agent" / "openclaw-agent.sqlite"
+    )
+    openclaw_session, openclaw_totals, openclaw_rows = _openclaw_database(openclaw_target)
+    openclaw_entry = dict(
+        _existing_entry(
+            root,
+            "home/.openclaw/agents/main/agent/openclaw-agent.sqlite",
+            openclaw_target,
+        ),
+        format="openclaw-sqlite",
+        session=openclaw_session,
+        observations=openclaw_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=openclaw_target.stat().st_size,
+        physicalBytes=openclaw_target.stat().st_size,
+        expectedTotals=openclaw_totals,
+        retainedPeriods=0,
+    )
+    sources.append(openclaw_entry)
+    _add_counts(aggregate, openclaw_totals)
+    _add_counts(canonical_aggregate, openclaw_totals)
+    physical_bytes += openclaw_target.stat().st_size
+    decoded_bytes += openclaw_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

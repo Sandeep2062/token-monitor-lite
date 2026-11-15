@@ -6,8 +6,9 @@ use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
-    MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter, SourceInput, WorkBuddySqliteAdapter,
-    ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    MAX_DECODED_BYTES, OpenClawAdapter, OpenCodeAdapter, SessionArchiveAdapter, SourceInput,
+    SqliteSourceError, WorkBuddySqliteAdapter, ZedAdapter, has_zstd_suffix,
+    is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -17,6 +18,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 pub const MAX_ARTIFACTS: usize = 64;
 pub const MAX_ARTIFACT_DEPTH: usize = 8;
@@ -1130,6 +1132,113 @@ fn hermes_state_databases(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Which OpenClaw source a candidate file is, if any. An agent's live
+/// transcript store is `agent/openclaw-agent.sqlite`; the transcripts beside it
+/// are `sessions/<id>.jsonl` and the `.deleted`/`.reset` archives OpenClaw
+/// publishes there. Everything else under `agents/` is not usage.
+fn openclaw_candidate_format(path: &Path) -> Option<SourceFormat> {
+    let name = path.file_name()?.to_str()?;
+    if name == "openclaw-agent.sqlite" {
+        return Some(SourceFormat::OpenClawSqlite);
+    }
+    // The process-held incognito store is a lexical sentinel, not a file to read.
+    if name == "incognito-openclaw-agent.sqlite" {
+        return None;
+    }
+    let in_sessions = path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|dir| dir == "sessions");
+    // `sessions.json` is the JSON index, not a line-oriented transcript.
+    let transcript_shaped = name != "sessions.json"
+        && name.split_once(".jsonl").is_some_and(|(stem, rest)| {
+            !stem.is_empty() && (rest.is_empty() || rest.starts_with('.') || name.ends_with(".zst"))
+        });
+    (in_sessions && transcript_shaped).then_some(SourceFormat::OpenClawJsonl)
+}
+
+fn probe_openclaw_jsonl(path: &Path) -> Result<bool, SqliteSourceError> {
+    let fallback = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+    let mut reader = crate::parsers::openclaw::OpenClawReader::new(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("openclaw"),
+    )
+    .with_fallback_timestamp(fallback);
+    let mut input = SourceInput::for_path(SourceFormat::OpenClawJsonl, path.to_path_buf());
+    loop {
+        let batch = match input.read_batch() {
+            Ok(batch) => batch,
+            Err(_) => return Err(SqliteSourceError::Invalid),
+        };
+        for record in &batch.records {
+            // A single malformed line does not disqualify the file; the reader
+            // skips only what it cannot interpret.
+            let _ = reader.ingest(record);
+        }
+        if !batch.more_available {
+            break;
+        }
+    }
+    Ok(reader.has_supported_usage())
+}
+
+/// Walk an OpenClaw agents root. Its transcripts are not all `.jsonl`: the
+/// `.deleted`/`.reset` archives keep the stamp in the name after the extension,
+/// so the whole file name is filtered by [`openclaw_candidate_format`] instead
+/// of by extension alone.
+fn collect_openclaw_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_openclaw_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if openclaw_candidate_format(&child).is_some() {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn collect_copilot_candidates(
     directory: &Path,
     depth: usize,
@@ -2056,6 +2165,73 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "openclaw" {
+            let root = join_many(inputs.platform, &inputs.home, &[".openclaw", "agents"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_openclaw_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+                continue;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                let ordinal = index + 1;
+                let format = match openclaw_candidate_format(&path) {
+                    Some(format) => format,
+                    None => continue,
+                };
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.file_type().is_file() => {
+                        if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                            notices.push(DiscoveryNotice::SourceInvalid {
+                                client: "openclaw",
+                                ordinal,
+                            });
+                            continue;
+                        }
+                        if sources.len() >= MAX_SOURCES {
+                            notices.push(DiscoveryNotice::SourceLimitReached);
+                            continue;
+                        }
+                        let probe = match format {
+                            SourceFormat::OpenClawJsonl => probe_openclaw_jsonl(&path),
+                            _ => OpenClawAdapter::new(&path)
+                                .read()
+                                .map(|rows| !rows.is_empty()),
+                        };
+                        match probe {
+                            Ok(true) => {
+                                let source_id = source_id_for(format, &path);
+                                if admitted_ids.insert(source_id) {
+                                    sources.push(DiscoveredSource {
+                                        source_id,
+                                        format,
+                                        session: "openclaw".to_owned(),
+                                        path,
+                                    });
+                                } else {
+                                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                                }
+                            }
+                            _ => notices.push(DiscoveryNotice::SourceInvalid {
+                                client: "openclaw",
+                                ordinal,
+                            }),
+                        }
+                    }
+                    Ok(_) => notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "openclaw",
+                        ordinal,
+                    }),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            continue;
+        }
         if client == "hermes" {
             let root = hermes_home(inputs);
             let mut candidates = hermes_state_databases(&root);
@@ -2697,12 +2873,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     })
                 }
                 SourceFormat::ReasonixJsonl => None,
+                // OpenClaw's session is the transcript's file stem, which the
+                // caller already knows; the event stream carries no session id.
+                SourceFormat::OpenClawJsonl => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
                 | SourceFormat::KiloSqlite
                 | SourceFormat::GooseSqlite
                 | SourceFormat::HermesSqlite
+                | SourceFormat::OpenClawSqlite
                 | SourceFormat::ZedSqlite
                 | SourceFormat::WorkBuddySqlite
                 | SourceFormat::AntigravitySqlite
@@ -2758,6 +2938,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::QwenJsonl
             | SourceFormat::ReasonixJsonl
             | SourceFormat::McodeJsonl
+            | SourceFormat::OpenClawJsonl
     ) {
         return path
             .file_stem()

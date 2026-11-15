@@ -11,6 +11,7 @@ use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
 use crate::parsers::kilo::KiloReader;
+use crate::parsers::openclaw::OpenClawReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
@@ -353,6 +354,24 @@ impl HermesAdapter {
     }
 }
 
+pub struct OpenClawAdapter {
+    path: PathBuf,
+}
+
+impl OpenClawAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_openclaw(&self.path)
+    }
+}
+
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const ZSTD_SKIPPABLE_MIN: u32 = 0x184D_2A50;
 const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
@@ -373,6 +392,7 @@ pub enum InputAdapterStatus {
     KiloSqlite,
     GooseSqlite,
     HermesSqlite,
+    OpenClawSqlite,
     ZedSqlite,
     WorkBuddySqlite,
     AntigravitySqlite,
@@ -385,6 +405,7 @@ pub(crate) enum SqliteInputData {
     Kilo(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
+    OpenClaw(Arc<[ResponseUsage]>),
     Zed(Arc<[ResponseUsage]>),
     WorkBuddySqlite(Arc<[ResponseUsage]>),
     AntigravitySqlite(Arc<[ResponseUsage]>),
@@ -487,6 +508,7 @@ pub enum SourceInput {
     Kilo(KiloAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
+    OpenClaw(OpenClawAdapter),
     Zed(ZedAdapter),
     WorkBuddySqlite(WorkBuddySqliteAdapter),
     AntigravitySqlite(AntigravitySqliteAdapter),
@@ -509,6 +531,7 @@ impl SourceInput {
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
+            SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
             SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
             SourceFormat::WorkBuddySqlite => {
                 Self::WorkBuddySqlite(WorkBuddySqliteAdapter::new(path))
@@ -622,6 +645,7 @@ impl SourceInput {
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
+            Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
             Self::Zed(_) => InputAdapterStatus::ZedSqlite,
             Self::WorkBuddySqlite(_) => InputAdapterStatus::WorkBuddySqlite,
             Self::AntigravitySqlite(_) => InputAdapterStatus::AntigravitySqlite,
@@ -644,6 +668,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => {}
@@ -666,6 +691,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => Ok(true),
@@ -684,6 +710,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
+            Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
             Self::Zed(adapter) => Ok(Some(SqliteInputData::Zed(adapter.read()?))),
             Self::WorkBuddySqlite(adapter) => {
                 Ok(Some(SqliteInputData::WorkBuddySqlite(adapter.read()?)))
@@ -718,6 +745,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
+            Self::OpenClaw(adapter) => Some(adapter.path()),
             Self::Zed(adapter) => Some(adapter.path()),
             Self::WorkBuddySqlite(adapter) => Some(adapter.path()),
             Self::AntigravitySqlite(adapter) => Some(adapter.path()),
@@ -760,6 +788,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => Err(invalid("sqlite input has no JSONL batch")),
@@ -1742,6 +1771,101 @@ fn decode_zed_zstd(data: &[u8], limit: u64) -> Result<Vec<u8>, SqliteSourceError
         return Err(SqliteSourceError::Capacity);
     }
     Ok(decoded)
+}
+
+/// OpenClaw's `transcript-payload.ts` bounds both the zstd frame and its
+/// decoded UTF-8 bytes at 4 MiB, so a damaged store cannot make the reader
+/// allocate without bound.
+const MAX_OPENCLAW_EVENT_BYTES: i64 = 4 * 1024 * 1024;
+
+/// OpenClaw's per-agent `openclaw-agent.sqlite`. Usage lives in
+/// `transcript_events`, one event per row, either `event_json` text or a zstd
+/// `event_zstd` blob whose decoded length is `event_utf8_bytes`. The session a
+/// row belongs to is the row's own `session_id`; `session_windows` supplies a
+/// session-level provider/model fallback when the transcript names none.
+fn read_openclaw(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    if table_columns(&transaction, "transcript_events")?.is_none() {
+        return Err(SqliteSourceError::Schema);
+    }
+    require_columns(&transaction, "transcript_events", &["session_id"])?;
+    let columns = table_columns(&transaction, "transcript_events")?.unwrap_or_default();
+    let compressed = columns.contains("event_zstd") && columns.contains("event_utf8_bytes");
+    if !compressed && !columns.contains("event_json") {
+        return Err(SqliteSourceError::Schema);
+    }
+    let payload = if compressed {
+        "event_json, event_zstd, event_utf8_bytes"
+    } else {
+        "event_json, NULL, NULL"
+    };
+    let mut reader =
+        OpenClawReader::new("openclaw").with_fallback_timestamp(source_modified_ms(path));
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&format!(
+            "SELECT e.session_id, {payload}, e.created_at
+             FROM transcript_events e
+             ORDER BY e.session_id, e.seq LIMIT ?1 OFFSET ?2"
+        ))?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let session_id: String = row.get(0)?;
+            let event_json: Option<String> = row.get(1)?;
+            let raw_bytes: Option<i64> = row.get(3)?;
+            let created_at_secs: Option<f64> = row.get(4)?;
+            let json = match event_json {
+                Some(json) => json,
+                None => {
+                    if !compressed {
+                        return Err(SqliteSourceError::Invalid);
+                    }
+                    let blob = row
+                        .get_ref(2)?
+                        .as_blob()
+                        .map_err(|_| SqliteSourceError::Invalid)?;
+                    let declared = raw_bytes.unwrap_or(0);
+                    if !(1..=MAX_OPENCLAW_EVENT_BYTES).contains(&declared) {
+                        return Err(SqliteSourceError::Capacity);
+                    }
+                    let decoded =
+                        decode_zed_zstd(blob, u64::try_from(declared).unwrap_or(u64::MAX))?;
+                    if decoded.len() != declared as usize {
+                        return Err(SqliteSourceError::Invalid);
+                    }
+                    String::from_utf8(decoded).map_err(|_| SqliteSourceError::Invalid)?
+                }
+            };
+            // A row that does not decode is skipped on its own rather than
+            // failing the whole store.
+            let Ok(value) = serde_json::from_str::<Value>(&json) else {
+                page_rows += 1;
+                continue;
+            };
+            let Some(object) = value.as_object() else {
+                page_rows += 1;
+                continue;
+            };
+            let row_ms = created_at_secs
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| (value * 1000.0) as i64);
+            reader
+                .ingest_session_event(&session_id, row_ms, object)
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
 }
 
 fn read_goose(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

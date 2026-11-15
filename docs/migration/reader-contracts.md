@@ -208,6 +208,22 @@ Hermes records usage only as per-session aggregates in `state.db`. `session_mode
 | All-zero counter row | ignored non-usage | No row. |
 | `logs/agent.log*` cross-day split, `sessions.title`, actual/estimated cost columns, WAL-active writes | visible unsupported / ignored | The pinned reader re-attributes an aggregate across days using the rotated per-call logs; the native reader deliberately keeps the whole session on its recorded `started_at` instead of trusting a second unvalidated input. Titles are presentation-only and never persisted. |
 
+## OpenClaw matrix
+
+OpenClaw keeps transcripts in two stores that share one event shape (`{"type":"message","id":…,"message":{"role":…,"usage":…}}`): a per-agent SQLite database (`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, table `transcript_events`) and, from legacy installs and current `.deleted`/`.reset` archives, one JSONL file per session under `<agentId>/sessions/`. Both feed one interpretation. `reasoningTokens` is a subset of the inclusive `output`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant event with usage, a model (own, from `model_change`/`model-snapshot`, or carried forward), and non-zero counters | supported | One observation. Additive output is `output - reasoning`. Provider is the event's own, else the carried-forward one, else `unknown`. | JSONL: the file stem. SQLite: the row's `session_id`, and a session change clears the carried model/provider. Identity is `openclaw:<event id>:<timestamp>:<input>:<output>`. |
+| Same event with no timestamp of its own | supported | The store's timestamp is used for the observation, but **not** in the identity: `openclaw:<event id>:<input>:<output>`, because the two stores fill it in differently. | This is what lets a migrated SQLite row and its retained JSONL line collapse to one observation. |
+| Assistant row OpenClaw authored for transcript bookkeeping (`api: openclaw-transcript`, or provider `openclaw` with model `delivery-mirror`/`gateway-injected`) | ignored non-usage | No row. |
+| Assistant row that mirrors a Codex app-server turn (`idempotencyKey: codex-app-server:<thread>:<turn>:assistant`) | supported | One observation, keyed `openclaw:codex-mirror:<thread>:<turn>:…` so a caller can replace it with the rollout's record of that turn. |
+| User, tool-result, `session`, and non-`model-snapshot` `custom` events; all-zero usage | ignored non-usage | No row. |
+| Missing model with nothing carried forward, negative/non-integer counter, reasoning above output | visible unsupported | Discard the candidate. |
+| Malformed `event_json` / non-object event | ignored for that row | The rest of the store is still read; a decode failure of the whole store is visible unsupported. |
+| `event_zstd` payload above the 4 MiB declared length, or a decoded length that disagrees with `event_utf8_bytes` | visible unsupported | Refused before allocating. |
+| `session_windows` provider/model fallback, the Codex rollout lane and mirror replacement, `/fork` copy collapse, `.zst` transcript archives, WAL-active stores | visible unsupported / ignored | The native reader requires each event to name its own model rather than borrowing a session's current route, and does not read agent-owned Codex rollouts. |
+
 ## Copilot OTel matrix
 
 The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Each line must carry its own `attributes`; cross-line trace enrichment and VS Code session-state stores are not implemented. A file that mixes chat spans, inference logs, agent-turn logs and agent summary spans uses only the highest-priority source present, preventing one turn from being counted twice.

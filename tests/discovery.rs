@@ -264,6 +264,28 @@ fn goose_database(path: &Path) {
         .unwrap();
 }
 
+fn openclaw_agent_store(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE transcript_events (
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, seq)
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO transcript_events VALUES ('sess-store', 0, ?1, 1756548000000)",
+            [r#"{"type":"message","id":"s1","message":{"role":"assistant","provider":"anthropic","model":"claude-opus-4-6","usage":{"input":7,"output":3},"timestamp":1756548000000}}"#],
+        )
+        .unwrap();
+}
+
 fn hermes_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();
@@ -973,6 +995,58 @@ fn goose_database_uses_the_first_existing_or_authoritative_override() {
     let report = discover(&paths).unwrap();
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].format, SourceFormat::GooseSqlite);
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn openclaw_transcripts_and_agent_stores_are_discovered_under_agents() {
+    let tree = Tree::new();
+    tree.file(
+        ".openclaw/agents/main/sessions/sess-a.jsonl",
+        br#"{"type":"model_change","provider":"anthropic","modelId":"claude-sonnet-4-5"}
+{"type":"message","id":"m1","message":{"role":"assistant","usage":{"input":100,"output":50},"timestamp":1700000000000}}
+"#,
+    );
+    tree.file(
+        ".openclaw/agents/main/sessions/archive-tier.sess-b.jsonl.reset.2026-08-30T10-00-00.000Z",
+        br#"{"type":"message","id":"m2","message":{"role":"assistant","provider":"openai","model":"gpt-5.2","usage":{"input":10,"output":5},"timestamp":1700000000000}}
+"#,
+    );
+    openclaw_agent_store(
+        &tree
+            .0
+            .join(".openclaw/agents/main/agent/openclaw-agent.sqlite"),
+    );
+    // Not usage in either store.
+    tree.file(".openclaw/agents/main/sessions/sessions.json", b"{}");
+    tree.file(
+        ".openclaw/agents/main/agent/incognito-openclaw-agent.sqlite",
+        b"",
+    );
+    tree.file(".openclaw/agents/main/state/notes.txt", b"ignored");
+
+    let mut paths = tree.paths(&["openclaw"]);
+    let report = discover(&paths).unwrap();
+    let mut formats: Vec<SourceFormat> =
+        report.sources.iter().map(|source| source.format).collect();
+    formats.sort();
+    assert_eq!(
+        formats,
+        vec![
+            SourceFormat::OpenClawJsonl,
+            SourceFormat::OpenClawJsonl,
+            SourceFormat::OpenClawSqlite,
+        ],
+        "the agent store and both of its transcripts are separate sources"
+    );
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.session == "openclaw")
+    );
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

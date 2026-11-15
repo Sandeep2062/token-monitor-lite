@@ -18,6 +18,7 @@ use crate::parsers::{
     mcode::McodeReader,
     muse::MuseReader,
     omp::OmpReader,
+    openclaw::OpenClawReader,
     pi::PiReader,
     qwen::QwenReader,
     reasonix::ReasonixReader,
@@ -53,6 +54,7 @@ pub enum SourceFormat {
     ReasonixJsonl,
     MuseJsonl,
     McodeJsonl,
+    OpenClawJsonl,
     ZedSqlite,
     WorkBuddySqlite,
     AntigravitySqlite,
@@ -62,6 +64,7 @@ pub enum SourceFormat {
     KiloSqlite,
     GooseSqlite,
     HermesSqlite,
+    OpenClawSqlite,
 }
 
 impl SourceFormat {
@@ -92,6 +95,7 @@ impl SourceFormat {
             Self::KiloSqlite => "kilo",
             Self::GooseSqlite => "goose",
             Self::HermesSqlite => "hermes",
+            Self::OpenClawJsonl | Self::OpenClawSqlite => "openclaw",
         }
     }
 
@@ -114,6 +118,7 @@ impl SourceFormat {
             Self::ReasonixJsonl => "reasonix-jsonl",
             Self::MuseJsonl => "muse-jsonl",
             Self::McodeJsonl => "mcode-jsonl",
+            Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
             Self::AntigravitySqlite => "antigravity-sqlite",
@@ -123,6 +128,7 @@ impl SourceFormat {
             Self::KiloSqlite => "kilo-sqlite",
             Self::GooseSqlite => "goose-sqlite",
             Self::HermesSqlite => "hermes-sqlite",
+            Self::OpenClawSqlite => "openclaw-sqlite",
         }
     }
 
@@ -145,6 +151,7 @@ impl SourceFormat {
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
             "muse-jsonl" => Some(Self::MuseJsonl),
             "mcode-jsonl" => Some(Self::McodeJsonl),
+            "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
             "antigravity-sqlite" => Some(Self::AntigravitySqlite),
@@ -154,6 +161,7 @@ impl SourceFormat {
             "kilo-sqlite" => Some(Self::KiloSqlite),
             "goose-sqlite" => Some(Self::GooseSqlite),
             "hermes-sqlite" => Some(Self::HermesSqlite),
+            "openclaw-sqlite" => Some(Self::OpenClawSqlite),
             _ => None,
         }
     }
@@ -167,6 +175,7 @@ impl SourceFormat {
                 | Self::KiloSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
+                | Self::OpenClawSqlite
                 | Self::ZedSqlite
                 | Self::WorkBuddySqlite
                 | Self::AntigravitySqlite
@@ -367,6 +376,7 @@ enum ResponseReader {
     Reasonix(Box<ReasonixReader>),
     Muse(Box<MuseReader>),
     Mcode(Box<McodeReader>),
+    OpenClaw(Box<OpenClawReader>),
 }
 
 impl ResponseReader {
@@ -390,6 +400,7 @@ impl ResponseReader {
             Self::Reasonix(reader) => reader.ingest(record),
             Self::Muse(reader) => reader.ingest(record),
             Self::Mcode(reader) => reader.ingest(record),
+            Self::OpenClaw(reader) => reader.ingest(record),
         }
     }
 
@@ -413,6 +424,7 @@ impl ResponseReader {
             Self::Reasonix(reader) => reader.snapshot(),
             Self::Muse(reader) => reader.snapshot(),
             Self::Mcode(reader) => reader.snapshot(),
+            Self::OpenClaw(reader) => reader.snapshot(),
         }
     }
 
@@ -435,7 +447,8 @@ impl ResponseReader {
             | Self::Qwen(_)
             | Self::Reasonix(_)
             | Self::Muse(_)
-            | Self::Mcode(_) => Ok(()),
+            | Self::Mcode(_)
+            | Self::OpenClaw(_) => Ok(()),
         }
     }
 
@@ -459,6 +472,7 @@ impl ResponseReader {
             Self::Reasonix(reader) => reader.has_supported_usage(),
             Self::Muse(reader) => reader.has_supported_usage(),
             Self::Mcode(reader) => reader.has_supported_usage(),
+            Self::OpenClaw(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -828,12 +842,19 @@ impl SourceReader {
                     McodeReader::new().with_fallback_timestamp(fallback),
                 ))
             }
+            SourceFormat::OpenClawJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::OpenClaw(Box::new(
+                    OpenClawReader::new("openclaw").with_fallback_timestamp(fallback),
+                ))
+            }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
             | SourceFormat::KiloSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
+            | SourceFormat::OpenClawSqlite
             | SourceFormat::ZedSqlite
             | SourceFormat::WorkBuddySqlite
             | SourceFormat::AntigravitySqlite => {
@@ -854,6 +875,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zed(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::WorkBuddySqlite(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::AntigravitySqlite(rows) => (rows, Arc::from([])),

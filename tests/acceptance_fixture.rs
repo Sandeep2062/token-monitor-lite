@@ -164,6 +164,7 @@ impl Fixture {
                 "gemini".to_owned(),
                 "goose".to_owned(),
                 "hermes".to_owned(),
+                "openclaw".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
                 "codebuddy".to_owned(),
@@ -231,6 +232,7 @@ fn source_format(format: &str) -> SourceFormat {
         "kilo-sqlite" => SourceFormat::KiloSqlite,
         "goose-sqlite" => SourceFormat::GooseSqlite,
         "hermes-sqlite" => SourceFormat::HermesSqlite,
+        "openclaw-sqlite" => SourceFormat::OpenClawSqlite,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
         "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
         "workbuddy-jsonl" => SourceFormat::WorkBuddyJsonl,
@@ -338,7 +340,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     assert_eq!(
         manifest.coverage.source_formats,
         BTreeMap::from([
-            ("claude-cli".to_owned(), 32),
+            ("claude-cli".to_owned(), 31),
             ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
@@ -349,6 +351,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("kilo-sqlite".to_owned(), 1),
             ("goose-sqlite".to_owned(), 1),
             ("hermes-sqlite".to_owned(), 1),
+            ("openclaw-sqlite".to_owned(), 1),
             ("copilot-jsonl".to_owned(), 1),
             ("codebuddy-jsonl".to_owned(), 1),
             ("workbuddy-jsonl".to_owned(), 1),

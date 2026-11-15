@@ -16,6 +16,7 @@ pub mod kilo;
 pub mod mcode;
 pub mod muse;
 pub mod omp;
+pub mod openclaw;
 pub mod opencode;
 pub mod pi;
 pub mod qwen;
