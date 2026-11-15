@@ -251,6 +251,21 @@ Kimi CLI writes `wire.jsonl` per session under `~/.kimi/sessions/<GROUP>/<SESSIO
 | Missing or unusable wire timestamp | supported | Falls back to the file mtime; with neither, the candidate is visible unsupported. |
 | `kimi-code` `usage.record` shape, the sibling `config.json` model, response duration, cost | visible unsupported | Not read; the default model stands rather than a guessed one. |
 
+## Grok matrix
+
+Grok Build writes `updates.jsonl` per session under `~/.grok/sessions/<workspace>/<session-id>/`. Two lanes carry usage; the authoritative breakdown wins where present.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `params.update.sessionUpdate == "turn_completed"` with a `usage` block | supported | One observation per completion. Grok's `inputTokens` includes `cachedReadTokens` and its `outputTokens` includes `reasoningTokens`, so both nested subsets are lifted out to keep the buckets additive. Model is the declared model, else a single `modelUsage` key, else `grok-unknown`. Provider is `xai`. | Session is the containing `<session-id>` directory; identity `grok:<session>:prompt:<promptId>` when a prompt id exists, else the file ordinal plus event id. |
+| A retransmitted prompt id | supported | The larger total replaces the earlier snapshot; a smaller retransmission never lowers a count. |
+| Legacy cumulative `_meta.totalTokens` | supported | The positive per-turn delta becomes input tokens, since the counter proves the magnitude but no input/output split. The cumulative total is treated as monotonic; a rewound counter is ignored. `user_message_chunk` opens the turn boundary. |
+| `totalTokens` present but disagreeing with the inclusive input+output sum | visible unsupported | Discard the candidate rather than trust a breakdown that cannot be reconciled. |
+| Negative or non-integer counter | visible unsupported | Discard the candidate rather than clamp. |
+| Non-usage `sessionUpdate` kinds (`agent_thought_chunk`, `tool_call`, …) | ignored non-usage | No row. |
+| Missing or unusable timestamp | supported | Falls back to the file mtime; with neither, the candidate is visible unsupported. |
+| `signals.json` rollup top-up, `~/.grok/logs/unified.jsonl` per-inference lane with subagent attribution, cost ticks | visible unsupported | Not read. The rollup and the unified log are sibling documents the byte-slice reader is not given, so no guess is made. |
+
 ## Copilot OTel matrix
 
 The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Each line must carry its own `attributes`; cross-line trace enrichment and VS Code session-state stores are not implemented. A file that mixes chat spans, inference logs, agent-turn logs and agent summary spans uses only the highest-priority source present, preventing one turn from being counted twice.

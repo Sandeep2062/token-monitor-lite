@@ -1122,6 +1122,42 @@ fn kimi_wire_streams_are_discovered_per_session_directory() {
 }
 
 #[test]
+fn grok_update_streams_are_discovered_per_session_directory() {
+    let tree = Tree::new();
+    tree.file(
+        ".grok/sessions/workspace-a/session-a/updates.jsonl",
+        br#"{"params":{"timestamp":1770983426,"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":10,"outputTokens":5}}}}
+"#,
+    );
+    // The rollup beside the stream is not the usage stream the reader consumes.
+    tree.file(
+        ".grok/sessions/workspace-a/session-a/signals.json",
+        br#"{"totalTokens":10}"#,
+    );
+    tree.file(
+        ".grok/sessions/workspace-a/session-b/updates.jsonl",
+        br#"{"params":{"timestamp":1770983427,"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":1,"outputTokens":2}}}}
+"#,
+    );
+
+    let paths = tree.paths(&["grok"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::GrokJsonl)
+    );
+    let sessions = report
+        .sources
+        .iter()
+        .map(|source| source.session.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(sessions, BTreeSet::from(["session-a", "session-b"]));
+}
+
+#[test]
 fn droid_settings_documents_are_discovered_without_the_settings_suffix() {
     let tree = Tree::new();
     tree.file(

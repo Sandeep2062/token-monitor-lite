@@ -2450,6 +2450,15 @@ fn discover_sources_with_id(
                     &[".factory", "sessions"],
                 )],
             ),
+            "grok" => (
+                "grok",
+                SourceFormat::GrokJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".grok", "sessions"],
+                )],
+            ),
             "kimi" => (
                 "kimi",
                 SourceFormat::KimiJsonl,
@@ -2473,6 +2482,13 @@ fn discover_sources_with_id(
             collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
             if client_id == "codebuddy" {
                 collect_log_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            }
+            if client_id == "grok" {
+                // Only the per-session update stream is usage; signals.json is
+                // a rollup the reader does not consume.
+                candidates.retain(|path| {
+                    path.file_name().and_then(|name| name.to_str()) == Some("updates.jsonl")
+                });
             }
             if client_id == "kimi" {
                 // Only `wire.jsonl` is the usage stream; the session directory
@@ -2908,6 +2924,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
+                // Grok's update stream names no session; the caller derives it
+                // from the `<workspace>/<session-id>/updates.jsonl` path.
+                SourceFormat::GrokJsonl => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -2965,6 +2984,18 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .and_then(|stem| stem.to_str())
             .and_then(|stem| stem.strip_suffix(".settings"))
             .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    // `<workspace>/<session-id>/updates.jsonl`: the session is the containing
+    // directory, since the update stream names none.
+    if format == SourceFormat::GrokJsonl {
+        return path
+            .parent()
+            .filter(|parent| parent.file_name().and_then(|name| name.to_str()) != Some("sessions"))
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or(());
     }

@@ -2110,7 +2110,7 @@ fn migrate_eighteen_to_nineteen(connection: &mut Connection) -> Result<(), Store
 const SCHEMA_V20: &str = r#"
 CREATE TABLE runtime_sources_v20 (
     source_id TEXT PRIMARY KEY CHECK (length(source_id) = 42),
-    format TEXT NOT NULL CHECK (format IN ('claude-jsonl', 'codex-jsonl', 'gemini-transcript', 'cursor-cache-json', 'cline-json', 'amp-json', 'droid-json', 'copilot-jsonl', 'codebuddy-jsonl', 'workbuddy-jsonl', 'pi-jsonl', 'omp-jsonl', 'senpi-jsonl', 'antigravity-jsonl', 'qwen-jsonl', 'reasonix-jsonl', 'muse-jsonl', 'mcode-jsonl', 'openclaw-jsonl', 'kimi-jsonl')),
+    format TEXT NOT NULL CHECK (format IN ('claude-jsonl', 'codex-jsonl', 'gemini-transcript', 'cursor-cache-json', 'cline-json', 'amp-json', 'droid-json', 'copilot-jsonl', 'codebuddy-jsonl', 'workbuddy-jsonl', 'pi-jsonl', 'omp-jsonl', 'senpi-jsonl', 'antigravity-jsonl', 'qwen-jsonl', 'reasonix-jsonl', 'muse-jsonl', 'mcode-jsonl', 'openclaw-jsonl', 'kimi-jsonl', 'grok-jsonl')),
     client TEXT NOT NULL CHECK (length(client) BETWEEN 1 AND 64),
     parser_pin TEXT NOT NULL CHECK (length(parser_pin) BETWEEN 1 AND 128),
     source_generation INTEGER NOT NULL CHECK (source_generation > 0),

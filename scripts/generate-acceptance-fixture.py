@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 29
+CLAUDE_SOURCES = 28
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -64,6 +64,7 @@ HERMES_SOURCES = 1
 OPENCLAW_SOURCES = 1
 DROID_SOURCES = 1
 KIMI_SOURCES = 1
+GROK_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -94,6 +95,7 @@ SOURCE_COUNT = (
     + OPENCLAW_SOURCES
     + DROID_SOURCES
     + KIMI_SOURCES
+    + GROK_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1065,6 +1067,47 @@ def _kimi_source() -> tuple[str, bytes, dict[str, int], int]:
     return f"{group}/{session}", data, totals, OBSERVATIONS_PER_JSONL
 
 
+def _grok_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Grok `updates.jsonl`: one `turn_completed` per observation."""
+    workspace = "workspace-fixture"
+    session = "grok-fixture-000"
+    records: list[bytes] = []
+    totals = _counts()
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 400 + observation,
+            "output": 60 + observation,
+            "cacheRead": 25,
+            "cacheWrite": 0,
+            "reasoning": 8,
+        }
+        _add_counts(totals, counts)
+        # Grok's inputTokens includes cachedReadTokens, and outputTokens
+        # includes reasoningTokens, so emit the inclusive wire values.
+        records.append(
+            _json_line(
+                {
+                    "params": {
+                        "_meta": {"agentTimestampMs": 1770983426000 + observation},
+                        "update": {
+                            "sessionUpdate": "turn_completed",
+                            "promptId": f"prompt-{observation:03d}",
+                            "_meta": {"modelId": "grok-4"},
+                            "usage": {
+                                "inputTokens": counts["input"] + counts["cacheRead"],
+                                "outputTokens": counts["output"] + counts["reasoning"],
+                                "cachedReadTokens": counts["cacheRead"],
+                                "reasoningTokens": counts["reasoning"],
+                            },
+                        },
+                    },
+                }
+            )
+        )
+    data = b"".join(records)
+    return f"{workspace}/{session}", data, totals, OBSERVATIONS_PER_JSONL
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -1931,6 +1974,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, kimi_totals)
     physical_bytes += len(kimi_data)
     decoded_bytes += len(kimi_data)
+
+    grok_path, grok_data, grok_totals, grok_rows = _grok_source()
+    grok_entry = _source_entry(
+        root,
+        f"home/.grok/sessions/{grok_path}/updates.jsonl",
+        grok_data,
+        format_name="grok-jsonl",
+        session=grok_path.rsplit("/", 1)[-1],
+        observations=grok_rows,
+        canonical_sessions=1,
+        expected_totals=grok_totals,
+        physical_bytes=len(grok_data),
+    )
+    sources.append(grok_entry)
+    _add_counts(aggregate, grok_totals)
+    _add_counts(canonical_aggregate, grok_totals)
+    physical_bytes += len(grok_data)
+    decoded_bytes += len(grok_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

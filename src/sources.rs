@@ -16,6 +16,7 @@ use crate::parsers::{
     cursor::CursorReader,
     droid::DroidReader,
     gemini::GeminiReader,
+    grok::GrokReader,
     kimi::KimiReader,
     mcode::McodeReader,
     muse::MuseReader,
@@ -58,6 +59,7 @@ pub enum SourceFormat {
     ReasonixJsonl,
     MuseJsonl,
     McodeJsonl,
+    GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
     WorkBuddySqlite,
@@ -82,6 +84,7 @@ impl SourceFormat {
             Self::AmpJson => "amp",
             Self::DroidJson => "droid",
             Self::KimiJsonl => "kimi",
+            Self::GrokJsonl => "grok",
             Self::CopilotJsonl => "copilot",
             Self::CodeBuddyJsonl => "codebuddy",
             Self::WorkBuddyJsonl => "workbuddy",
@@ -115,6 +118,7 @@ impl SourceFormat {
             Self::AmpJson => "amp-json",
             Self::DroidJson => "droid-json",
             Self::KimiJsonl => "kimi-jsonl",
+            Self::GrokJsonl => "grok-jsonl",
             Self::CopilotJsonl => "copilot-jsonl",
             Self::CodeBuddyJsonl => "codebuddy-jsonl",
             Self::WorkBuddyJsonl => "workbuddy-jsonl",
@@ -150,6 +154,7 @@ impl SourceFormat {
             "amp-json" => Some(Self::AmpJson),
             "droid-json" => Some(Self::DroidJson),
             "kimi-jsonl" => Some(Self::KimiJsonl),
+            "grok-jsonl" => Some(Self::GrokJsonl),
             "copilot-jsonl" => Some(Self::CopilotJsonl),
             "codebuddy-jsonl" => Some(Self::CodeBuddyJsonl),
             "workbuddy-jsonl" => Some(Self::WorkBuddyJsonl),
@@ -376,6 +381,7 @@ enum ResponseReader {
     Amp(Box<AmpReader>),
     Droid(Box<DroidReader>),
     Kimi(Box<KimiReader>),
+    Grok(Box<GrokReader>),
     Copilot(Box<CopilotReader>),
     CodeBuddy(Box<CodeBuddyReader>),
     CodeBuddyLog(Box<CodeBuddyLogReader>),
@@ -402,6 +408,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.ingest(record),
             Self::Droid(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
+            Self::Grok(reader) => reader.ingest(record),
             Self::Copilot(reader) => reader.ingest(record),
             Self::CodeBuddy(reader) => reader.ingest(record),
             Self::CodeBuddyLog(reader) => reader.ingest(record),
@@ -428,6 +435,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.snapshot(),
             Self::Droid(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
+            Self::Grok(reader) => reader.snapshot(),
             Self::Copilot(reader) => reader.snapshot(),
             Self::CodeBuddy(reader) => reader.snapshot(),
             Self::CodeBuddyLog(reader) => reader.snapshot(),
@@ -454,6 +462,7 @@ impl ResponseReader {
             | Self::Amp(_)
             | Self::Droid(_)
             | Self::Kimi(_)
+            | Self::Grok(_)
             | Self::Copilot(_)
             | Self::CodeBuddy(_)
             | Self::CodeBuddyLog(_)
@@ -480,6 +489,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Droid(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
+            Self::Grok(reader) => reader.has_supported_usage(),
             Self::Copilot(reader) => reader.has_supported_usage(),
             Self::CodeBuddy(reader) => reader.has_supported_usage(),
             Self::CodeBuddyLog(reader) => reader.has_supported_usage(),
@@ -872,6 +882,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::OpenClaw(Box::new(
                     OpenClawReader::new("openclaw").with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::GrokJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Grok(Box::new(
+                    GrokReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::KimiJsonl => {

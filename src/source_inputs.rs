@@ -380,6 +380,7 @@ const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
 pub enum InputAdapterStatus {
     OrdinaryJsonl,
     KimiJsonl,
+    GrokJsonl,
     GeminiTranscript,
     CursorCacheJson,
     ClineJson,
@@ -498,6 +499,7 @@ struct CompressedStream<R> {
 pub enum SourceInput {
     OrdinaryJsonl(OrdinaryJsonlInput),
     Kimi(OrdinaryJsonlInput),
+    Grok(OrdinaryJsonlInput),
     Gemini(GeminiInput),
     Cursor(CursorInput),
     Cline(DocumentInput),
@@ -542,6 +544,17 @@ impl SourceInput {
             }
             SourceFormat::AntigravitySqlite => {
                 Self::AntigravitySqlite(AntigravitySqliteAdapter::new(path))
+            }
+            SourceFormat::GrokJsonl
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "updates.jsonl") =>
+            {
+                Self::Grok(OrdinaryJsonlInput {
+                    path,
+                    cursor: JsonlCursor::default(),
+                })
             }
             SourceFormat::KimiJsonl
                 if path
@@ -656,6 +669,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
+            Self::Grok(_) => InputAdapterStatus::GrokJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::Cline(_) => InputAdapterStatus::ClineJson,
@@ -680,6 +694,7 @@ impl SourceInput {
     pub fn reset(&mut self) {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
+            Self::Grok(input) => input.cursor.reset(),
             Self::Kimi(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
             Self::Cursor(input) => input.reset(),
@@ -705,6 +720,7 @@ impl SourceInput {
     pub fn is_current(&self) -> io::Result<bool> {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
+            Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::Kimi(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
             Self::Cursor(input) => input.is_current(),
@@ -749,6 +765,7 @@ impl SourceInput {
             }
             Self::OrdinaryJsonl(_)
             | Self::Kimi(_)
+            | Self::Grok(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
             | Self::Cline(_)
@@ -763,6 +780,7 @@ impl SourceInput {
     pub(crate) fn source_path(&self) -> Option<&Path> {
         match self {
             Self::OrdinaryJsonl(input) => Some(&input.path),
+            Self::Grok(input) => Some(&input.path),
             Self::Kimi(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
             Self::Cursor(input) => Some(&input.path),
@@ -787,6 +805,17 @@ impl SourceInput {
 
     pub fn read_batch(&mut self) -> io::Result<InputBatch> {
         match self {
+            Self::Grok(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
             Self::OrdinaryJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
