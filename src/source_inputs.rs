@@ -6,6 +6,7 @@
 use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::antigravity::AntigravityDbReader;
 use crate::parsers::goose::{GooseReader, GooseRow};
+use crate::parsers::hermes::{HermesReader, HermesRow};
 use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
@@ -334,6 +335,24 @@ impl GooseAdapter {
     }
 }
 
+pub struct HermesAdapter {
+    path: PathBuf,
+}
+
+impl HermesAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_hermes(&self.path)
+    }
+}
+
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const ZSTD_SKIPPABLE_MIN: u32 = 0x184D_2A50;
 const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
@@ -353,6 +372,7 @@ pub enum InputAdapterStatus {
     OpenCodeSqlite,
     KiloSqlite,
     GooseSqlite,
+    HermesSqlite,
     ZedSqlite,
     WorkBuddySqlite,
     AntigravitySqlite,
@@ -364,6 +384,7 @@ pub(crate) enum SqliteInputData {
     OpenCode(Arc<[ResponseUsage]>),
     Kilo(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
+    Hermes(Arc<[ResponseUsage]>),
     Zed(Arc<[ResponseUsage]>),
     WorkBuddySqlite(Arc<[ResponseUsage]>),
     AntigravitySqlite(Arc<[ResponseUsage]>),
@@ -465,6 +486,7 @@ pub enum SourceInput {
     OpenCode(OpenCodeAdapter),
     Kilo(KiloAdapter),
     Goose(GooseAdapter),
+    Hermes(HermesAdapter),
     Zed(ZedAdapter),
     WorkBuddySqlite(WorkBuddySqliteAdapter),
     AntigravitySqlite(AntigravitySqliteAdapter),
@@ -486,6 +508,7 @@ impl SourceInput {
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
+            SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
             SourceFormat::WorkBuddySqlite => {
                 Self::WorkBuddySqlite(WorkBuddySqliteAdapter::new(path))
@@ -598,6 +621,7 @@ impl SourceInput {
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
+            Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::Zed(_) => InputAdapterStatus::ZedSqlite,
             Self::WorkBuddySqlite(_) => InputAdapterStatus::WorkBuddySqlite,
             Self::AntigravitySqlite(_) => InputAdapterStatus::AntigravitySqlite,
@@ -619,6 +643,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
+            | Self::Hermes(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => {}
@@ -640,6 +665,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
+            | Self::Hermes(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => Ok(true),
@@ -657,6 +683,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
+            Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::Zed(adapter) => Ok(Some(SqliteInputData::Zed(adapter.read()?))),
             Self::WorkBuddySqlite(adapter) => {
                 Ok(Some(SqliteInputData::WorkBuddySqlite(adapter.read()?)))
@@ -690,6 +717,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Some(adapter.path()),
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
+            Self::Hermes(adapter) => Some(adapter.path()),
             Self::Zed(adapter) => Some(adapter.path()),
             Self::WorkBuddySqlite(adapter) => Some(adapter.path()),
             Self::AntigravitySqlite(adapter) => Some(adapter.path()),
@@ -731,6 +759,7 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
+            | Self::Hermes(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
             | Self::AntigravitySqlite(_) => Err(invalid("sqlite input has no JSONL batch")),
@@ -1806,6 +1835,145 @@ fn source_modified_ms(path: &Path) -> Option<i64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+/// Hermes keeps usage in `session_model_usage` (per model and provider) joined
+/// to `sessions` (start time and totals). Builds that predate the child table
+/// carry totals on `sessions` alone, so the per-model rows are preferred and a
+/// session without any of them falls back to its session row. The two passes
+/// are disjoint by session, which is what prevents double counting.
+fn read_hermes(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "sessions",
+        &[
+            "id",
+            "model",
+            "billing_provider",
+            "started_at",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+        ],
+    )?;
+    let per_model = table_columns(&transaction, "session_model_usage")?;
+    let per_model = match per_model {
+        Some(columns) => {
+            if !has_columns(
+                &columns,
+                &[
+                    "session_id",
+                    "model",
+                    "billing_provider",
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                    "reasoning_tokens",
+                ],
+            ) {
+                return Err(SqliteSourceError::Unsupported);
+            }
+            true
+        }
+        None => false,
+    };
+    let mut reader = HermesReader::new().with_fallback_timestamp(source_modified_ms(path));
+    let mut covered = BTreeSet::new();
+    if per_model {
+        read_hermes_rows(
+            &transaction,
+            &mut reader,
+            Some(&mut covered),
+            &BTreeSet::new(),
+            "SELECT smu.session_id, smu.model, smu.billing_provider, s.started_at,
+                    smu.input_tokens, smu.output_tokens, smu.cache_read_tokens,
+                    smu.cache_write_tokens, smu.reasoning_tokens
+             FROM session_model_usage smu
+             JOIN sessions s ON s.id = smu.session_id
+             WHERE smu.model IS NOT NULL AND TRIM(smu.model) != ''
+             ORDER BY smu.session_id, smu.model, smu.billing_provider",
+        )?;
+    }
+    // Only sessions the per-model pass did not cover fall back to their
+    // session totals, so the two result sets cannot double count.
+    let uncovered = covered.clone();
+    read_hermes_rows(
+        &transaction,
+        &mut reader,
+        None,
+        &uncovered,
+        "SELECT id, model, billing_provider, started_at,
+                input_tokens, output_tokens, cache_read_tokens,
+                cache_write_tokens, reasoning_tokens
+         FROM sessions
+         WHERE model IS NOT NULL AND TRIM(model) != ''
+         ORDER BY id",
+    )
+    .and_then(|()| {
+        drop(transaction);
+        snapshot.verify(path)?;
+        Ok(Arc::from(reader.snapshot()))
+    })
+}
+
+fn read_hermes_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    reader: &mut HermesReader,
+    mut covered: Option<&mut BTreeSet<String>>,
+    skip: &BTreeSet<String>,
+    query: &str,
+) -> Result<(), SqliteSourceError> {
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&format!("{query} LIMIT ?1 OFFSET ?2"))?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            page_rows += 1;
+            let session_id: String = row.get(0)?;
+            if skip.contains(&session_id) {
+                continue;
+            }
+            let model: String = row.get(1)?;
+            let billing_provider: Option<String> = row.get(2)?;
+            let started_at: f64 = row.get(3)?;
+            let input_tokens: Option<i64> = row.get(4)?;
+            let output_tokens: Option<i64> = row.get(5)?;
+            let cache_read_tokens: Option<i64> = row.get(6)?;
+            let cache_write_tokens: Option<i64> = row.get(7)?;
+            let reasoning_tokens: Option<i64> = row.get(8)?;
+            // Every per-model row is its own observation; the set only records
+            // that the session is covered so the session-totals pass skips it.
+            if let Some(set) = covered.as_deref_mut() {
+                set.insert(session_id.clone());
+            }
+            reader
+                .ingest(&HermesRow {
+                    session_id: &session_id,
+                    model: &model,
+                    billing_provider: billing_provider.as_deref(),
+                    started_at,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    reasoning_tokens,
+                })
+                .map_err(map_opencode_error)?;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    Ok(())
 }
 
 fn read_opencode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

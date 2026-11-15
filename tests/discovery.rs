@@ -264,6 +264,35 @@ fn goose_database(path: &Path) {
         .unwrap();
 }
 
+fn hermes_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                billing_provider TEXT,
+                started_at REAL NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO sessions VALUES (
+                'hermes-session', 'claude-sonnet-4-5', 'anthropic',
+                1794564000.0, 100, 50, 20, 10, 5
+             )",
+            [],
+        )
+        .unwrap();
+}
+
 fn copilot_otel_bytes(session: &str) -> Vec<u8> {
     let mut bytes = serde_json::to_vec(&serde_json::json!({
         "type": "span",
@@ -665,7 +694,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
     tree.file(".claude/projects/project/zz-broken.jsonl", b"not json\n");
     tree.file("random.jsonl", b"not a conventional source\n");
 
-    let report = discover(&tree.paths(&["codex", "claude", "hermes"])).unwrap();
+    let report = discover(&tree.paths(&["codex", "claude", "kimi"])).unwrap();
     assert_eq!(report.sources.len(), 2);
     assert_eq!(report.sources[0].format, SourceFormat::ClaudeCli);
     assert_eq!(report.sources[0].session, "claude-a");
@@ -685,7 +714,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
         report
             .notices
             .contains(&DiscoveryNotice::UnsupportedClient {
-                client: "hermes".to_owned(),
+                client: "kimi".to_owned(),
             })
     );
     assert!(report.notices.contains(&DiscoveryNotice::SourceInvalid {
@@ -944,6 +973,40 @@ fn goose_database_uses_the_first_existing_or_authoritative_override() {
     let report = discover(&paths).unwrap();
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].format, SourceFormat::GooseSqlite);
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn hermes_state_database_is_discovered_at_the_home_and_profile_roles() {
+    let tree = Tree::new();
+    hermes_database(&tree.0.join(".hermes/state.db"));
+
+    let mut paths = tree.paths(&["hermes"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::HermesSqlite);
+
+    // A profile with its own database is a second source.
+    hermes_database(&tree.0.join(".hermes/profiles/work/state.db"));
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::HermesSqlite)
+    );
+
+    // An absolute HERMES_HOME outranks the home directory.
+    let override_root = tree.directory("hermes-override");
+    hermes_database(&override_root.join("state.db"));
+    paths
+        .env_paths
+        .insert("HERMES_HOME".to_owned(), override_root.clone());
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

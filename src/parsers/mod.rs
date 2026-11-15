@@ -10,6 +10,7 @@ pub mod copilot;
 pub mod cursor;
 pub mod gemini;
 pub mod goose;
+pub mod hermes;
 pub mod jsonl;
 pub mod kilo;
 pub mod mcode;

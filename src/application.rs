@@ -1167,6 +1167,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
         SourceFormat::GooseSqlite => "goose",
+        SourceFormat::HermesSqlite => "hermes",
         SourceFormat::KiloSqlite => "kilo",
         SourceFormat::SessionArchiveSqlite => "mixed",
         SourceFormat::OpenCodeSqlite => "opencode",

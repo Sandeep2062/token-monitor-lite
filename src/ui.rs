@@ -805,6 +805,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "cursor",
         "gemini",
         "goose",
+        "hermes",
         "kilo",
         "mcode",
         "muse",
@@ -878,6 +879,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "cursor"
             | "gemini"
             | "goose"
+            | "hermes"
             | "kilo"
             | "mcode"
             | "muse"
@@ -906,6 +908,7 @@ fn is_supported_client(client: &str) -> bool {
             | "cursor"
             | "gemini"
             | "goose"
+            | "hermes"
             | "kilo"
             | "mcode"
             | "muse"
@@ -932,6 +935,7 @@ fn client_label(client: &str) -> &'static str {
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
         "goose" => "Goose",
+        "hermes" => "Hermes Agent",
         "kilo" => "Kilo",
         "mcode" => "MiniMax Code",
         "muse" => "Muse Code",
@@ -1377,6 +1381,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::CursorCacheJson => "Cursor",
         SourceFormat::GeminiTranscript => "Gemini CLI",
         SourceFormat::GooseSqlite => "Goose",
+        SourceFormat::HermesSqlite => "Hermes Agent",
         SourceFormat::KiloSqlite => "Kilo",
         SourceFormat::SessionArchiveSqlite => "Session archive",
         SourceFormat::CodexLocalUsageSqlite => "Codex local usage",

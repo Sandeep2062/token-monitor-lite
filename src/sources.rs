@@ -61,6 +61,7 @@ pub enum SourceFormat {
     OpenCodeSqlite,
     KiloSqlite,
     GooseSqlite,
+    HermesSqlite,
 }
 
 impl SourceFormat {
@@ -90,6 +91,7 @@ impl SourceFormat {
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
             Self::GooseSqlite => "goose",
+            Self::HermesSqlite => "hermes",
         }
     }
 
@@ -120,6 +122,7 @@ impl SourceFormat {
             Self::OpenCodeSqlite => "opencode-sqlite",
             Self::KiloSqlite => "kilo-sqlite",
             Self::GooseSqlite => "goose-sqlite",
+            Self::HermesSqlite => "hermes-sqlite",
         }
     }
 
@@ -150,6 +153,7 @@ impl SourceFormat {
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
             "kilo-sqlite" => Some(Self::KiloSqlite),
             "goose-sqlite" => Some(Self::GooseSqlite),
+            "hermes-sqlite" => Some(Self::HermesSqlite),
             _ => None,
         }
     }
@@ -162,6 +166,7 @@ impl SourceFormat {
                 | Self::OpenCodeSqlite
                 | Self::KiloSqlite
                 | Self::GooseSqlite
+                | Self::HermesSqlite
                 | Self::ZedSqlite
                 | Self::WorkBuddySqlite
                 | Self::AntigravitySqlite
@@ -828,6 +833,7 @@ impl SourceReader {
             | SourceFormat::OpenCodeSqlite
             | SourceFormat::KiloSqlite
             | SourceFormat::GooseSqlite
+            | SourceFormat::HermesSqlite
             | SourceFormat::ZedSqlite
             | SourceFormat::WorkBuddySqlite
             | SourceFormat::AntigravitySqlite => {
@@ -847,6 +853,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::OpenCode(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zed(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::WorkBuddySqlite(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::AntigravitySqlite(rows) => (rows, Arc::from([])),

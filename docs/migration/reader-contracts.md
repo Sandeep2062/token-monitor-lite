@@ -195,6 +195,19 @@ Goose stores one cumulative row per session in `sessions.db`. The reader opens t
 | Negative counter, invalid timestamp/ID, or malformed required column | visible unsupported | Discard the candidate. | Prior source generation retained. |
 | Multiple candidate databases, WAL sidecars, inferred reasoning, cost/currency, conversation content | ignored / visible unsupported | Only the first existing database is read; sidecars are one logical source. No reasoning, pricing or content is invented. | No additional source slot. |
 
+## Hermes Agent matrix
+
+Hermes records usage only as per-session aggregates in `state.db`. `session_model_usage` breaks a session down per model and provider; builds that predate that table carry totals on `sessions` alone. The native reader prefers the per-model rows and falls back to session totals only for sessions the child table does not cover, so the two passes are disjoint by session and cannot double count. `reasoning_tokens` is a subset of the inclusive `output_tokens`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `session_model_usage` row joined to `sessions`, non-empty model, non-zero counters | supported | One observation per (session, model, provider). Output is stored inclusively, so the additive output bucket is `output - reasoning` while `reasoning` is kept separately. Cost is unavailable. | Session `sessions.id`; identity `hermes:<session>:<model>:<provider>`, where a NULL provider renders as `<null>` so SQLite's separate NULL and empty-string groups stay apart. |
+| `sessions` row with no covering `session_model_usage` row | supported fallback | One observation credited to `sessions.model`. |
+| `reasoning_tokens` greater than `output_tokens` | visible unsupported | Discard the candidate. The native reader does not invent a negative additive output. |
+| Missing/empty model, invalid session identity, negative counter, unusable `started_at` | visible unsupported | Discard the candidate. `started_at` is Unix seconds; the database mtime is the fallback timestamp. |
+| All-zero counter row | ignored non-usage | No row. |
+| `logs/agent.log*` cross-day split, `sessions.title`, actual/estimated cost columns, WAL-active writes | visible unsupported / ignored | The pinned reader re-attributes an aggregate across days using the rotated per-call logs; the native reader deliberately keeps the whole session on its recorded `started_at` instead of trusting a second unvalidated input. Titles are presentation-only and never persisted. |
+
 ## Copilot OTel matrix
 
 The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Each line must carry its own `attributes`; cross-line trace enrichment and VS Code session-state stores are not implemented. A file that mixes chat spans, inference logs, agent-turn logs and agent summary spans uses only the highest-priority source present, preventing one turn from being counted twice.
@@ -220,7 +233,7 @@ Both clients share one JSONL record shape under their own project roots. CodeBud
 | Non-completed status, user/turn-metrics/control row, unrelated row, or zero usage | ignored non-usage | No row. | No ownership change. |
 | Repeated message identity | supported | The larger token total replaces the earlier row; equal totals keep the first. | Within one source only. |
 | Negative/fractional counter, malformed JSON, invalid identity, or absent timestamp and file-mtime fallback | visible unsupported | Discard the candidate. The pinned reader clamps and skips; the native reader does neither. | Prior committed generation remains active. |
-| CodeBuddy extension log settlement | supported | `Model prepared:` anchors the model by agent; `AgentReporter … usage:` supplies the usage object. Identity uses agent, settlement second and token components so mirrored sinks collapse. | Agent id is the session; a log with no settlement produces no rows. |
+| CodeBuddy extension log settlement | supported | `Model prepared:` anchors the model by agent; `AgentReporter ï¿½ usage:` supplies the usage object. Identity uses agent, settlement second and token components so mirrored sinks collapse. | Agent id is the session; a log with no settlement produces no rows. |
 | WorkBuddy aggregate `session_usage` + `sessions` database | supported fallback | One observation per row: `used` is input, `sessions.model` is the model (else `auto`), `updated_at` is normalized seconds/milliseconds. Identity is `workbuddy:<session>:<updated_at>`. Admitted only when no detailed JSONL source exists. | Session id; no workspace, provider or cost projection. |
 | WorkBuddy workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No workspace projection, timing or pricing. | No additional source slot. |
 

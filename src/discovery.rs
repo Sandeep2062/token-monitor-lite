@@ -5,9 +5,9 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_DECODED_BYTES,
-    OpenCodeAdapter, SessionArchiveAdapter, SourceInput, WorkBuddySqliteAdapter, ZedAdapter,
-    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
+    MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter, SourceInput, WorkBuddySqliteAdapter,
+    ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -1076,6 +1076,60 @@ fn goose_database_path(inputs: &HostPaths) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
+/// Hermes resolves its home from `HERMES_HOME`, then `~/.hermes`, then the
+/// Windows-native `%LOCALAPPDATA%\hermes` (reference `resolveHermesHome`). The
+/// native resolver keeps the same precedence and requires each candidate to
+/// actually hold a `state.db`, so a stale `~/.hermes` directory does not shadow
+/// a real Windows install.
+fn hermes_home(inputs: &HostPaths) -> PathBuf {
+    if let Some(root) = inputs.env_paths.get("HERMES_HOME") {
+        let text = root.to_string_lossy();
+        if !text.trim().is_empty() && root.is_absolute() {
+            return root.to_path_buf();
+        }
+    }
+    let dot_hermes = join_many(inputs.platform, &inputs.home, &[".hermes"]);
+    if dot_hermes.join("state.db").is_file() {
+        return dot_hermes;
+    }
+    if inputs.platform == HostPlatform::Windows {
+        let local_app_data = inputs
+            .env_paths
+            .get("LOCALAPPDATA")
+            .filter(|path| path.is_absolute() && !path.to_string_lossy().trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| join_many(inputs.platform, &inputs.home, &["AppData", "Local"]));
+        let win_native = join_many(inputs.platform, &local_app_data, &["hermes"]);
+        if win_native.join("state.db").is_file() {
+            return win_native;
+        }
+    }
+    dot_hermes
+}
+
+/// The base `state.db` plus each `profiles/<name>/state.db` the reference
+/// watches. Sorted and deduplicated by the caller.
+fn hermes_state_databases(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let base = root.join("state.db");
+    if base.is_file() {
+        paths.push(base);
+    }
+    let Ok(entries) = fs::read_dir(root.join("profiles")) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let candidate = entry.path().join("state.db");
+        if candidate.is_file() {
+            paths.push(candidate);
+        }
+    }
+    paths
+}
+
 fn collect_copilot_candidates(
     directory: &Path,
     depth: usize,
@@ -2002,6 +2056,55 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "hermes" {
+            let root = hermes_home(inputs);
+            let mut candidates = hermes_state_databases(&root);
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                let ordinal = index + 1;
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.file_type().is_file() => {
+                        if metadata.len() <= MAX_SOURCE_FILE_BYTES && sources.len() < MAX_SOURCES {
+                            match HermesAdapter::new(&path).read() {
+                                Ok(rows) if !rows.is_empty() => {
+                                    let source_id =
+                                        source_id_for(SourceFormat::HermesSqlite, &path);
+                                    if admitted_ids.insert(source_id) {
+                                        sources.push(DiscoveredSource {
+                                            source_id,
+                                            format: SourceFormat::HermesSqlite,
+                                            session: "hermes".to_owned(),
+                                            path,
+                                        });
+                                    } else {
+                                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                                    }
+                                }
+                                _ => notices.push(DiscoveryNotice::SourceInvalid {
+                                    client: "hermes",
+                                    ordinal,
+                                }),
+                            }
+                        } else if sources.len() >= MAX_SOURCES {
+                            notices.push(DiscoveryNotice::SourceLimitReached);
+                        } else {
+                            notices.push(DiscoveryNotice::SourceInvalid {
+                                client: "hermes",
+                                ordinal,
+                            });
+                        }
+                    }
+                    Ok(_) => notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "hermes",
+                        ordinal,
+                    }),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            continue;
+        }
         if client == "copilot" {
             let root = join_many(inputs.platform, &inputs.home, &[".copilot", "otel"]);
             let mut candidates = Vec::new();
@@ -2599,6 +2702,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 | SourceFormat::OpenCodeSqlite
                 | SourceFormat::KiloSqlite
                 | SourceFormat::GooseSqlite
+                | SourceFormat::HermesSqlite
                 | SourceFormat::ZedSqlite
                 | SourceFormat::WorkBuddySqlite
                 | SourceFormat::AntigravitySqlite

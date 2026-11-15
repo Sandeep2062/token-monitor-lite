@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 33
+CLAUDE_SOURCES = 32
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -60,6 +60,7 @@ CLINE_SOURCES = 1
 AMP_SOURCES = 1
 KILO_SOURCES = 1
 GOOSE_SOURCES = 1
+HERMES_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -86,6 +87,7 @@ SOURCE_COUNT = (
     + AMP_SOURCES
     + KILO_SOURCES
     + GOOSE_SOURCES
+    + HERMES_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -847,6 +849,82 @@ def _goose_database(path: Path) -> tuple[str, dict[str, int], int]:
     finally:
         connection.close()
     return session, totals, 1
+
+
+def _hermes_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One Hermes session that used several models, broken down per model.
+
+    Hermes records per-session aggregates under `session_model_usage`, so a
+    single session spanning models is one canonical session with one
+    observation per model/provider group.
+    """
+    session = "hermes-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                billing_provider TEXT,
+                started_at REAL NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER
+            ) STRICT;"""
+        )
+        connection.execute(
+            """CREATE TABLE session_model_usage (
+                session_id TEXT NOT NULL,
+                model TEXT,
+                billing_provider TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                PRIMARY KEY (session_id, model, billing_provider)
+            ) STRICT;"""
+        )
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session, "claude-sonnet-4-5", "anthropic", 1_784_000_000.0, 0, 0, 0, 0, 0),
+        )
+        rows = []
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            # Hermes stores inclusive output; the reader subtracts the reasoning
+            # subset, so the declared totals carry the additive output while the
+            # database row stores output + reasoning.
+            counts = {
+                "input": 500,
+                "output": 80,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "reasoning": 20,
+            }
+            _add_counts(totals, counts)
+            rows.append(
+                (
+                    session,
+                    f"hermes-model-{observation:02d}",
+                    "anthropic",
+                    counts["input"],
+                    counts["output"] + counts["reasoning"],
+                    0,
+                    0,
+                    counts["reasoning"],
+                )
+            )
+        connection.executemany(
+            "INSERT INTO session_model_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, len(rows)
 
 
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -1633,6 +1711,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, goose_totals)
     physical_bytes += goose_target.stat().st_size
     decoded_bytes += goose_target.stat().st_size
+
+    hermes_target = root / "home" / ".hermes" / "state.db"
+    hermes_session, hermes_totals, hermes_rows = _hermes_database(hermes_target)
+    hermes_entry = dict(
+        _existing_entry(root, "home/.hermes/state.db", hermes_target),
+        format="hermes-sqlite",
+        session=hermes_session,
+        observations=hermes_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=hermes_target.stat().st_size,
+        physicalBytes=hermes_target.stat().st_size,
+        expectedTotals=hermes_totals,
+        retainedPeriods=0,
+    )
+    sources.append(hermes_entry)
+    _add_counts(aggregate, hermes_totals)
+    _add_counts(canonical_aggregate, hermes_totals)
+    physical_bytes += hermes_target.stat().st_size
+    decoded_bytes += hermes_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(
