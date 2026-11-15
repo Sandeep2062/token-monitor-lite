@@ -1189,3 +1189,36 @@ fn codebuddy_extension_logs_are_discovered_beside_projects() {
     assert_eq!(report.sources[0].format, SourceFormat::CodeBuddyJsonl);
     assert_eq!(report.sources[0].session, "main");
 }
+
+#[test]
+fn workbuddy_database_is_only_a_fallback_when_no_jsonl_exists() {
+    let tree = Tree::new();
+    let db = tree.0.join(".workbuddy/workbuddy.db");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&db).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, model TEXT);
+             CREATE TABLE session_usage (
+                 session_id TEXT PRIMARY KEY, used INTEGER, size INTEGER,
+                 updated_at INTEGER, credit_json TEXT
+             );
+             INSERT INTO sessions VALUES ('db-session', NULL, 'deepseek-v4-pro');
+             INSERT INTO session_usage VALUES ('db-session', 42, 1000, 1780000000000, '{}');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let report = discover(&tree.paths(&["workbuddy"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::WorkBuddySqlite);
+
+    tree.file(
+        ".workbuddy/projects/project/session.jsonl",
+        br#"{"id":"a1","timestamp":1780000000000,"type":"message","role":"assistant","sessionId":"jsonl-session","providerData":{"model":"m","messageId":"m1"},"message":{"usage":{"input_tokens":4,"output_tokens":1}}}
+"#,
+    );
+    let report = discover(&tree.paths(&["workbuddy"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::WorkBuddyJsonl);
+}

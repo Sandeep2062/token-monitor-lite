@@ -1177,6 +1177,13 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn workbuddy_database_paths(inputs: &HostPaths) -> Vec<PathBuf> {
+    [".workbuddy", ".workbuddy-ai"]
+        .into_iter()
+        .map(|base| join_many(inputs.platform, &inputs.home, &[base, "workbuddy.db"]))
+        .collect()
+}
+
 fn codebuddy_log_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     let local = inputs
         .local_app_data
@@ -2114,6 +2121,57 @@ fn discover_sources_with_id(
                 }
                 Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
                     client: client_id,
+                    ordinal,
+                }),
+            }
+        }
+    }
+    if inputs.enabled_clients.contains("workbuddy")
+        && !sources
+            .iter()
+            .any(|source: &DiscoveredSource| source.format == SourceFormat::WorkBuddyJsonl)
+    {
+        for (ordinal, path) in workbuddy_database_paths(inputs).into_iter().enumerate() {
+            let ordinal = ordinal + 1;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if !metadata.file_type().is_file() {
+                notices.push(DiscoveryNotice::SourceNotRegular {
+                    client: "workbuddy",
+                    ordinal,
+                });
+                continue;
+            }
+            if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                notices.push(DiscoveryNotice::SourceInvalid {
+                    client: "workbuddy",
+                    ordinal,
+                });
+                continue;
+            }
+            match WorkBuddySqliteAdapter::new(&path).read() {
+                Ok(rows) if !rows.is_empty() => {
+                    if sources.len() == MAX_SOURCES {
+                        notices.push(DiscoveryNotice::SourceLimitReached);
+                        return Ok(sources);
+                    }
+                    let source_id = source_id_for(SourceFormat::WorkBuddySqlite, &path);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::WorkBuddySqlite,
+                            session: "workbuddy".to_owned(),
+                            path,
+                        });
+                        break;
+                    }
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                }
+                _ => notices.push(DiscoveryNotice::SourceInvalid {
+                    client: "workbuddy",
                     ordinal,
                 }),
             }

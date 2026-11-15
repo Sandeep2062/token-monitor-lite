@@ -12,6 +12,7 @@ use crate::parsers::kilo::KiloReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
+use crate::parsers::workbuddy::sqlite_row_to_usage;
 use crate::parsers::zed::ZedReader;
 use crate::parsers::{CostStatus, ReaderError, ResponseUsage};
 use crate::runtime::MonitoredSource;
@@ -260,6 +261,24 @@ impl KiloAdapter {
     }
 }
 
+pub struct WorkBuddySqliteAdapter {
+    path: PathBuf,
+}
+
+impl WorkBuddySqliteAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_workbuddy_sqlite(&self.path)
+    }
+}
+
 pub struct ZedAdapter {
     path: PathBuf,
 }
@@ -316,6 +335,7 @@ pub enum InputAdapterStatus {
     KiloSqlite,
     GooseSqlite,
     ZedSqlite,
+    WorkBuddySqlite,
 }
 
 pub(crate) enum SqliteInputData {
@@ -325,6 +345,7 @@ pub(crate) enum SqliteInputData {
     Kilo(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Zed(Arc<[ResponseUsage]>),
+    WorkBuddySqlite(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -424,6 +445,7 @@ pub enum SourceInput {
     Kilo(KiloAdapter),
     Goose(GooseAdapter),
     Zed(ZedAdapter),
+    WorkBuddySqlite(WorkBuddySqliteAdapter),
 }
 
 impl SourceInput {
@@ -443,6 +465,9 @@ impl SourceInput {
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
+            SourceFormat::WorkBuddySqlite => {
+                Self::WorkBuddySqlite(WorkBuddySqliteAdapter::new(path))
+            }
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::ClineJson => Self::document(path),
@@ -549,6 +574,7 @@ impl SourceInput {
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Zed(_) => InputAdapterStatus::ZedSqlite,
+            Self::WorkBuddySqlite(_) => InputAdapterStatus::WorkBuddySqlite,
         }
     }
 
@@ -567,7 +593,8 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
-            | Self::Zed(_) => {}
+            | Self::Zed(_)
+            | Self::WorkBuddySqlite(_) => {}
         }
     }
 
@@ -586,7 +613,8 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
-            | Self::Zed(_) => Ok(true),
+            | Self::Zed(_)
+            | Self::WorkBuddySqlite(_) => Ok(true),
         }
     }
 
@@ -602,6 +630,9 @@ impl SourceInput {
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Zed(adapter) => Ok(Some(SqliteInputData::Zed(adapter.read()?))),
+            Self::WorkBuddySqlite(adapter) => {
+                Ok(Some(SqliteInputData::WorkBuddySqlite(adapter.read()?)))
+            }
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -629,6 +660,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Zed(adapter) => Some(adapter.path()),
+            Self::WorkBuddySqlite(adapter) => Some(adapter.path()),
         }
     }
 
@@ -667,7 +699,8 @@ impl SourceInput {
             | Self::OpenCode(_)
             | Self::Kilo(_)
             | Self::Goose(_)
-            | Self::Zed(_) => Err(invalid("sqlite input has no JSONL batch")),
+            | Self::Zed(_)
+            | Self::WorkBuddySqlite(_) => Err(invalid("sqlite input has no JSONL batch")),
         }
     }
 }
@@ -1471,6 +1504,62 @@ fn read_kilo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_workbuddy_sqlite(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "session_usage",
+        &["session_id", "used", "updated_at"],
+    )?;
+    let sessions = table_columns(&transaction, "sessions")?;
+    let model = if sessions
+        .as_ref()
+        .is_some_and(|columns| columns.contains("model"))
+    {
+        "s.model"
+    } else {
+        "NULL"
+    };
+    let mut rows = Vec::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&format!(
+            "SELECT su.session_id, su.used, su.updated_at, {model}
+             FROM session_usage su LEFT JOIN sessions s ON s.id = su.session_id
+             WHERE su.used IS NOT NULL AND su.used > 0
+               AND su.updated_at IS NOT NULL AND su.updated_at > 0
+             ORDER BY su.session_id, su.updated_at LIMIT ?1 OFFSET ?2"
+        ))?;
+        let mut page = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = page.next()? {
+            let session: String = row.get(0)?;
+            let used: i64 = row.get(1)?;
+            let updated_at: i64 = row.get(2)?;
+            let model: Option<String> = row.get(3)?;
+            let used = u64::try_from(used).map_err(|_| SqliteSourceError::Invalid)?;
+            rows.push(
+                sqlite_row_to_usage(&session, model.as_deref(), used, updated_at)
+                    .map_err(map_opencode_error)?,
+            );
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    if rows.len() > MAX_LOCAL_USAGE_ROWS {
+        return Err(SqliteSourceError::Capacity);
+    }
+    Ok(Arc::from(rows))
 }
 
 fn read_zed(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

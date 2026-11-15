@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use token_monitor_lite::source_inputs::{
     ArchivePeriod, CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_ARCHIVE_ENTRY_BYTES,
-    OpenCodeAdapter, SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole, ZedAdapter,
-    classify_sqlite_source,
+    OpenCodeAdapter, SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole,
+    WorkBuddySqliteAdapter, ZedAdapter, classify_sqlite_source,
 };
 use token_monitor_lite::sources::{SourceFormat, SourceProgress, SourceReader};
 
@@ -1188,4 +1188,39 @@ fn zed_threads_are_read_from_json_and_zstd_payloads() {
         .find(|row| row.key.session == "thread-zstd")
         .unwrap();
     assert_eq!(zstd.tokens.input, 3);
+}
+
+#[test]
+fn workbuddy_sqlite_fallback_reads_session_usage() {
+    let root = Root::new();
+    let path = root.path("workbuddy.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, model TEXT);
+             CREATE TABLE session_usage (
+                 session_id TEXT PRIMARY KEY, used INTEGER, size INTEGER,
+                 updated_at INTEGER, credit_json TEXT
+             );
+             INSERT INTO sessions VALUES ('session-1', '/tmp/project', 'deepseek-v4-pro');",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_usage VALUES (?1, ?2, ?3, ?4, '{}')",
+            params!["session-1", 1234_i64, 1_000_000_i64, 1_780_000_000_000_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    let rows = WorkBuddySqliteAdapter::new(&path).read().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key.client, "workbuddy");
+    assert_eq!(rows[0].key.session, "session-1");
+    assert_eq!(rows[0].model, "deepseek-v4-pro");
+    assert_eq!(rows[0].tokens.input, 1234);
+    assert_eq!(
+        rows[0].dedup_key.as_deref(),
+        Some("workbuddy:session-1:1780000000000")
+    );
 }

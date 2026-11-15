@@ -210,7 +210,7 @@ The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Eac
 
 ## CodeBuddy and WorkBuddy transcript matrix
 
-Both clients share one JSONL record shape under their own project roots. CodeBuddy reads `<home>/.codebuddy/projects/**/*.jsonl` plus `CodeBuddyExtension/Logs/**/*.log`; WorkBuddy reads `<home>/.workbuddy/projects/**/*.jsonl` and `<home>/.workbuddy-ai/projects/**/*.jsonl`. WorkBuddy's aggregate `workbuddy.db` is not read.
+Both clients share one JSONL record shape under their own project roots. CodeBuddy reads `<home>/.codebuddy/projects/**/*.jsonl` plus `CodeBuddyExtension/Logs/**/*.log`; WorkBuddy reads `<home>/.workbuddy/projects/**/*.jsonl` and `<home>/.workbuddy-ai/projects/**/*.jsonl`. When no detailed JSONL source exists, WorkBuddy falls back to `<home>/.workbuddy/workbuddy.db` or `.workbuddy-ai/workbuddy.db`; the database is never added beside a JSONL source.
 
 | Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
 |---|---|---|---|
@@ -221,7 +221,8 @@ Both clients share one JSONL record shape under their own project roots. CodeBud
 | Repeated message identity | supported | The larger token total replaces the earlier row; equal totals keep the first. | Within one source only. |
 | Negative/fractional counter, malformed JSON, invalid identity, or absent timestamp and file-mtime fallback | visible unsupported | Discard the candidate. The pinned reader clamps and skips; the native reader does neither. | Prior committed generation remains active. |
 | CodeBuddy extension log settlement | supported | `Model prepared:` anchors the model by agent; `AgentReporter … usage:` supplies the usage object. Identity uses agent, settlement second and token components so mirrored sinks collapse. | Agent id is the session; a log with no settlement produces no rows. |
-| WorkBuddy `workbuddy.db`, workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No SQLite fallback, workspace projection, timing or pricing. | No additional source slot. |
+| WorkBuddy aggregate `session_usage` + `sessions` database | supported fallback | One observation per row: `used` is input, `sessions.model` is the model (else `auto`), `updated_at` is normalized seconds/milliseconds. Identity is `workbuddy:<session>:<updated_at>`. Admitted only when no detailed JSONL source exists. | Session id; no workspace, provider or cost projection. |
+| WorkBuddy workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No workspace projection, timing or pricing. | No additional source slot. |
 
 ## Pi-format matrix (Pi, Oh My Pi, OmO Native)
 
