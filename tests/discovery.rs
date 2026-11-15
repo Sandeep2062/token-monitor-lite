@@ -291,6 +291,76 @@ fn qodercn_database(path: &Path) {
         .unwrap();
 }
 
+fn cherrystudio_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE ai_usage_record (
+                id TEXT PRIMARY KEY,
+                message_id TEXT,
+                provider_id TEXT,
+                model_id TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                cost REAL,
+                cost_currency TEXT,
+                created_at INTEGER,
+                message_kind TEXT,
+                record_kind TEXT
+             );
+             CREATE TABLE message (id TEXT PRIMARY KEY, topic_id TEXT);
+             CREATE TABLE topic (id TEXT PRIMARY KEY, name TEXT);
+             INSERT INTO topic (id, name) VALUES ('t1', 'Fixture topic');
+             INSERT INTO message (id, topic_id) VALUES ('m1', 't1');
+             INSERT INTO ai_usage_record
+                (id, message_id, provider_id, model_id, input_tokens, output_tokens,
+                 cache_read_tokens, cache_write_tokens, reasoning_tokens, cost,
+                 cost_currency, created_at, message_kind, record_kind)
+             VALUES ('r1', 'm1', 'anthropic', 'claude-sonnet-4', 700, 200, 300, 100, 50,
+                     0.0, 'USD', 1782718000000, 'chat', 'invocation');",
+        )
+        .unwrap();
+}
+
+#[test]
+fn cherrystudio_chat_ledger_is_discovered_under_the_data_directory() {
+    let tree = Tree::new();
+    let database = tree.file(".config/CherryStudio/Data/cherrystudio.sqlite", b"");
+    cherrystudio_database(&database);
+
+    let paths = tree.paths(&["cherrystudio"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::CherrystudioSqlite);
+
+    // The Agent transcripts are the same billed calls the `claude` client
+    // reports, so they are deliberately not scanned here.
+    let claude = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        claude
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::CherrystudioSqlite)
+    );
+}
+
+#[test]
+fn cherrystudio_is_silent_without_its_ledger() {
+    let tree = Tree::new();
+    // The attachments directory alone must not claim chat usage is available.
+    tree.file(".config/CherryStudio/Data/attachments/a.png", b"x");
+    assert!(
+        discover(&tree.paths(&["cherrystudio"]))
+            .unwrap()
+            .sources
+            .is_empty()
+    );
+}
+
 fn zcode_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();

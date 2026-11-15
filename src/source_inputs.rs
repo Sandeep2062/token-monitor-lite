@@ -6,6 +6,7 @@
 use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::antigravity::AntigravityDbReader;
 use crate::parsers::catpaw;
+use crate::parsers::cherrystudio;
 use crate::parsers::goose::{GooseReader, GooseRow};
 use crate::parsers::hermes::{HermesReader, HermesRow};
 use crate::parsers::jsonl::{
@@ -275,6 +276,24 @@ impl CatpawAdapter {
 
     pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
         read_catpaw(&self.path, self.edition)
+    }
+}
+
+pub struct CherrystudioAdapter {
+    path: PathBuf,
+}
+
+impl CherrystudioAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_cherrystudio(&self.path)
     }
 }
 
@@ -583,6 +602,7 @@ pub enum InputAdapterStatus {
     QodercnSqlite,
     DshJsonl,
     CatpawSqlite,
+    CherrystudioSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -600,6 +620,7 @@ pub(crate) enum SqliteInputData {
     Zcode(Arc<[ResponseUsage]>),
     Qodercn(Arc<[ResponseUsage]>),
     Catpaw(Arc<[ResponseUsage]>),
+    Cherrystudio(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -716,6 +737,7 @@ pub enum SourceInput {
     Zcode(ZcodeAdapter),
     Qodercn(QodercnAdapter),
     Catpaw(CatpawAdapter),
+    Cherrystudio(CherrystudioAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -743,6 +765,7 @@ impl SourceInput {
             SourceFormat::ZcodeSqlite => Self::Zcode(ZcodeAdapter::new(path)),
             SourceFormat::QodercnSqlite => Self::Qodercn(QodercnAdapter::new(path)),
             SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
+            SourceFormat::CherrystudioSqlite => Self::Cherrystudio(CherrystudioAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -925,6 +948,7 @@ impl SourceInput {
             Self::Zcode(_) => InputAdapterStatus::ZcodeSqlite,
             Self::Qodercn(_) => InputAdapterStatus::QodercnSqlite,
             Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
+            Self::Cherrystudio(_) => InputAdapterStatus::CherrystudioSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -961,6 +985,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Cherrystudio(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -997,6 +1022,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Cherrystudio(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -1020,6 +1046,7 @@ impl SourceInput {
             Self::Zcode(adapter) => Ok(Some(SqliteInputData::Zcode(adapter.read()?))),
             Self::Qodercn(adapter) => Ok(Some(SqliteInputData::Qodercn(adapter.read()?))),
             Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
+            Self::Cherrystudio(adapter) => Ok(Some(SqliteInputData::Cherrystudio(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -1077,6 +1104,7 @@ impl SourceInput {
             Self::Zcode(adapter) => Some(adapter.path()),
             Self::Qodercn(adapter) => Some(adapter.path()),
             Self::Catpaw(adapter) => Some(adapter.path()),
+            Self::Cherrystudio(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -1193,6 +1221,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Cherrystudio(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2836,6 +2865,171 @@ fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(responses))
+}
+
+fn read_cherrystudio(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    // The table has shipped several spellings, so every optional column is
+    // probed. Naming a column this build lacks would fail the whole statement
+    // to prepare and silently take the lane to zero.
+    let mut columns = {
+        let mut statement = transaction.prepare("PRAGMA table_info(ai_usage_record)")?;
+        let mut rows = statement.query([])?;
+        let mut names = BTreeSet::new();
+        while let Some(row) = rows.next()? {
+            names.insert(row.get::<_, String>(1)?);
+        }
+        names
+    };
+    if !columns.contains("id") || !columns.contains("created_at") {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    let has = |columns: &BTreeSet<String>, name: &str| columns.contains(name);
+    let column = |columns: &BTreeSet<String>, name: &str, qualifier: &str| {
+        if has(columns, name) {
+            format!("{qualifier}.{name}")
+        } else {
+            "NULL".to_owned()
+        }
+    };
+    // The cache-write bucket was renamed; either spelling may be present.
+    let cache_write = if has(&columns, "cache_write_tokens") {
+        "r.cache_write_tokens"
+    } else if has(&columns, "cache_creation_tokens") {
+        "r.cache_creation_tokens"
+    } else {
+        "NULL"
+    };
+    // Conversation identity lives on `message` (its title on `topic`), so the
+    // join is what lets a row name the conversation it belongs to. Each table
+    // is probed separately because a build may carry one without the other.
+    let link_topic = has(&columns, "message_id")
+        && table_has_column_for(&transaction, "message", "id")?
+        && table_has_column_for(&transaction, "message", "topic_id")?
+        && table_has_column_for(&transaction, "topic", "id")?
+        && table_has_column_for(&transaction, "topic", "name")?;
+    let title = if link_topic { "t.name" } else { "NULL" };
+    let joins = if link_topic {
+        "LEFT JOIN message m ON m.id = r.message_id
+         LEFT JOIN topic t ON t.id = m.topic_id"
+    } else {
+        ""
+    };
+    // `message_kind` separates the two surfaces. A build without it cannot tell
+    // them apart, so it must report every row: the transcripts keep each
+    // invocation distinct, and guessing would be worse than reporting.
+    let (kind, kind_filter) = if has(&columns, "message_kind") {
+        (
+            "r.message_kind",
+            " AND (r.message_kind IS NULL OR r.message_kind = 'chat')",
+        )
+    } else {
+        ("NULL", "")
+    };
+    // `legacy-aggregate` rows are pre-summed history for the same calls, so
+    // reading them beside per-invocation rows double counts.
+    let record_kind_filter = if has(&columns, "record_kind") {
+        "r.record_kind = 'invocation'"
+    } else {
+        "1 = 1"
+    };
+
+    let sql = format!(
+        "SELECT r.id, {message_id}, {title}, {provider}, {model},
+                {input}, {output}, {cache_read}, {cache_write}, {reasoning},
+                {cost}, r.created_at, {kind}, {no_cache}, {currency}
+         FROM ai_usage_record r
+         {joins}
+         WHERE {record_kind_filter}{kind_filter}
+         ORDER BY r.created_at, r.id LIMIT ?1 OFFSET ?2",
+        message_id = column(&columns, "message_id", "r"),
+        title = title,
+        provider = column(&columns, "provider_id", "r"),
+        model = column(&columns, "model_id", "r"),
+        input = column(&columns, "input_tokens", "r"),
+        output = column(&columns, "output_tokens", "r"),
+        cache_read = column(&columns, "cache_read_tokens", "r"),
+        cache_write = cache_write,
+        reasoning = column(&columns, "reasoning_tokens", "r"),
+        cost = column(&columns, "cost", "r"),
+        kind = kind,
+        no_cache = column(&columns, "no_cache_tokens", "r"),
+        currency = column(&columns, "cost_currency", "r"),
+    );
+    columns.clear();
+
+    let mut reader = cherrystudio::CherryReader::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let message_id: Option<String> = row.get(1)?;
+            let session_title: Option<String> = row.get(2)?;
+            let provider_id: Option<String> = row.get(3)?;
+            let model_id: Option<String> = row.get(4)?;
+            let cost_currency: Option<String> = row.get(14)?;
+            let message_kind: Option<String> = row.get(12)?;
+            reader
+                .ingest(cherrystudio::CherryRow {
+                    id: &id,
+                    message_id: message_id.as_deref(),
+                    session_title: session_title.as_deref(),
+                    provider_id: provider_id.as_deref(),
+                    model_id: model_id.as_deref(),
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    cache_read_tokens: row.get(7)?,
+                    cache_write_tokens: row.get(8)?,
+                    reasoning_tokens: row.get(9)?,
+                    no_cache_tokens: row.get(13)?,
+                    cost: row.get(10)?,
+                    cost_currency: cost_currency.as_deref(),
+                    created_at: row.get(11)?,
+                    message_kind: message_kind.as_deref(),
+                })
+                .map_err(map_cherrystudio_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+/// Whether `table` exists and carries `name`, for probing optional joins.
+fn table_has_column_for(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    name: &str,
+) -> Result<bool, SqliteSourceError> {
+    let mut statement = transaction.prepare(&format!("PRAGMA table_info('{table}')"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn map_cherrystudio_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
 }
 
 fn read_qodercn(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

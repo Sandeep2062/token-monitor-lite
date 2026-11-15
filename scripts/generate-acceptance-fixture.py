@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 21
+CLAUDE_SOURCES = 20
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -72,6 +72,7 @@ KIRO_SOURCES = 1
 PROMA_SOURCES = 1
 QODERCN_SOURCES = 1
 DSH_SOURCES = 1
+CHERRYSTUDIO_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -110,6 +111,7 @@ SOURCE_COUNT = (
     + PROMA_SOURCES
     + QODERCN_SOURCES
     + DSH_SOURCES
+    + CHERRYSTUDIO_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1206,6 +1208,75 @@ def _proma_source() -> tuple[str, bytes, dict[str, int], int]:
         )
     data = b"".join(_json_line(entry) for entry in lines)
     return f"{session}.jsonl", data, totals, len(lines)
+
+
+def _cherrystudio_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One Cherry Studio chat ledger, one invocation row per observation.
+
+    The ledger's counters are inclusive: `input_tokens` is the whole prompt and
+    `output_tokens` the whole completion, with the cache and reasoning shares
+    counted again in their own columns. The inclusive figures are stored here
+    and the native reader splits them back out.
+    """
+    session = "cherrystudio-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE ai_usage_record (
+                id TEXT PRIMARY KEY,
+                message_id TEXT,
+                provider_id TEXT,
+                model_id TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                cost REAL,
+                cost_currency TEXT,
+                created_at INTEGER,
+                message_kind TEXT,
+                record_kind TEXT
+            );
+            CREATE TABLE message (id TEXT PRIMARY KEY, topic_id TEXT);
+            CREATE TABLE topic (id TEXT PRIMARY KEY, name TEXT);
+            """
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 190 + observation,
+                "output": 38 + observation,
+                "cacheRead": 8,
+                "cacheWrite": 3,
+                "reasoning": 4,
+            }
+            _add_counts(totals, counts)
+            connection.execute(
+                "INSERT INTO ai_usage_record"
+                " (id, message_id, provider_id, model_id, input_tokens, output_tokens,"
+                "  cache_read_tokens, cache_write_tokens, reasoning_tokens, cost,"
+                "  cost_currency, created_at, message_kind, record_kind)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 'chat', 'invocation')",
+                (
+                    f"row-{observation:03d}",
+                    f"msg-{observation:03d}",
+                    "anthropic",
+                    "claude-sonnet-4",
+                    counts["input"] + counts["cacheRead"] + counts["cacheWrite"],
+                    counts["output"] + counts["reasoning"],
+                    counts["cacheRead"],
+                    counts["cacheWrite"],
+                    counts["reasoning"],
+                    1_782_718_000_000 + observation * 1000,
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
 
 
 def _dsh_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2484,6 +2555,32 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, dsh_totals)
     physical_bytes += len(dsh_data)
     decoded_bytes += len(dsh_data)
+
+    cherrystudio_target = (
+        root / "home" / ".config" / "CherryStudio" / "Data" / "cherrystudio.sqlite"
+    )
+    cherrystudio_session, cherrystudio_totals, cherrystudio_rows = _cherrystudio_database(
+        cherrystudio_target
+    )
+    cherrystudio_entry = dict(
+        _existing_entry(
+            root, "home/.config/CherryStudio/Data/cherrystudio.sqlite", cherrystudio_target
+        ),
+        format="cherrystudio-sqlite",
+        session=cherrystudio_session,
+        observations=cherrystudio_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=cherrystudio_target.stat().st_size,
+        physicalBytes=cherrystudio_target.stat().st_size,
+        expectedTotals=cherrystudio_totals,
+        retainedPeriods=0,
+    )
+    sources.append(cherrystudio_entry)
+    _add_counts(aggregate, cherrystudio_totals)
+    _add_counts(canonical_aggregate, cherrystudio_totals)
+    physical_bytes += cherrystudio_target.stat().st_size
+    decoded_bytes += cherrystudio_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

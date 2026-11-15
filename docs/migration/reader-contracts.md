@@ -183,6 +183,33 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## Cherry Studio matrix
+
+Cherry Studio keeps two unrelated ledgers. Its Agent / Claude Code mode writes ordinary Claude Code transcripts under the `.claude/projects` roots, which the `claude` client already reads. Its built-in chat surfaces record one row per model invocation in `ai_usage_record`, at `<app-data>/CherryStudio/Data/cherrystudio.sqlite`. **Only the second is read here.** The transcript lane is not a gap: reading it would report the same billed calls twice.
+
+The ledger's `input_tokens` is the whole prompt and `output_tokens` the whole completion, with the cache and reasoning shares counted again in their own columns. `TokenCounts` models five non-overlapping buckets, so the shares are moved out rather than added on top; adding them would count every cache write and reasoning token twice.
+
+The schema is probed with `pragma_table_info` and the statement assembled from what the file actually has. Naming a column a build lacks would fail the whole statement to prepare, which would silently take the lane to zero.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `message_kind = 'chat'` invocation row | supported | One observation from `input - cache_read - cache_write`, `output - reasoning`, and the cache/reasoning columns. | Session is the provider id, else `unknown`. |
+| Row with `no_cache_tokens` present | supported, preferred | The ledger's own uncached count is used directly instead of subtracting, because it is exactly the modelled bucket and is the app's own arithmetic. | As above. |
+| `message_kind = 'agent-session'` row | ignored | Skipped: the `claude` transcripts already report those calls. | No source slot. |
+| `record_kind = 'legacy-aggregate'` row | excluded in SQL | Pre-summed history for the same calls; reading it beside per-invocation rows double counts. | No source slot. |
+| Row predating the `message_kind` column | supported | Read. Those rows carry no transcript, so they are exactly what this lane adds. | As above. |
+| Cache read plus cache write larger than the prompt | clamped | `input` floors at zero. The pinned reader clamps too; here the prompt is monotonic, so there is no inconsistent record being hidden. | As above. |
+| Reasoning larger than completion | clamped | `output` floors at zero. | As above. |
+| All-zero row with no positive authoritative USD cost | ignored | The ledger recorded no spend. | No source slot. |
+| All-zero row with a positive USD cost | supported | Retained: it is a real charge that happened to record no tokens, and dropping it would hide the spend. | As above. |
+| Nonzero `cost` in a currency other than USD, or with no currency | supported, cost unavailable | Tokens are kept and the USD cost is left to pricing. The nullable currency has no USD default, so copying the number as USD would invent a price. | As above. |
+| `cost` explicitly zero in any currency | supported, cost reported | Authoritative: the call was billed at zero, so pricing must not re-estimate it. | As above. |
+| Model id `<synthetic>` | ignored | Not a billed model. | No source slot. |
+| Missing or blank model | supported | Reported as `unknown` rather than dropping the row: the tokens were still spent. | As above. |
+| Negative counter | visible unsupported | Discard the candidate. The ledger writes unsigned counters, so a negative value means the row is not trustworthy. | Prior committed generation remains active. |
+| `total_tokens` only, with no individual bucket columns | visible unsupported | Not guessed. A total cannot supply individual buckets. | No source slot. |
+| Conversation title from the optional `message`/`topic` join | supported | Presentation metadata only; never persisted, consistent with the `title` privacy invariant. | As above. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

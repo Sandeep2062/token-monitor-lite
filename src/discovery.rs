@@ -5,10 +5,11 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    AntigravitySqliteAdapter, CatpawAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter,
-    KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, QodercnAdapter,
-    SessionArchiveAdapter, SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZcodeAdapter,
-    ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    AntigravitySqliteAdapter, CatpawAdapter, CherrystudioAdapter, CodexLocalUsageAdapter,
+    GooseAdapter, HermesAdapter, KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter,
+    OpenCodeAdapter, QodercnAdapter, SessionArchiveAdapter, SourceInput, SqliteSourceError,
+    WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter, has_zstd_suffix, is_compressed_source_path,
+    is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2503,6 +2504,69 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "cherrystudio" {
+            // Cherry Studio keeps its built-in chat ledger at
+            // `<app-data>/CherryStudio/Data/cherrystudio.sqlite`. The Agent
+            // transcripts under `.claude/projects` are deliberately not scanned
+            // here: they are the same billed calls the `claude` client already
+            // reports, so reading them would count Agent mode twice.
+            let support = match inputs.platform {
+                HostPlatform::MacOs => join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &["Library", "Application Support"],
+                ),
+                HostPlatform::Windows => {
+                    join_many(inputs.platform, &inputs.home, &["AppData", "Roaming"])
+                }
+                _ => match inputs.xdg_config_home.as_deref() {
+                    Some(root) if !root.as_os_str().is_empty() => {
+                        checked_root(inputs.platform, root, false)?
+                    }
+                    _ => join_many(inputs.platform, &inputs.home, &[".config"]),
+                },
+            };
+            let database = join_many(
+                inputs.platform,
+                &support,
+                &["CherryStudio", "Data", "cherrystudio.sqlite"],
+            );
+            let metadata = match fs::symlink_metadata(&database) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(metadata) = metadata {
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "cherrystudio",
+                        ordinal: 1,
+                    });
+                } else if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                } else if metadata.len() > MAX_SOURCE_FILE_BYTES
+                    || CherrystudioAdapter::new(&database).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "cherrystudio",
+                        ordinal: 1,
+                    });
+                } else {
+                    let source_id = source_id_for(SourceFormat::CherrystudioSqlite, &database);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::CherrystudioSqlite,
+                            session: "cherrystudio".to_owned(),
+                            path: database,
+                        });
+                    } else {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    }
+                }
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3470,6 +3534,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::PromaJsonl => None,
                 // CatPaw session ids come from the database row, not the path.
                 SourceFormat::CatpawSqlite => None,
+                // Cherry Studio's ledger names its session inside the record.
+                SourceFormat::CherrystudioSqlite => None,
                 // Qoder CN names its session inside the record; the caller
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
