@@ -292,6 +292,40 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn prime_agent_sessions_are_discovered_from_both_roots() {
+    let tree = Tree::new();
+    let header = br#"{"type":"session","version":3,"id":"prime-1","timestamp":"2026-07-09T11:00:00.000Z"}
+{"type":"message","id":"b1","timestamp":"2026-07-09T11:00:01.000Z","message":{"role":"assistant","model":"claude-sonnet-4","provider":"anthropic","usage":{"input":10,"output":5}}}
+"#;
+    // A root session.
+    tree.file(".prime/agent/sessions/root-1.jsonl", header);
+    // An RLM child session, which is its own source.
+    tree.file(
+        ".prime/agent/session-artifacts/child-1/session.jsonl",
+        header,
+    );
+    // A non-JSONL sibling is not admitted.
+    tree.file(".prime/agent/sessions/notes.txt", b"hello\n");
+
+    let report = discover(&tree.paths(&["prime-agent"])).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::PrimeAgentJsonl)
+    );
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::PrimeAgentJsonl)
+    );
+}
+
+#[test]
 fn mistral_vibe_sessions_are_discovered_from_both_layouts() {
     let tree = Tree::new();
     // Vibe 2.x: a `session_*/` directory with a `meta.json`.

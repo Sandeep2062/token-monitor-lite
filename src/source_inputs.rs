@@ -646,6 +646,7 @@ pub enum InputAdapterStatus {
     DevinSqlite,
     FxUsageJson,
     VibeJson,
+    PrimeAgentJsonl,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -766,6 +767,7 @@ pub enum SourceInput {
     Lmstudio(DocumentInput),
     Fx(Box<DocumentInput>),
     Vibe(Box<DocumentInput>),
+    PrimeAgent(OrdinaryJsonlInput),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
@@ -876,6 +878,10 @@ impl SourceInput {
             SourceFormat::LmstudioLog => Self::lmstudio(path),
             SourceFormat::FxUsageJson => Self::fx(path),
             SourceFormat::VibeJson => Self::vibe(path),
+            SourceFormat::PrimeAgentJsonl => Self::PrimeAgent(OrdinaryJsonlInput {
+                path,
+                cursor: JsonlCursor::default(),
+            }),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -1003,6 +1009,7 @@ impl SourceInput {
             Self::Lmstudio(_) => InputAdapterStatus::LmstudioLog,
             Self::Fx(_) => InputAdapterStatus::FxUsageJson,
             Self::Vibe(_) => InputAdapterStatus::VibeJson,
+            Self::PrimeAgent(_) => InputAdapterStatus::PrimeAgentJsonl,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
@@ -1045,6 +1052,7 @@ impl SourceInput {
             Self::Lmstudio(input) => input.reset(),
             Self::Fx(input) => input.reset(),
             Self::Vibe(input) => input.reset(),
+            Self::PrimeAgent(input) => input.cursor.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
@@ -1087,6 +1095,7 @@ impl SourceInput {
             Self::Lmstudio(input) => input.is_current(),
             Self::Fx(input) => input.is_current(),
             Self::Vibe(input) => input.is_current(),
+            Self::PrimeAgent(input) => input.cursor.is_current(&input.path),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
@@ -1154,6 +1163,7 @@ impl SourceInput {
             | Self::Lmstudio(_)
             | Self::Fx(_)
             | Self::Vibe(_)
+            | Self::PrimeAgent(_)
             | Self::Kimi(_)
             | Self::CommandCode(_)
             | Self::Grok(_)
@@ -1179,6 +1189,7 @@ impl SourceInput {
             Self::Lmstudio(input) => Some(&input.path),
             Self::Fx(input) => Some(&input.path),
             Self::Vibe(input) => Some(&input.path),
+            Self::PrimeAgent(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
@@ -1254,6 +1265,17 @@ impl SourceInput {
             Self::Lmstudio(input) => input.read_batch(),
             Self::Fx(input) => input.read_batch(),
             Self::Vibe(input) => input.read_batch(),
+            Self::PrimeAgent(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
             Self::QodercnJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {

@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 15
+CLAUDE_SOURCES = 14
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -78,6 +78,7 @@ UNSLOTH_SOURCES = 1
 DEVIN_SOURCES = 1
 FX_SOURCES = 1
 MISTRAL_SOURCES = 1
+PRIME_AGENT_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -122,6 +123,7 @@ SOURCE_COUNT = (
     + DEVIN_SOURCES
     + FX_SOURCES
     + MISTRAL_SOURCES
+    + PRIME_AGENT_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1340,6 +1342,70 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
             )
         )
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
+
+
+def _prime_agent_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Prime Agent session in the Pi append-only JSONL format."""
+    session = "prime-fixture-000"
+    totals = _counts()
+    lines = [
+        json.dumps(
+            {
+                "type": "session",
+                "version": 3,
+                "id": session,
+                "timestamp": "2026-07-09T11:00:00.000Z",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    ]
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 145 + observation,
+            "output": 29 + observation,
+            "cacheRead": 9,
+            "cacheWrite": 3,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        lines.append(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": f"msg-{observation:03d}",
+                    "timestamp": f"2026-07-09T11:00:{observation:02d}.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-sonnet-4",
+                        "provider": "anthropic",
+                        "usage": {
+                            "input": counts["input"],
+                            "output": counts["output"],
+                            "cacheRead": counts["cacheRead"],
+                            "cacheWrite": counts["cacheWrite"],
+                        },
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    # A child-attribution record carries no message of its own; the child's own
+    # transcript is a separate source.
+    lines.append(
+        json.dumps(
+            {
+                "type": "child_usage_attributed",
+                "id": "child-1",
+                "aggregate_usage": {"input": 999, "output": 99},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    data = ("\n".join(lines) + "\n").encode()
+    return session, data, totals, OBSERVATIONS_PER_JSONL
 
 
 def _mistral_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2951,6 +3017,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, mistral_totals)
     physical_bytes += len(mistral_data)
     decoded_bytes += len(mistral_data)
+
+    prime_session, prime_data, prime_totals, prime_rows = _prime_agent_source()
+    prime_entry = _source_entry(
+        root,
+        f"home/.prime/agent/sessions/{prime_session}.jsonl",
+        prime_data,
+        format_name="prime-agent-jsonl",
+        session=prime_session,
+        observations=prime_rows,
+        canonical_sessions=1,
+        expected_totals=prime_totals,
+        physical_bytes=len(prime_data),
+    )
+    sources.append(prime_entry)
+    _add_counts(aggregate, prime_totals)
+    _add_counts(canonical_aggregate, prime_totals)
+    physical_bytes += len(prime_data)
+    decoded_bytes += len(prime_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

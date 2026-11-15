@@ -326,6 +326,21 @@ A Vibe transcript carries no per-message model, timestamp or token counts, so **
 | Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 | `message_count`, provider inference | not implemented | This codebase's observation has no message-count field, and no provider hint is emitted rather than attributing the session to `mistral`. | No source slot. |
 
+## Prime Agent matrix
+
+Prime Agent stores root sessions in `~/.prime/agent/sessions/*.jsonl` and RLM child sessions below the sibling `session-artifacts` tree. Both use the Pi append-only JSONL record format, so token extraction is shared with the `PiReader` under this client's id — the same delegation Proma uses for its Pi-format sessions.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Pi `session` header | supported | Names the session, so the id comes from the record rather than the path. | Session is the header's `id`. |
+| `title` line before the header | tolerated | Skipped; the header may follow. | As above. |
+| `message` entry with `message.usage` | supported | One observation with the model and provider the message carries. | As above. |
+| `model_change` entry | supported | Sets the model for later model-less usage entries. | As above. |
+| `child_usage_attributed` record | **ignored** | Never a message. Its usage belongs to the child's own transcript, which is a separate source; emitting it here would count the child twice. | No source slot. |
+| Assistant `message` with no `usage` | visible unsupported | The Pi format requires it, so a malformed record is reported rather than silently skipped. | Prior committed generation remains active. |
+| RLM child transcript under `session-artifacts/` | supported | Each child file is its own source, scanned directly. | As above. |
+| Fork aggregate reversal on the parent | not implemented | Needs the child transcript the parent's aggregate covers — a cross-file read this per-source contract cannot perform, so the parent copy is skipped (above) rather than adjusted by a guess. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

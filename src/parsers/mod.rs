@@ -32,6 +32,7 @@ pub mod omp;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
+pub mod prime_agent;
 pub mod proma;
 pub mod qodercn;
 pub mod qwen;
