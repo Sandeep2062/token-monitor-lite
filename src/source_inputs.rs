@@ -5,6 +5,7 @@
 
 use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::antigravity::AntigravityDbReader;
+use crate::parsers::catpaw;
 use crate::parsers::goose::{GooseReader, GooseRow};
 use crate::parsers::hermes::{HermesReader, HermesRow};
 use crate::parsers::jsonl::{
@@ -248,6 +249,34 @@ impl OpenCodeAdapter {
     }
 }
 
+pub struct CatpawAdapter {
+    path: PathBuf,
+    edition: catpaw::Edition,
+}
+
+impl CatpawAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        // The edition is derived from the containing root's name, never from a
+        // model id: the same numeric id means different models per edition.
+        let edition = path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .and_then(catpaw::Edition::from_database_name)
+            .unwrap_or(catpaw::Edition::Domestic);
+        Self { path, edition }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_catpaw(&self.path, self.edition)
+    }
+}
+
 pub struct MimoAdapter {
     path: PathBuf,
 }
@@ -437,6 +466,7 @@ pub enum InputAdapterStatus {
     MimoSqlite,
     ZcodeJsonl,
     ZcodeSqlite,
+    CatpawSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -452,6 +482,7 @@ pub(crate) enum SqliteInputData {
     Kilo(Arc<[ResponseUsage]>),
     Mimo(Arc<[ResponseUsage]>),
     Zcode(Arc<[ResponseUsage]>),
+    Catpaw(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -564,6 +595,7 @@ pub enum SourceInput {
     Kilo(KiloAdapter),
     Mimo(MimoAdapter),
     Zcode(ZcodeAdapter),
+    Catpaw(CatpawAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -589,6 +621,7 @@ impl SourceInput {
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::MimoSqlite => Self::Mimo(MimoAdapter::new(path)),
             SourceFormat::ZcodeSqlite => Self::Zcode(ZcodeAdapter::new(path)),
+            SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -762,6 +795,7 @@ impl SourceInput {
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Mimo(_) => InputAdapterStatus::MimoSqlite,
             Self::Zcode(_) => InputAdapterStatus::ZcodeSqlite,
+            Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -794,6 +828,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -826,6 +861,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -847,6 +883,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Mimo(adapter) => Ok(Some(SqliteInputData::Mimo(adapter.read()?))),
             Self::Zcode(adapter) => Ok(Some(SqliteInputData::Zcode(adapter.read()?))),
+            Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -898,6 +935,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Mimo(adapter) => Some(adapter.path()),
             Self::Zcode(adapter) => Some(adapter.path()),
+            Self::Catpaw(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -1000,6 +1038,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2437,6 +2476,112 @@ fn read_mimo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_catpaw(
+    path: &Path,
+    edition: catpaw::Edition,
+) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "ui_sdk_messages",
+        &["conversation_id", "message_id", "payload", "role"],
+    )?;
+    let namespace = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(SqliteSourceError::Unsupported)?
+        .to_owned();
+    // Only assistant rows with a non-null usage block are candidates. The
+    // session selection is joined on `conversation_id` so each message is
+    // labelled with the model that session currently names.
+    let candidates: i64 = connection_query_count(
+        &transaction,
+        "SELECT COUNT(*) FROM ui_sdk_messages
+         WHERE role = 'assistant'
+           AND json_type(payload, '$.extra.contextInfo.usage') <> 'null'",
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > catpaw::MAX_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let sql = "SELECT m.conversation_id, m.message_id, m.created_at_ms, m.updated_at_ms,
+                      m.schema_version,
+                      json_extract(m.payload, '$.extra.contextInfo.usage'),
+                      CASE WHEN json_type(m.payload, '$.extra.contextInfo.totalUsageTokens')
+                                IN ('integer', 'real')
+                           THEN json_extract(m.payload, '$.extra.contextInfo.totalUsageTokens')
+                      END,
+                      (SELECT json_object(
+                          'persistedModelId', json_extract(s.extra, '$.persistedModelId'),
+                          'persistedModelMode', json_extract(s.extra, '$.persistedModelMode'),
+                          'persistedModelSelection', json_extract(s.extra, '$.persistedModelSelection'),
+                          'initialSelectedModelId', json_extract(s.extra, '$.initialSelectedModelId'),
+                          'initialModelMode', json_extract(s.extra, '$.initialModelMode'),
+                          'initialModelSelection', json_extract(s.extra, '$.initialModelSelection'))
+                       FROM sessions s WHERE s.conversation_id = m.conversation_id LIMIT 1)
+               FROM ui_sdk_messages m
+               WHERE m.role = 'assistant'
+                 AND json_type(m.payload, '$.extra.contextInfo.usage') <> 'null'
+               ORDER BY m.updated_at_ms, m.seq LIMIT ?1 OFFSET ?2";
+    let mut reader = catpaw::CatpawReader::new(edition);
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let conversation: String = row.get(0)?;
+            let message: String = row.get(1)?;
+            let created: Option<i64> = row.get(2)?;
+            let updated: Option<i64> = row.get(3)?;
+            let schema: i64 = row.get(4)?;
+            let usage: Option<String> = row.get(5)?;
+            let recorded: Option<i64> = row.get(6)?;
+            let selection: Option<String> = row.get(7)?;
+            let Some(usage) = usage else {
+                page_rows += 1;
+                continue;
+            };
+            reader
+                .ingest(catpaw::CatpawRow {
+                    conversation_id: &conversation,
+                    message_id: &message,
+                    created_at_ms: created,
+                    updated_at_ms: updated,
+                    schema_version: schema,
+                    usage: usage.as_bytes(),
+                    recorded_total: recorded,
+                    selection: selection.as_deref().map(str::as_bytes),
+                    namespace: &namespace,
+                })
+                .map_err(map_catpaw_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn map_catpaw_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
 }
 
 fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

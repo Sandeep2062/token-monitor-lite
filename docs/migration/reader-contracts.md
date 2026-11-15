@@ -183,6 +183,27 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## CatPaw matrix
+
+CatPaw is one opt-in, fork-only client covering two editions — domestic `catpaw-moon` and overseas `catpaw-overseas` — whose account databases sit directly under the platform app-data root (`~/Library/Application Support` on macOS, the native roaming app-data directory on Windows). **Linux reads no CatPaw source**, because no product root has been verified there and a WSL scan would recount a Windows host's usage. The edition is derived from the containing directory name, never inferred from a model id, because the same numeric id names different models per edition.
+
+Discovery admits only immediate `catpaw-memory-<scope>.db` files whose scope is non-empty and limited to ASCII letters, digits, `_` and `-`; the exact scope `anon` is excluded. Non-anonymous historical account databases are kept: that is the machine's retained history, not the current login's usage, and no login state is read to filter it.
+
+Usage is projected from `ui_sdk_messages` joined to `sessions` for the session's model selection. The four buckets are **disjoint and additive**, so nothing is subtracted.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant row whose `payload.extra.contextInfo.usage` carries the four buckets | supported | One observation from `promptTokens` (uncached input), `completionTokens`, `cacheReadTokens` and `cacheWriteTokens`. Reasoning and one-hour cache-write tokens are not persisted by the app and stay zero rather than being inferred. | Session is `catpaw:<database file>:<conversation_id>`; identity is that plus the message id, so identical ids in different account databases stay distinct. |
+| Bucket sum equal to `usage.totalTokens` | supported | Accepted as-is. | As above. |
+| Bucket sum equal to the sibling `contextInfo.totalUsageTokens` instead | supported | Accepted; older builds stored `totalTokens` without the cache-read part, so either anchor may prove the row. | As above. |
+| Current `persistedModel*` selection present | supported | Wins over the legacy `initial*` fields. A valid `isAuto` plus safe-integer `modelId` selects `auto` or a mapped model; a partial or invalid selection is not a selection. | As above. |
+| `lite`/`pro`/`max` routing tier, unmapped id, or a conflicting current-versus-selected id | supported, unpriced | Keeps an edition-qualified label such as `catpaw-moon-model-10002`, `catpaw-overseas-model-91` or `catpaw-moon-model-conflict`. No provider hint is attached, so automatic catalog pricing cannot apply, and no lower-priced model is substituted. | As above. |
+| Mapped model id | supported, priced | The edition's documented model name, with the client as provider hint. | As above. |
+| Bucket sum disagreeing with both anchors, a negative or non-integral bucket, `schema_version` other than 1, or a missing identity | visible unsupported | Discard the whole candidate. | Prior committed generation remains active. |
+| `created_at_ms`, then `updated_at_ms` | supported | The first in-range value wins; otherwise the observation is stored at the epoch, which falls outside any window. | As above. |
+| Non-assistant row, or a row whose usage is missing or explicitly JSON-null | ignored non-usage | No row. | No ownership change. |
+| Whole-snapshot cache with db/WAL fingerprints, the `catpaw.lock` sidecar, cross-scan publication ordering, and the `unpriced:catpaw` marker | visible unsupported / ignored | Not guessed; these are collector concerns, and an unmapped model simply carries no provider hint. | No source slot. |
+
 ## Proma matrix
 
 Proma keeps usage in three shapes under `~/.proma` and `~/.proma-dev`: the `agent-sessions/*.jsonl` display journals, and the legacy SDK transcripts under `sdk-config/sessions` and `sdk-config/projects`. This reader walks all six trees and decides a file's shape from its first line: a `type: "session"` record means native Pi format, handled by the Pi reader under the `proma` client; anything else is a legacy SDK transcript.

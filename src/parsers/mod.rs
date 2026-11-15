@@ -2,6 +2,7 @@
 
 pub mod amp;
 pub mod antigravity;
+pub mod catpaw;
 pub mod claude;
 pub mod cline;
 pub mod codebuddy;

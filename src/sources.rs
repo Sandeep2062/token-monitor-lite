@@ -68,6 +68,7 @@ pub enum SourceFormat {
     MimoSqlite,
     ZcodeJsonl,
     ZcodeSqlite,
+    CatpawSqlite,
     CommandCodeJsonl,
     GrokJsonl,
     OpenClawJsonl,
@@ -111,6 +112,7 @@ impl SourceFormat {
             Self::McodeJsonl => "mcode",
             Self::MimoSqlite => "mimo",
             Self::ZcodeJsonl | Self::ZcodeSqlite => "zcode",
+            Self::CatpawSqlite => "catpaw",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -151,6 +153,7 @@ impl SourceFormat {
             Self::MimoSqlite => "mimo-sqlite",
             Self::ZcodeJsonl => "zcode-jsonl",
             Self::ZcodeSqlite => "zcode-sqlite",
+            Self::CatpawSqlite => "catpaw-sqlite",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -193,6 +196,7 @@ impl SourceFormat {
             "mimo-sqlite" => Some(Self::MimoSqlite),
             "zcode-jsonl" => Some(Self::ZcodeJsonl),
             "zcode-sqlite" => Some(Self::ZcodeSqlite),
+            "catpaw-sqlite" => Some(Self::CatpawSqlite),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -217,6 +221,7 @@ impl SourceFormat {
                 | Self::KiloSqlite
                 | Self::MimoSqlite
                 | Self::ZcodeSqlite
+                | Self::CatpawSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
                 | Self::OpenClawSqlite
@@ -982,6 +987,7 @@ impl SourceReader {
             | SourceFormat::KiloSqlite
             | SourceFormat::MimoSqlite
             | SourceFormat::ZcodeSqlite
+            | SourceFormat::CatpawSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
             | SourceFormat::OpenClawSqlite
@@ -1005,6 +1011,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Mimo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zcode(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Catpaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),

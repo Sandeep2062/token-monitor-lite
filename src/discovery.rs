@@ -5,10 +5,10 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    AntigravitySqliteAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
-    MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, SessionArchiveAdapter,
-    SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter,
-    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    AntigravitySqliteAdapter, CatpawAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter,
+    KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter,
+    SessionArchiveAdapter, SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZcodeAdapter,
+    ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2140,6 +2140,91 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "catpaw" {
+            // Both editions sit directly under the platform app-data root. Only
+            // immediate `catpaw-memory-<scope>.db` files with a non-empty
+            // `[A-Za-z0-9_-]` scope are admitted, and the exact scope `anon` is
+            // excluded. Non-anonymous historical account databases are kept:
+            // that is this machine's retained history, not the current login.
+            let support = match inputs.platform {
+                HostPlatform::MacOs => join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &["Library", "Application Support"],
+                ),
+                HostPlatform::Windows => {
+                    join_many(inputs.platform, &inputs.home, &["AppData", "Roaming"])
+                }
+                // No Linux product root is verified, so nothing is read there.
+                HostPlatform::Linux => {
+                    continue;
+                }
+            };
+            for edition in ["catpaw-moon", "catpaw-overseas"] {
+                let root = join_many(inputs.platform, &support, &[edition]);
+                let mut candidates = Vec::new();
+                let mut inspected = 0;
+                let mut overflow = false;
+                collect_db_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+                candidates.retain(|path| {
+                    path.parent() == Some(root.as_path())
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(catpaw_database_scope)
+                });
+                candidates.sort();
+                for (ordinal, path) in candidates.into_iter().enumerate() {
+                    let ordinal = ordinal + 1;
+                    if sources.len() >= MAX_SOURCES {
+                        notices.push(DiscoveryNotice::SourceLimitReached);
+                        break;
+                    }
+                    let metadata = match fs::symlink_metadata(&path) {
+                        Ok(metadata) => metadata,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if !metadata.file_type().is_file() {
+                        notices.push(DiscoveryNotice::SourceNotRegular {
+                            client: "catpaw",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                    if metadata.len() > MAX_SOURCE_FILE_BYTES
+                        || CatpawAdapter::new(&path).read().is_err()
+                    {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "catpaw",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                    let source_id = source_id_for(SourceFormat::CatpawSqlite, &path);
+                    if !admitted_ids.insert(source_id) {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        continue;
+                    }
+                    let session = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .filter(|stem| !stem.is_empty())
+                        .unwrap_or("catpaw")
+                        .to_owned();
+                    sources.push(DiscoveredSource {
+                        source_id,
+                        format: SourceFormat::CatpawSqlite,
+                        session,
+                        path,
+                    });
+                }
+                if overflow {
+                    notices.push(DiscoveryNotice::SourceScanLimitReached);
+                }
+            }
+            continue;
+        }
         if client == "proma" {
             // Proma applies the same three source trees under both `.proma` and
             // `.proma-dev`: the `agent-sessions` display journals, and the two
@@ -3081,6 +3166,24 @@ fn validate_source(path: &Path, format: SourceFormat, bytes: u64) -> Result<Stri
     Err(())
 }
 
+/// A CatPaw account database name: `catpaw-memory-<scope>.db`, where the scope
+/// is non-empty and limited to ASCII letters, digits, `_` and `-`, and is not
+/// the exact scope `anon`.
+fn catpaw_database_scope(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("catpaw-memory-") else {
+        return false;
+    };
+    let Some(scope) = rest.strip_suffix(".db") else {
+        return false;
+    };
+    if scope.is_empty() || scope == "anon" {
+        return false;
+    }
+    scope
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
     if format == SourceFormat::CodeBuddyJsonl
         && path
@@ -3188,6 +3291,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Proma names no session in its SDK records beyond an optional
                 // session_id; the caller derives one from the file stem.
                 SourceFormat::PromaJsonl => None,
+                // CatPaw session ids come from the database row, not the path.
+                SourceFormat::CatpawSqlite => None,
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
