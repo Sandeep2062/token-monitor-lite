@@ -2658,6 +2658,61 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "fx" {
+            // fx aggregates one snapshot per session at
+            // `~/.fx/sessions/<sessionId>/usage-v2.json`. The sibling
+            // `session.json` and the shared `index.json` are not read, because a
+            // per-source reader cannot open them.
+            let root = join_many(inputs.platform, &inputs.home, &[".fx", "sessions"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "usage-v2.json")
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::FxUsageJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "fx",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::FxUsageJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::FxUsageJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3692,6 +3747,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::UnslothSqlite => None,
                 // Devin names its session inside the ledger row.
                 SourceFormat::DevinSqlite => None,
+                // fx names its session in the snapshot, else the directory.
+                SourceFormat::FxUsageJson => None,
                 // Qoder CN names its session inside the record; the caller
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
@@ -3775,6 +3832,17 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         return path
             .parent()
             .filter(|parent| parent.file_name().and_then(|name| name.to_str()) != Some("sessions"))
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    // `~/.fx/sessions/<session-id>/usage-v2.json`: the session is the containing
+    // directory, because the file itself is always `usage-v2.json`.
+    if format == SourceFormat::FxUsageJson {
+        return path
+            .parent()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))

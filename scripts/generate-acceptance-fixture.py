@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 17
+CLAUDE_SOURCES = 16
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -76,6 +76,7 @@ CHERRYSTUDIO_SOURCES = 1
 LMSTUDIO_SOURCES = 1
 UNSLOTH_SOURCES = 1
 DEVIN_SOURCES = 1
+FX_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -118,6 +119,7 @@ SOURCE_COUNT = (
     + LMSTUDIO_SOURCES
     + UNSLOTH_SOURCES
     + DEVIN_SOURCES
+    + FX_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1336,6 +1338,44 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
             )
         )
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
+
+
+def _fx_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One fx session snapshot: one per-model entry per observation.
+
+    fx aggregates per-request usage into a session snapshot, so each model entry
+    becomes one observation. Every entry carries a provider-prefixed model, so
+    the reader splits model and billing hint.
+    """
+    session = "fx-fixture-000"
+    totals = _counts()
+    models = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 175 + observation,
+            "output": 33 + observation,
+            "cacheRead": 10,
+            "cacheWrite": 4,
+            "reasoning": 5,
+        }
+        _add_counts(totals, counts)
+        models.append(
+            {
+                "model": f"zai/glm-5-{observation:03d}",
+                "input_tokens": counts["input"],
+                "output_tokens": counts["output"],
+                "cache_read_tokens": counts["cacheRead"],
+                "cache_write_tokens": counts["cacheWrite"],
+                "reasoning_tokens": counts["reasoning"],
+                "request_count": 1,
+            }
+        )
+    document = {
+        "schema_version": 2,
+        "session_id": session,
+        "snapshot": {"models": models},
+    }
+    return session, json.dumps(document, sort_keys=True, separators=(",", ":")).encode(), totals, len(models)
 
 
 def _devin_database(path: Path) -> tuple[str, dict[str, int], int]:
@@ -2837,6 +2877,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, devin_totals)
     physical_bytes += devin_target.stat().st_size
     decoded_bytes += devin_target.stat().st_size
+
+    fx_session, fx_data, fx_totals, fx_rows = _fx_source()
+    fx_entry = _source_entry(
+        root,
+        f"home/.fx/sessions/{fx_session}/usage-v2.json",
+        fx_data,
+        format_name="fx-usage-json",
+        session=fx_session,
+        observations=fx_rows,
+        canonical_sessions=1,
+        expected_totals=fx_totals,
+        physical_bytes=len(fx_data),
+    )
+    sources.append(fx_entry)
+    _add_counts(aggregate, fx_totals)
+    _add_counts(canonical_aggregate, fx_totals)
+    physical_bytes += len(fx_data)
+    decoded_bytes += len(fx_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

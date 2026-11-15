@@ -291,6 +291,30 @@ fn qodercn_database(path: &Path) {
         .unwrap();
 }
 
+#[test]
+fn fx_session_snapshots_are_discovered_under_the_sessions_role() {
+    let tree = Tree::new();
+    tree.file(
+        ".fx/sessions/sess-1/usage-v2.json",
+        br#"{"schema_version":2,"session_id":"sess-1","snapshot":{"models":[{"model":"zai/glm-5","input_tokens":100,"output_tokens":20}]}}"#,
+    );
+    // The sibling files are not sources.
+    tree.file(".fx/sessions/sess-1/session.json", br#"{"id":"sess-1"}"#);
+    tree.file(".fx/sessions/index.json", br#"{"sessions":[]}"#);
+
+    let report = discover(&tree.paths(&["fx"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::FxUsageJson);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::FxUsageJson)
+    );
+}
+
 fn devin_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();

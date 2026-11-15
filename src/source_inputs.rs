@@ -644,6 +644,7 @@ pub enum InputAdapterStatus {
     CherrystudioSqlite,
     UnslothSqlite,
     DevinSqlite,
+    FxUsageJson,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -762,6 +763,7 @@ pub enum SourceInput {
     ZcodeJsonl(OrdinaryJsonlInput),
     Dsh(DshInput),
     Lmstudio(DocumentInput),
+    Fx(Box<DocumentInput>),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
@@ -870,6 +872,7 @@ impl SourceInput {
             SourceFormat::DroidJson => Self::droid(path),
             SourceFormat::KiroJson => Self::kiro(path),
             SourceFormat::LmstudioLog => Self::lmstudio(path),
+            SourceFormat::FxUsageJson => Self::fx(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -956,6 +959,13 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn fx(path: PathBuf) -> Self {
+        Self::Fx(Box::new(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+        }))
+    }
+
     pub(crate) fn lmstudio(path: PathBuf) -> Self {
         Self::Lmstudio(DocumentInput {
             path,
@@ -981,6 +991,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
             Self::Lmstudio(_) => InputAdapterStatus::LmstudioLog,
+            Self::Fx(_) => InputAdapterStatus::FxUsageJson,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
@@ -1021,6 +1032,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
             Self::Lmstudio(input) => input.reset(),
+            Self::Fx(input) => input.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
@@ -1061,6 +1073,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
             Self::Lmstudio(input) => input.is_current(),
+            Self::Fx(input) => input.is_current(),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
@@ -1126,6 +1139,7 @@ impl SourceInput {
             }
             Self::OrdinaryJsonl(_)
             | Self::Lmstudio(_)
+            | Self::Fx(_)
             | Self::Kimi(_)
             | Self::CommandCode(_)
             | Self::Grok(_)
@@ -1149,6 +1163,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => Some(&input.path),
             Self::Lmstudio(input) => Some(&input.path),
+            Self::Fx(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
@@ -1222,6 +1237,7 @@ impl SourceInput {
             }
             Self::Dsh(input) => input.read_batch(),
             Self::Lmstudio(input) => input.read_batch(),
+            Self::Fx(input) => input.read_batch(),
             Self::QodercnJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {

@@ -277,6 +277,29 @@ Devin CLI keeps sessions in `~/.local/share/devin/cli/sessions.db`. Usage lives 
 | Desktop `acp-events/*.ndjson` | visible unsupported | Not read. Those file names are independent UUIDs, so attributing them needs a title-to-session map built from this database and reconciled across sibling files — impossible for a per-source byte reader without guessing. | No source slot. |
 | `duration_ms`, `is_turn_start`, and `inferred_provider_from_model` | not implemented | This codebase's observation has no duration or turn-start field, and an unrecognized model keeps no provider hint rather than being attributed to `devin`. | No source slot. |
 
+## fx matrix
+
+fx aggregates per-request token usage into one snapshot per session at `~/.fx/sessions/<sessionId>/usage-v2.json`, so this reader emits one observation per `(session × model)` entry — the same session-level shape as Kilo, Goose and Mux.
+
+A snapshot carries both a per-model breakdown and top-level session aggregates. When the breakdown is empty, or every entry reports zero tokens, the session totals are attributed to the synthetic `fx-unknown` model rather than dropped, so a session's usage is never silently lost.
+
+`total_cost` is optional at **both** levels and its presence is preserved rather than defaulted. A snapshot that never carried a cost must not be submitted as an authoritative $0.00, which would be indistinguishable from a session fx really did bill nothing for.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Per-model entry with non-zero tokens | supported | One observation from its `input`/`output`/`cache_read`/`cache_write`/`reasoning` counters. | Session is the snapshot's `session_id`, else the containing directory. |
+| Per-model entry with zero tokens | ignored non-usage | Skipped, so it cannot mask the aggregate fallback. | No source slot. |
+| Empty `models`, or all entries zero | supported | The top-level aggregates become one `fx-unknown` observation, emitted only when it carries tokens, requests or a positive cost. | As above. |
+| `<provider>/<model>` id | supported | Split into the model and a provider billing hint. | As above. |
+| An id with no separator, or an empty side | supported | Kept whole as the model with no provider hint. | As above. |
+| `total_cost` present, finite and non-negative | supported | Reported as authoritative USD. | As above. |
+| `total_cost` absent or explicit JSON `null` | supported, unpriced | Reported as unavailable, never as an authoritative zero — the snapshot never carried a cost. | As above. |
+| `total_cost` negative or non-finite | supported, unpriced | Treated as unreported rather than clamped to zero, so the observation stays eligible for repricing. | As above. |
+| `total_cost` explicitly `0.0` | supported, cost reported | Authoritative: fx really did bill nothing. | As above. |
+| Document with no `snapshot` | ignored non-usage | Nothing to attribute. | No source slot. |
+| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Sibling `session.json`, shared `index.json`, and the global `usage.jsonl` | visible unsupported | Not read. The first two are cross-file reads a per-source byte reader cannot perform, so the timestamp falls back to the usage file's mtime and no workspace or title is reported; the global stream carries no session id or workspace, exactly as the pinned reader declines it. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

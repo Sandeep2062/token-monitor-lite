@@ -17,6 +17,7 @@ use crate::parsers::{
     cursor::CursorReader,
     droid::DroidReader,
     dsh::DshReader,
+    fx::FxReader,
     gemini::GeminiReader,
     grok::GrokReader,
     kimi::KimiReader,
@@ -80,6 +81,7 @@ pub enum SourceFormat {
     LmstudioLog,
     UnslothSqlite,
     DevinSqlite,
+    FxUsageJson,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -129,6 +131,7 @@ impl SourceFormat {
             Self::LmstudioLog => "lmstudio",
             Self::UnslothSqlite => "unsloth",
             Self::DevinSqlite => "devin",
+            Self::FxUsageJson => "fx",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -177,6 +180,7 @@ impl SourceFormat {
             Self::LmstudioLog => "lmstudio-log",
             Self::UnslothSqlite => "unsloth-sqlite",
             Self::DevinSqlite => "devin-sqlite",
+            Self::FxUsageJson => "fx-usage-json",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -227,6 +231,7 @@ impl SourceFormat {
             "lmstudio-log" => Some(Self::LmstudioLog),
             "unsloth-sqlite" => Some(Self::UnslothSqlite),
             "devin-sqlite" => Some(Self::DevinSqlite),
+            "fx-usage-json" => Some(Self::FxUsageJson),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -450,6 +455,7 @@ enum ResponseReader {
     Droid(Box<DroidReader>),
     Kiro(Box<KiroReader>),
     Lmstudio(Box<LmstudioReader>),
+    Fx(Box<FxReader>),
     Proma(Box<PromaReader>),
     Kimi(Box<KimiReader>),
     CommandCode(Box<CommandCodeReader>),
@@ -484,6 +490,7 @@ impl ResponseReader {
             Self::Droid(reader) => reader.ingest(record),
             Self::Kiro(reader) => reader.ingest(record),
             Self::Lmstudio(reader) => reader.ingest(record),
+            Self::Fx(reader) => reader.ingest(record),
             Self::Proma(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
             Self::CommandCode(reader) => reader.ingest(record),
@@ -518,6 +525,7 @@ impl ResponseReader {
             Self::Droid(reader) => reader.snapshot(),
             Self::Kiro(reader) => reader.snapshot(),
             Self::Lmstudio(reader) => reader.snapshot(),
+            Self::Fx(reader) => reader.snapshot(),
             Self::Proma(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
             Self::CommandCode(reader) => reader.snapshot(),
@@ -571,7 +579,8 @@ impl ResponseReader {
             | Self::OpenClaw(_)
             | Self::Zcode(_)
             | Self::Qodercn(_)
-            | Self::Lmstudio(_) => Ok(()),
+            | Self::Lmstudio(_)
+            | Self::Fx(_) => Ok(()),
         }
     }
 
@@ -586,6 +595,7 @@ impl ResponseReader {
             Self::Droid(reader) => reader.has_supported_usage(),
             Self::Kiro(reader) => reader.has_supported_usage(),
             Self::Lmstudio(reader) => reader.has_supported_usage(),
+            Self::Fx(reader) => reader.has_supported_usage(),
             Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
@@ -914,6 +924,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Lmstudio(Box::new(
                     LmstudioReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::FxUsageJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Fx(Box::new(
+                    FxReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::PromaJsonl => {

@@ -1173,6 +1173,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::CherrystudioSqlite => "cherrystudio",
         SourceFormat::UnslothSqlite => "unsloth",
         SourceFormat::DevinSqlite => "devin",
+        SourceFormat::FxUsageJson => "fx",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "qodercn",
         SourceFormat::DshJsonl => "dsh",
         SourceFormat::LmstudioLog => "lmstudio",
