@@ -820,6 +820,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "cherrystudio",
         "qodercn",
         "dsh",
+        "lmstudio",
         "muse",
         "omp",
         "openclaw",
@@ -907,6 +908,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "cherrystudio"
             | "qodercn"
             | "dsh"
+            | "lmstudio"
             | "muse"
             | "omp"
             | "openclaw"
@@ -949,6 +951,7 @@ fn is_supported_client(client: &str) -> bool {
             | "cherrystudio"
             | "qodercn"
             | "dsh"
+            | "lmstudio"
             | "muse"
             | "omp"
             | "openclaw"
@@ -989,6 +992,7 @@ fn client_label(client: &str) -> &'static str {
         "cherrystudio" => "Cherry Studio",
         "qodercn" => "Qoder CN",
         "dsh" => "DeepSeek Harness",
+        "lmstudio" => "LM Studio",
         "openclaw" => "OpenClaw",
         "muse" => "Muse Code",
         "omp" => "Oh My Pi",
@@ -1460,6 +1464,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::CherrystudioSqlite => "Cherry Studio",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "Qoder CN",
         SourceFormat::DshJsonl => "DeepSeek Harness",
+        SourceFormat::LmstudioLog => "LM Studio",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "OpenClaw",
         SourceFormat::ZedSqlite => "Zed",
     }

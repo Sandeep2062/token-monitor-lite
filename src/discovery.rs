@@ -1462,58 +1462,6 @@ fn codebuddy_log_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     .collect()
 }
 
-fn collect_log_candidates(
-    directory: &Path,
-    depth: usize,
-    inspected: &mut usize,
-    candidates: &mut Vec<PathBuf>,
-    overflow: &mut bool,
-) -> Result<(), DiscoveryError> {
-    if *overflow {
-        return Ok(());
-    }
-    if depth > MAX_SOURCE_DEPTH {
-        *overflow = true;
-        candidates.clear();
-        return Ok(());
-    }
-    let metadata = match fs::symlink_metadata(directory) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    if !metadata.file_type().is_dir() {
-        return Ok(());
-    }
-    let mut children = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        *inspected += 1;
-        if *inspected > MAX_SOURCE_CANDIDATES {
-            *overflow = true;
-            candidates.clear();
-            return Ok(());
-        }
-        children.push(entry?.path());
-    }
-    children.sort();
-    for child in children {
-        let metadata = fs::symlink_metadata(&child)?;
-        if metadata.file_type().is_dir() {
-            collect_log_candidates(&child, depth + 1, inspected, candidates, overflow)?;
-            if *overflow {
-                return Ok(());
-            }
-        } else if child
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
-        {
-            candidates.push(child);
-        }
-    }
-    Ok(())
-}
-
 fn zed_database_paths(inputs: &HostPaths) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let data_base = inputs
@@ -2567,6 +2515,55 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "lmstudio" {
+            // The local server writes pretty-printed responses beneath
+            // `~/.lmstudio/server-logs/`. There is no ledger and nothing
+            // rotates these files, so each admitted file is one source.
+            let root = join_many(inputs.platform, &inputs.home, &[".lmstudio", "server-logs"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_log_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::LmstudioLog,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "lmstudio",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::LmstudioLog, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::LmstudioLog,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3379,6 +3376,63 @@ fn collect_source_candidates(
     Ok(())
 }
 
+/// Collect `*.log` files, which the shared collector does not admit.
+///
+/// LM Studio's server logs are plain text named `.log`; keeping this separate
+/// keeps the JSONL collector's extension list honest rather than widening it
+/// for one client.
+fn collect_log_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_log_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn validate_source(path: &Path, format: SourceFormat, bytes: u64) -> Result<String, ()> {
     let session = source_session(path, format)?;
     let mut reader = SourceReader::new(path.to_path_buf(), format, session.clone());
@@ -3426,11 +3480,13 @@ fn catpaw_database_scope(name: &str) -> bool {
 }
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
-    if format == SourceFormat::CodeBuddyJsonl
-        && path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+    if matches!(
+        format,
+        SourceFormat::CodeBuddyJsonl | SourceFormat::LmstudioLog
+    ) && path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
     {
         return path
             .file_stem()
@@ -3534,6 +3590,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::PromaJsonl => None,
                 // CatPaw session ids come from the database row, not the path.
                 SourceFormat::CatpawSqlite => None,
+                // LM Studio has no session concept: the log file is the unit.
+                SourceFormat::LmstudioLog => None,
                 // Cherry Studio's ledger names its session inside the record.
                 SourceFormat::CherrystudioSqlite => None,
                 // Qoder CN names its session inside the record; the caller

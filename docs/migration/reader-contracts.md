@@ -210,6 +210,29 @@ The schema is probed with `pragma_table_info` and the statement assembled from w
 | `total_tokens` only, with no individual bucket columns | visible unsupported | Not guessed. A total cannot supply individual buckets. | No source slot. |
 | Conversation title from the optional `message`/`topic` join | supported | Presentation metadata only; never persisted, consistent with the `title` privacy invariant. | As above. |
 
+## LM Studio matrix
+
+LM Studio has no usage ledger. Its OpenAI-compatible local server writes pretty-printed responses beneath `~/.lmstudio/server-logs/`, and the only usage recorded is the `"usage": { … }` object printed for each completed response. Because the log is pretty-printed that object spans several lines, so the source is scanned for balanced objects rather than parsed as line-delimited JSON. Prompt and completion bodies are never deserialized or retained — only the usage object and the identity ahead of it are read.
+
+The counters are inclusive: `prompt_tokens` already contains both cache buckets and `completion_tokens` already contains reasoning, so the shares are subtracted rather than added on top.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| A balanced `"usage": { … }` object, whatever its line breaks | supported | One observation from `total - completion - cache_read - cache_write`, `completion - reasoning`, and the cache/reasoning details. | Session is the log file stem. |
+| `prompt_tokens_details` / `output_tokens_details` | supported, preferred | Nested details are read, and the flat `cached_tokens` / `cache_creation_input_tokens` / `reasoning_tokens` spellings too; the larger of each pair wins, because builds have shipped either. | As above. |
+| A reported `total_tokens` larger than the bucket sum | supported | Trusted, so a server that counts differently does not have its usage shortened. | As above. |
+| Cache larger than the prompt | clamped | `cache_read` is capped at the prompt and `cache_write` at the remainder; `input` floors at zero. | As above. |
+| Reasoning larger than completion | clamped | `output` floors at zero. | As above. |
+| `total_tokens: 0` | ignored non-usage | No observation. | No source slot. |
+| A trailing object that never closes | ignored | Treated as an incomplete write rather than charged. | No source slot. |
+| An escaped `"usage"` inside a string value | ignored | Not a marker; a prompt that quotes the key must not start a record. | As above. |
+| `"id"` without a `chatcmpl-` / `cmpl-` / `resp_` prefix | supported, content-derived key | The log is full of request and model-file ids, so only a response id may key the record; otherwise the key is derived from the record's own content, which stays stable because a whole revision is re-scanned from the start. | As above. |
+| A date inside the model's own answer | ignored | Timestamps come only from the log header shape, never from a bare bracketed date later in the file. | As above. |
+| No readable header and no file mtime | visible unsupported | The candidate is rejected. | Prior committed generation remains active. |
+| Negative counter, malformed usage object | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| A log larger than 16 MiB | visible unsupported | This codebase delivers one whole source revision, so the scan sees the complete slice and needs no eviction carry; the trade is that a log past the document limit fails visibly instead of silently losing every record. | Prior committed generation remains active. |
+| `is_turn_start`, and host-local-timezone resolution of the naive header | not implemented | This codebase has no turn-start field, and `chrono` here has no `clock` feature, so headers are read as UTC. A record's timestamp therefore differs from the pinned reader's by the host's UTC offset. Record ordering is unaffected. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

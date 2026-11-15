@@ -21,6 +21,7 @@ use crate::parsers::{
     grok::GrokReader,
     kimi::KimiReader,
     kiro::KiroReader,
+    lmstudio::LmstudioReader,
     mcode::McodeReader,
     muse::MuseReader,
     omp::OmpReader,
@@ -76,6 +77,7 @@ pub enum SourceFormat {
     QodercnSqlite,
     DshJsonl,
     CommandCodeJsonl,
+    LmstudioLog,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -122,6 +124,7 @@ impl SourceFormat {
             Self::CherrystudioSqlite => "cherrystudio",
             Self::QodercnJsonl | Self::QodercnSqlite => "qodercn",
             Self::DshJsonl => "dsh",
+            Self::LmstudioLog => "lmstudio",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -167,6 +170,7 @@ impl SourceFormat {
             Self::QodercnJsonl => "qodercn-jsonl",
             Self::QodercnSqlite => "qodercn-sqlite",
             Self::DshJsonl => "dsh-jsonl",
+            Self::LmstudioLog => "lmstudio-log",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -214,6 +218,7 @@ impl SourceFormat {
             "qodercn-jsonl" => Some(Self::QodercnJsonl),
             "qodercn-sqlite" => Some(Self::QodercnSqlite),
             "dsh-jsonl" => Some(Self::DshJsonl),
+            "lmstudio-log" => Some(Self::LmstudioLog),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -434,6 +439,7 @@ enum ResponseReader {
     Amp(Box<AmpReader>),
     Droid(Box<DroidReader>),
     Kiro(Box<KiroReader>),
+    Lmstudio(Box<LmstudioReader>),
     Proma(Box<PromaReader>),
     Kimi(Box<KimiReader>),
     CommandCode(Box<CommandCodeReader>),
@@ -467,6 +473,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.ingest(record),
             Self::Droid(reader) => reader.ingest(record),
             Self::Kiro(reader) => reader.ingest(record),
+            Self::Lmstudio(reader) => reader.ingest(record),
             Self::Proma(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
             Self::CommandCode(reader) => reader.ingest(record),
@@ -500,6 +507,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.snapshot(),
             Self::Droid(reader) => reader.snapshot(),
             Self::Kiro(reader) => reader.snapshot(),
+            Self::Lmstudio(reader) => reader.snapshot(),
             Self::Proma(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
             Self::CommandCode(reader) => reader.snapshot(),
@@ -552,7 +560,8 @@ impl ResponseReader {
             | Self::Mcode(_)
             | Self::OpenClaw(_)
             | Self::Zcode(_)
-            | Self::Qodercn(_) => Ok(()),
+            | Self::Qodercn(_)
+            | Self::Lmstudio(_) => Ok(()),
         }
     }
 
@@ -566,6 +575,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Droid(reader) => reader.has_supported_usage(),
             Self::Kiro(reader) => reader.has_supported_usage(),
+            Self::Lmstudio(reader) => reader.has_supported_usage(),
             Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
@@ -888,6 +898,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Kiro(Box::new(
                     KiroReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::LmstudioLog => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Lmstudio(Box::new(
+                    LmstudioReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::PromaJsonl => {

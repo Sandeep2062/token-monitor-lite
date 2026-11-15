@@ -1351,6 +1351,43 @@ fn dsh_session_transcripts_are_discovered_under_the_sessions_role() {
 }
 
 #[test]
+fn lmstudio_server_logs_are_discovered_under_the_server_logs_role() {
+    let tree = Tree::new();
+    // A pretty-printed usage object, spanning several lines as the server
+    // writes it. A line-oriented parser would find nothing here.
+    tree.file(
+        ".lmstudio/server-logs/2026-07/llama.log",
+        concat!(
+            "[2026-07-09 11:00:00][INFO][llama-3]\n",
+            "Final response: {\n",
+            "  \"id\": \"chatcmpl-1\",\n",
+            "  \"model\": \"llama-3\",\n",
+            "  \"usage\": {\n",
+            "    \"prompt_tokens\": 50,\n",
+            "    \"completion_tokens\": 12,\n",
+            "    \"total_tokens\": 62\n",
+            "  }\n",
+            "}\n"
+        )
+        .as_bytes(),
+    );
+    // A non-`.log` file beside it is not admitted.
+    tree.file(".lmstudio/server-logs/notes.txt", b"hello\n");
+
+    let report = discover(&tree.paths(&["lmstudio"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::LmstudioLog);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::LmstudioLog)
+    );
+}
+
+#[test]
 fn goose_database_uses_the_first_existing_or_authoritative_override() {
     let tree = Tree::new();
     goose_database(&tree.0.join(".local/share/goose/sessions/sessions.db"));

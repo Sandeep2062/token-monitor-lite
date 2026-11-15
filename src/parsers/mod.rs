@@ -21,6 +21,7 @@ pub mod jsonl;
 pub mod kilo;
 pub mod kimi;
 pub mod kiro;
+pub mod lmstudio;
 pub mod mcode;
 pub mod mimo;
 pub mod muse;

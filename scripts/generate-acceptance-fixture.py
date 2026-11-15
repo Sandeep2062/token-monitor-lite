@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 20
+CLAUDE_SOURCES = 19
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -73,6 +73,7 @@ PROMA_SOURCES = 1
 QODERCN_SOURCES = 1
 DSH_SOURCES = 1
 CHERRYSTUDIO_SOURCES = 1
+LMSTUDIO_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -112,6 +113,7 @@ SOURCE_COUNT = (
     + QODERCN_SOURCES
     + DSH_SOURCES
     + CHERRYSTUDIO_SOURCES
+    + LMSTUDIO_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1277,6 +1279,59 @@ def _cherrystudio_database(path: Path) -> tuple[str, dict[str, int], int]:
     finally:
         connection.close()
     return session, totals, OBSERVATIONS_PER_JSONL
+
+
+def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One LM Studio server log: one pretty-printed response per observation.
+
+    The usage object deliberately spans several lines, which is how the server
+    writes it and why the reader scans for balanced objects instead of parsing
+    line-delimited JSON.
+    """
+    session = "llama.log"
+    totals = _counts()
+    blocks = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 170 + observation,
+            "output": 34 + observation,
+            "cacheRead": 6,
+            "cacheWrite": 2,
+            "reasoning": 3,
+        }
+        _add_counts(totals, counts)
+        prompt = counts["input"] + counts["cacheRead"] + counts["cacheWrite"]
+        completion = counts["output"] + counts["reasoning"]
+        blocks.append(
+            "[2026-07-09 11:00:%02d][INFO][llama-3]\n"
+            "Final response: {\n"
+            '  "id": "chatcmpl-%03d",\n'
+            '  "model": "llama-3",\n'
+            '  "usage": {\n'
+            '    "prompt_tokens": %d,\n'
+            '    "completion_tokens": %d,\n'
+            '    "total_tokens": %d,\n'
+            '    "prompt_tokens_details": {\n'
+            '      "cached_tokens": %d,\n'
+            '      "cache_creation_input_tokens": %d\n'
+            "    },\n"
+            '    "output_tokens_details": {\n'
+            '      "reasoning_tokens": %d\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            % (
+                observation % 60,
+                observation,
+                prompt,
+                completion,
+                prompt + completion,
+                counts["cacheRead"],
+                counts["cacheWrite"],
+                counts["reasoning"],
+            )
+        )
+    return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
 
 
 def _dsh_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2581,6 +2636,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, cherrystudio_totals)
     physical_bytes += cherrystudio_target.stat().st_size
     decoded_bytes += cherrystudio_target.stat().st_size
+
+    lmstudio_path, lmstudio_data, lmstudio_totals, lmstudio_rows = _lmstudio_source()
+    lmstudio_entry = _source_entry(
+        root,
+        f"home/.lmstudio/server-logs/2026-07/{lmstudio_path}",
+        lmstudio_data,
+        format_name="lmstudio-log",
+        session="llama",
+        observations=lmstudio_rows,
+        canonical_sessions=1,
+        expected_totals=lmstudio_totals,
+        physical_bytes=len(lmstudio_data),
+    )
+    sources.append(lmstudio_entry)
+    _add_counts(aggregate, lmstudio_totals)
+    _add_counts(canonical_aggregate, lmstudio_totals)
+    physical_bytes += len(lmstudio_data)
+    decoded_bytes += len(lmstudio_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

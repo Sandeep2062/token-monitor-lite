@@ -176,6 +176,7 @@ impl Fixture {
                 "qodercn".to_owned(),
                 "dsh".to_owned(),
                 "cherrystudio".to_owned(),
+                "lmstudio".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
                 "codebuddy".to_owned(),
@@ -255,6 +256,7 @@ fn source_format(format: &str) -> SourceFormat {
         "qodercn-jsonl" => SourceFormat::QodercnJsonl,
         "qodercn-sqlite" => SourceFormat::QodercnSqlite,
         "cherrystudio-sqlite" => SourceFormat::CherrystudioSqlite,
+        "lmstudio-log" => SourceFormat::LmstudioLog,
         "dsh-jsonl" => SourceFormat::DshJsonl,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
         "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
@@ -363,7 +365,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     assert_eq!(
         manifest.coverage.source_formats,
         BTreeMap::from([
-            ("claude-cli".to_owned(), 20),
+            ("claude-cli".to_owned(), 19),
             ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
@@ -377,6 +379,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("qodercn-jsonl".to_owned(), 1),
             ("dsh-jsonl".to_owned(), 1),
             ("cherrystudio-sqlite".to_owned(), 1),
+            ("lmstudio-log".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
             ("cline-json".to_owned(), 1),
