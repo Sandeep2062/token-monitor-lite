@@ -79,6 +79,7 @@ pub enum SourceFormat {
     CommandCodeJsonl,
     LmstudioLog,
     UnslothSqlite,
+    DevinSqlite,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -127,6 +128,7 @@ impl SourceFormat {
             Self::DshJsonl => "dsh",
             Self::LmstudioLog => "lmstudio",
             Self::UnslothSqlite => "unsloth",
+            Self::DevinSqlite => "devin",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -174,6 +176,7 @@ impl SourceFormat {
             Self::DshJsonl => "dsh-jsonl",
             Self::LmstudioLog => "lmstudio-log",
             Self::UnslothSqlite => "unsloth-sqlite",
+            Self::DevinSqlite => "devin-sqlite",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -223,6 +226,7 @@ impl SourceFormat {
             "dsh-jsonl" => Some(Self::DshJsonl),
             "lmstudio-log" => Some(Self::LmstudioLog),
             "unsloth-sqlite" => Some(Self::UnslothSqlite),
+            "devin-sqlite" => Some(Self::DevinSqlite),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -250,6 +254,7 @@ impl SourceFormat {
                 | Self::CatpawSqlite
                 | Self::CherrystudioSqlite
                 | Self::UnslothSqlite
+                | Self::DevinSqlite
                 | Self::QodercnSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
@@ -1052,6 +1057,7 @@ impl SourceReader {
             | SourceFormat::CatpawSqlite
             | SourceFormat::CherrystudioSqlite
             | SourceFormat::UnslothSqlite
+            | SourceFormat::DevinSqlite
             | SourceFormat::QodercnSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
@@ -1080,6 +1086,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Catpaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Cherrystudio(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Unsloth(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Devin(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),

@@ -291,6 +291,53 @@ fn qodercn_database(path: &Path) {
         .unwrap();
 }
 
+fn devin_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            r#"CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                model TEXT,
+                working_directory TEXT
+             );
+             CREATE TABLE message_nodes (
+                row_id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                chat_message TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                metadata TEXT
+             );
+             INSERT INTO sessions (id, title, model, working_directory)
+             VALUES ('s1', 'Fixture', 'claude-sonnet-4', '/work/demo');
+             INSERT INTO message_nodes (row_id, session_id, chat_message, created_at, metadata)
+             VALUES (1, 's1',
+                '{"role":"assistant","metadata":{"request_id":"req-1","metrics":{"input_tokens":100,"output_tokens":20}}}',
+                1782718000, NULL);"#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn devin_cli_database_is_discovered_under_the_data_role() {
+    let tree = Tree::new();
+    let database = tree.file(".local/share/devin/cli/sessions.db", b"");
+    devin_database(&database);
+
+    let report = discover(&tree.paths(&["devin"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::DevinSqlite);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::DevinSqlite)
+    );
+}
+
 fn unsloth_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();

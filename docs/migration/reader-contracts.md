@@ -255,6 +255,28 @@ The counters are inclusive, so cache and reasoning are moved out of prompt/compl
 | Negative counter, empty id | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 | `is_turn_start` | not implemented | This codebase has no such field. | No source slot. |
 
+## Devin matrix
+
+Devin CLI keeps sessions in `~/.local/share/devin/cli/sessions.db`. Usage lives in `message_nodes.chat_message`, a JSON blob whose `metadata.metrics` carries the counters. The separate `metadata` SQL column is always NULL in real Devin databases and is never read.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant `chat_message` with `metadata.metrics` | supported | One observation from `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`. Reasoning is not recorded by Devin and stays zero. | Session is the CLI `session_id`. |
+| Assistant row with empty metrics but `metadata.num_tokens` | supported | `num_tokens` is attributed to output, so an older row is still counted rather than dropped. | As above. |
+| Assistant row with no attributable usage | ignored non-usage | No observation. Such a row must not become a precedence marker for anything else. | No source slot. |
+| `metadata.generation_model` | supported, preferred | Wins over `sessions.model`. | As above. |
+| `sessions.model` | supported, fallback | Used only when no generation model exists. | As above. |
+| `sessions.model` equal to `adaptive` | ignored | A Devin routing mode, not a model id; the row is skipped rather than reported under a fictitious model. | No source slot. |
+| `metadata.request_id` | supported | The dedup identity: Devin can persist one response in several `message_nodes` rows, so copies collapse on the request rather than counting twice. | As above. |
+| No `request_id` | supported | Falls back to the row id, which is the only identity older records have. | As above. |
+| `created_at` plus `metrics.total_time_ms` | supported | `created_at` is the turn's **end** (the row is written once the message is final), so the start is back-calculated from the elapsed generation time. | As above. |
+| No own `created_at` | supported | The database mtime is used and is **not** back-anchored: subtracting a turn duration from a file timestamp would move the record to the wrong day. | As above. |
+| `working_directory` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
+| `message_nodes` or `sessions` absent | supported | An older or partial database is empty history, not a query failure. | No source slot. |
+| Malformed JSON, negative counter, empty session id | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Desktop `acp-events/*.ndjson` | visible unsupported | Not read. Those file names are independent UUIDs, so attributing them needs a title-to-session map built from this database and reconciled across sibling files — impossible for a per-source byte reader without guessing. | No source slot. |
+| `duration_ms`, `is_turn_start`, and `inferred_provider_from_model` | not implemented | This codebase's observation has no duration or turn-start field, and an unrecognized model keeps no provider hint rather than being attributed to `devin`. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

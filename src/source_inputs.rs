@@ -7,6 +7,7 @@ use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::antigravity::AntigravityDbReader;
 use crate::parsers::catpaw;
 use crate::parsers::cherrystudio;
+use crate::parsers::devin;
 use crate::parsers::goose::{GooseReader, GooseRow};
 use crate::parsers::hermes::{HermesReader, HermesRow};
 use crate::parsers::jsonl::{
@@ -295,6 +296,24 @@ impl CherrystudioAdapter {
 
     pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
         read_cherrystudio(&self.path)
+    }
+}
+
+pub struct DevinAdapter {
+    path: PathBuf,
+}
+
+impl DevinAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_devin(&self.path)
     }
 }
 
@@ -624,6 +643,7 @@ pub enum InputAdapterStatus {
     CatpawSqlite,
     CherrystudioSqlite,
     UnslothSqlite,
+    DevinSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -643,6 +663,7 @@ pub(crate) enum SqliteInputData {
     Catpaw(Arc<[ResponseUsage]>),
     Cherrystudio(Arc<[ResponseUsage]>),
     Unsloth(Arc<[ResponseUsage]>),
+    Devin(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -762,6 +783,7 @@ pub enum SourceInput {
     Catpaw(CatpawAdapter),
     Cherrystudio(CherrystudioAdapter),
     Unsloth(UnslothAdapter),
+    Devin(DevinAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -791,6 +813,7 @@ impl SourceInput {
             SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
             SourceFormat::CherrystudioSqlite => Self::Cherrystudio(CherrystudioAdapter::new(path)),
             SourceFormat::UnslothSqlite => Self::Unsloth(UnslothAdapter::new(path)),
+            SourceFormat::DevinSqlite => Self::Devin(DevinAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -984,6 +1007,7 @@ impl SourceInput {
             Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
             Self::Cherrystudio(_) => InputAdapterStatus::CherrystudioSqlite,
             Self::Unsloth(_) => InputAdapterStatus::UnslothSqlite,
+            Self::Devin(_) => InputAdapterStatus::DevinSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -1023,6 +1047,7 @@ impl SourceInput {
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
+            | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -1062,6 +1087,7 @@ impl SourceInput {
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
+            | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -1087,6 +1113,7 @@ impl SourceInput {
             Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
             Self::Cherrystudio(adapter) => Ok(Some(SqliteInputData::Cherrystudio(adapter.read()?))),
             Self::Unsloth(adapter) => Ok(Some(SqliteInputData::Unsloth(adapter.read()?))),
+            Self::Devin(adapter) => Ok(Some(SqliteInputData::Devin(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -1148,6 +1175,7 @@ impl SourceInput {
             Self::Catpaw(adapter) => Some(adapter.path()),
             Self::Cherrystudio(adapter) => Some(adapter.path()),
             Self::Unsloth(adapter) => Some(adapter.path()),
+            Self::Devin(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -1267,6 +1295,7 @@ impl SourceInput {
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
+            | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2910,6 +2939,69 @@ fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(responses))
+}
+
+fn read_devin(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    // Older or partial databases may not yet expose `message_nodes`; that is
+    // empty history rather than a query failure.
+    let mut reader = devin::DevinReader::new();
+    if table_exists(&transaction, "message_nodes")? && table_exists(&transaction, "sessions")? {
+        let fallback = source_modified_ms(path).unwrap_or(0);
+        let sql = "SELECT m.row_id, m.session_id, m.chat_message,
+                          m.created_at * 1000, s.model, s.working_directory
+                   FROM message_nodes m
+                   JOIN sessions s ON m.session_id = s.id
+                   ORDER BY m.row_id LIMIT ?1 OFFSET ?2";
+        let mut offset = 0_i64;
+        loop {
+            let mut statement = transaction.prepare(sql)?;
+            let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+            let mut page_rows = 0_usize;
+            while let Some(row) = rows.next()? {
+                let row_id: i64 = row.get(0)?;
+                let session_id: String = row.get(1)?;
+                let chat_message: String = row.get(2)?;
+                let created_at_ms: Option<i64> = row.get(3)?;
+                let session_model: Option<String> = row.get(4)?;
+                let working_directory: Option<String> = row.get(5)?;
+                reader
+                    .ingest(
+                        devin::DevinRow {
+                            row_id,
+                            session_id: &session_id,
+                            chat_message: chat_message.as_bytes(),
+                            created_at_ms,
+                            session_model: session_model.as_deref(),
+                            working_directory: working_directory.as_deref(),
+                        },
+                        fallback,
+                    )
+                    .map_err(map_devin_error)?;
+                page_rows += 1;
+            }
+            if page_rows == 0 {
+                break;
+            }
+            offset = offset
+                .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+                .ok_or(SqliteSourceError::Capacity)?;
+        }
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn map_devin_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
 }
 
 fn read_unsloth(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

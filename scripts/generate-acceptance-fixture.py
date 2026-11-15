@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 18
+CLAUDE_SOURCES = 17
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -75,6 +75,7 @@ DSH_SOURCES = 1
 CHERRYSTUDIO_SOURCES = 1
 LMSTUDIO_SOURCES = 1
 UNSLOTH_SOURCES = 1
+DEVIN_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -116,6 +117,7 @@ SOURCE_COUNT = (
     + CHERRYSTUDIO_SOURCES
     + LMSTUDIO_SOURCES
     + UNSLOTH_SOURCES
+    + DEVIN_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1334,6 +1336,75 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
             )
         )
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
+
+
+def _devin_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One Devin CLI database: assistant rows with request-scoped metrics."""
+    session = "devin-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                model TEXT,
+                working_directory TEXT
+            );
+            CREATE TABLE message_nodes (
+                row_id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                chat_message TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                metadata TEXT
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO sessions (id, title, model, working_directory)"
+            " VALUES (?, ?, ?, ?)",
+            (session, "Fixture", "claude-sonnet-4", "/work/devin-fixture"),
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 150 + observation,
+                "output": 30 + observation,
+                "cacheRead": 9,
+                "cacheWrite": 2,
+                "reasoning": 0,
+            }
+            _add_counts(totals, counts)
+            metadata = {
+                "request_id": f"req-{observation:03d}",
+                "generation_model": "claude-sonnet-4",
+                "metrics": {
+                    "input_tokens": counts["input"],
+                    "output_tokens": counts["output"],
+                    "cache_read_tokens": counts["cacheRead"],
+                    "cache_creation_tokens": counts["cacheWrite"],
+                },
+            }
+            connection.execute(
+                "INSERT INTO message_nodes"
+                " (row_id, session_id, chat_message, created_at, metadata)"
+                " VALUES (?, ?, ?, ?, NULL)",
+                (
+                    observation + 1,
+                    session,
+                    json.dumps(
+                        {"role": "assistant", "metadata": metadata},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    1_782_718_000 + observation,
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
 
 
 def _unsloth_database(path: Path) -> tuple[str, dict[str, int], int]:
@@ -2746,6 +2817,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, unsloth_totals)
     physical_bytes += unsloth_target.stat().st_size
     decoded_bytes += unsloth_target.stat().st_size
+
+    devin_target = root / "home" / ".local" / "share" / "devin" / "cli" / "sessions.db"
+    devin_session, devin_totals, devin_rows = _devin_database(devin_target)
+    devin_entry = dict(
+        _existing_entry(root, "home/.local/share/devin/cli/sessions.db", devin_target),
+        format="devin-sqlite",
+        session=devin_session,
+        observations=devin_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=devin_target.stat().st_size,
+        physicalBytes=devin_target.stat().st_size,
+        expectedTotals=devin_totals,
+        retainedPeriods=0,
+    )
+    sources.append(devin_entry)
+    _add_counts(aggregate, devin_totals)
+    _add_counts(canonical_aggregate, devin_totals)
+    physical_bytes += devin_target.stat().st_size
+    decoded_bytes += devin_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

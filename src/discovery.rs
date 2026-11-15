@@ -6,10 +6,10 @@ use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, CatpawAdapter, CherrystudioAdapter, CodexLocalUsageAdapter,
-    GooseAdapter, HermesAdapter, KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter,
-    OpenCodeAdapter, QodercnAdapter, SessionArchiveAdapter, SourceInput, SqliteSourceError,
-    UnslothAdapter, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter, has_zstd_suffix,
-    is_compressed_source_path, is_opencode_db_filename,
+    DevinAdapter, GooseAdapter, HermesAdapter, KiloAdapter, MAX_DECODED_BYTES, MimoAdapter,
+    OpenClawAdapter, OpenCodeAdapter, QodercnAdapter, SessionArchiveAdapter, SourceInput,
+    SqliteSourceError, UnslothAdapter, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter,
+    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2610,6 +2610,54 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "devin" {
+            // Devin CLI keeps sessions in `~/.local/share/devin/cli/sessions.db`.
+            // Desktop's `acp-events` streams are not scanned: their file names
+            // are independent UUIDs, so they can only be attributed through a
+            // title map built from this database, which a per-source reader
+            // cannot do.
+            let xdg = inputs
+                .xdg_data_home
+                .clone()
+                .filter(|root| !root.as_os_str().is_empty())
+                .unwrap_or_else(|| join_many(inputs.platform, &inputs.home, &[".local", "share"]));
+            let database = join_many(inputs.platform, &xdg, &["devin", "cli", "sessions.db"]);
+            let metadata = match fs::symlink_metadata(&database) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(metadata) = metadata {
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "devin",
+                        ordinal: 1,
+                    });
+                } else if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                } else if metadata.len() > MAX_SOURCE_FILE_BYTES
+                    || DevinAdapter::new(&database).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "devin",
+                        ordinal: 1,
+                    });
+                } else {
+                    let source_id = source_id_for(SourceFormat::DevinSqlite, &database);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::DevinSqlite,
+                            session: "sessions".to_owned(),
+                            path: database,
+                        });
+                    } else {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    }
+                }
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3642,6 +3690,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::CherrystudioSqlite => None,
                 // Unsloth names its session inside the ledger row.
                 SourceFormat::UnslothSqlite => None,
+                // Devin names its session inside the ledger row.
+                SourceFormat::DevinSqlite => None,
                 // Qoder CN names its session inside the record; the caller
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
