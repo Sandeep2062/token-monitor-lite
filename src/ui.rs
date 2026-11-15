@@ -766,7 +766,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 }
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
-    ["claude", "codex", "opencode"]
+    ["claude", "codex", "gemini", "opencode"]
         .into_iter()
         .map(|client| SettingsClientRow {
             id: client.to_owned(),
@@ -816,17 +816,18 @@ fn safe_source(source: &SourceChoice) -> bool {
 }
 
 fn is_selectable_source_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex" | "opencode" | "mixed")
+    matches!(client, "claude" | "codex" | "gemini" | "opencode" | "mixed")
 }
 
 fn is_supported_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex" | "opencode")
+    matches!(client, "claude" | "codex" | "gemini" | "opencode")
 }
 
 fn client_label(client: &str) -> &'static str {
     match client {
         "claude" => "Claude CLI",
         "codex" => "Codex CLI",
+        "gemini" => "Gemini CLI",
         "opencode" => "OpenCode",
         "mixed" => "Session archive",
         _ => "Unavailable client",
@@ -1229,8 +1230,10 @@ fn source_format(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "Claude CLI",
         SourceFormat::CodexCli => "Codex CLI",
+        SourceFormat::GeminiTranscript => "Gemini CLI",
         SourceFormat::SessionArchiveSqlite => "Session archive",
         SourceFormat::CodexLocalUsageSqlite => "Codex local usage",
+        SourceFormat::OpenCodeSqlite => "OpenCode",
     }
 }
 

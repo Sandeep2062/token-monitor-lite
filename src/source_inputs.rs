@@ -242,6 +242,7 @@ const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputAdapterStatus {
     OrdinaryJsonl,
+    GeminiTranscript,
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
@@ -285,6 +286,21 @@ pub struct OrdinaryJsonlInput {
     cursor: JsonlCursor,
 }
 
+pub struct GeminiInput {
+    path: PathBuf,
+    kind: GeminiInputKind,
+}
+
+enum GeminiInputKind {
+    Jsonl(JsonlCursor),
+    Document(DocumentCursor),
+}
+
+#[derive(Default)]
+struct DocumentCursor {
+    stamp: Option<SourceStamp>,
+}
+
 pub struct CompressedJsonlInput {
     path: PathBuf,
     state: Option<CompressedState>,
@@ -316,6 +332,7 @@ struct CompressedStream<R> {
 
 pub enum SourceInput {
     OrdinaryJsonl(OrdinaryJsonlInput),
+    Gemini(GeminiInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
@@ -336,6 +353,7 @@ impl SourceInput {
                 Self::CodexLocalUsage(CodexLocalUsageAdapter::new(path))
             }
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
+            SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -365,9 +383,23 @@ impl SourceInput {
         }))
     }
 
+    pub(crate) fn gemini(path: PathBuf) -> Self {
+        let kind = if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+        {
+            GeminiInputKind::Jsonl(JsonlCursor::default())
+        } else {
+            GeminiInputKind::Document(DocumentCursor::default())
+        };
+        Self::Gemini(GeminiInput { path, kind })
+    }
+
     pub fn status(&self) -> InputAdapterStatus {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
+            Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
@@ -378,6 +410,7 @@ impl SourceInput {
     pub fn reset(&mut self) {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
+            Self::Gemini(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {}
         }
@@ -386,6 +419,7 @@ impl SourceInput {
     pub fn is_current(&self) -> io::Result<bool> {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
+            Self::Gemini(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => Ok(true),
         }
@@ -400,13 +434,14 @@ impl SourceInput {
                 Ok(Some(SqliteInputData::CodexLocalUsage(adapter.read()?)))
             }
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
-            Self::OrdinaryJsonl(_) | Self::CompressedJsonl(_) => Ok(None),
+            Self::OrdinaryJsonl(_) | Self::Gemini(_) | Self::CompressedJsonl(_) => Ok(None),
         }
     }
 
     pub(crate) fn source_path(&self) -> Option<&Path> {
         match self {
             Self::OrdinaryJsonl(input) => Some(&input.path),
+            Self::Gemini(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
@@ -427,6 +462,7 @@ impl SourceInput {
                     more_available: batch.more_available,
                 })
             }
+            Self::Gemini(input) => input.read_batch(),
             Self::CompressedJsonl(input) => input.read_batch(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {
                 Err(invalid("sqlite input has no JSONL batch"))
@@ -441,6 +477,81 @@ impl fmt::Debug for SourceInput {
             .debug_struct("SourceInput")
             .field("status", &self.status())
             .finish_non_exhaustive()
+    }
+}
+
+impl GeminiInput {
+    fn reset(&mut self) {
+        match &mut self.kind {
+            GeminiInputKind::Jsonl(cursor) => cursor.reset(),
+            GeminiInputKind::Document(cursor) => cursor.stamp = None,
+        }
+    }
+
+    fn is_current(&self) -> io::Result<bool> {
+        match &self.kind {
+            GeminiInputKind::Jsonl(cursor) => cursor.is_current(&self.path),
+            GeminiInputKind::Document(cursor) => {
+                let stamp = current_stamp(&self.path)?;
+                Ok(cursor.stamp.as_ref() == Some(&stamp))
+            }
+        }
+    }
+
+    fn read_batch(&mut self) -> io::Result<InputBatch> {
+        match &mut self.kind {
+            GeminiInputKind::Jsonl(cursor) => {
+                let batch = cursor.read_batch(&self.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
+            GeminiInputKind::Document(cursor) => cursor.read_batch(&self.path),
+        }
+    }
+}
+
+impl DocumentCursor {
+    fn read_batch(&mut self, path: &Path) -> io::Result<InputBatch> {
+        let mut file = File::open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("Gemini source is not a file"));
+        }
+        let stamp = SourceStamp::new(path, &metadata);
+        if self.stamp.as_ref() == Some(&stamp) {
+            return Ok(InputBatch {
+                records: Vec::new(),
+                physical_bytes_read: 0,
+                decoded_bytes_read: 0,
+                reset: false,
+                incomplete_tail: false,
+                more_available: false,
+            });
+        }
+        let length = metadata.len();
+        if length > MAX_RECORD_BYTES as u64 {
+            return Err(invalid("Gemini JSON document exceeds 16 MiB limit"));
+        }
+        let mut bytes = Vec::with_capacity(length as usize);
+        file.read_to_end(&mut bytes)?;
+        if bytes.len() as u64 != length || current_stamp(path)? != stamp {
+            return Err(invalid("Gemini JSON document changed during read"));
+        }
+        self.stamp = Some(stamp);
+        Ok(InputBatch {
+            records: vec![bytes],
+            physical_bytes_read: length as usize,
+            decoded_bytes_read: length as usize,
+            reset: true,
+            incomplete_tail: false,
+            more_available: false,
+        })
     }
 }
 

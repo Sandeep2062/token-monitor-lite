@@ -4,7 +4,9 @@
 //! discovery, cross-file deduplication, period aggregation or archive retention.
 
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
-use crate::parsers::{ReaderError, ResponseUsage, claude::ClaudeReader, codex::CodexReader};
+use crate::parsers::{
+    ReaderError, ResponseUsage, claude::ClaudeReader, codex::CodexReader, gemini::GeminiReader,
+};
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
 use std::fs;
@@ -19,6 +21,7 @@ const PARSER_PIN: &str = "d3df620b2cdd9502c70aececdbc6ece61fe26fc9";
 pub enum SourceFormat {
     ClaudeCli,
     CodexCli,
+    GeminiTranscript,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -29,6 +32,7 @@ impl SourceFormat {
         match self {
             Self::ClaudeCli => "claude",
             Self::CodexCli | Self::CodexLocalUsageSqlite => "codex",
+            Self::GeminiTranscript => "gemini",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
         }
@@ -38,6 +42,7 @@ impl SourceFormat {
         match self {
             Self::ClaudeCli => "claude-jsonl",
             Self::CodexCli => "codex-jsonl",
+            Self::GeminiTranscript => "gemini-transcript",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -48,6 +53,7 @@ impl SourceFormat {
         match value {
             "claude-jsonl" => Some(Self::ClaudeCli),
             "codex-jsonl" => Some(Self::CodexCli),
+            "gemini-transcript" => Some(Self::GeminiTranscript),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -240,6 +246,7 @@ impl ObservationSourceState {
 enum ResponseReader {
     Claude(Box<ClaudeReader>),
     Codex(Box<CodexReader>),
+    Gemini(Box<GeminiReader>),
 }
 
 impl ResponseReader {
@@ -247,6 +254,7 @@ impl ResponseReader {
         match self {
             Self::Claude(reader) => reader.ingest(record),
             Self::Codex(reader) => reader.ingest(record),
+            Self::Gemini(reader) => reader.ingest(record),
         }
     }
 
@@ -254,6 +262,7 @@ impl ResponseReader {
         match self {
             Self::Claude(reader) => reader.snapshot(),
             Self::Codex(reader) => reader.snapshot(),
+            Self::Gemini(reader) => reader.snapshot(),
         }
     }
 
@@ -261,6 +270,7 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => Ok(()),
             Self::Codex(reader) => reader.finish(),
+            Self::Gemini(_) => Ok(()),
         }
     }
 
@@ -268,6 +278,7 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => !rows.is_empty(),
             Self::Codex(reader) => reader.has_supported_usage(),
+            Self::Gemini(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -532,6 +543,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Codex(Box::new(
                     CodexReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::GeminiTranscript => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Gemini(Box::new(
+                    GeminiReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::SessionArchiveSqlite

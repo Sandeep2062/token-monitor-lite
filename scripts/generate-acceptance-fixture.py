@@ -11,11 +11,12 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 32 Codex JSONL
-and 32 zstd Codex sources plus one OpenCode source supply 65 canonical sessions,
-33 Claude sources supply 33, and the single local-usage ledger supplies the
-remaining 902 after one suppressed native-duplicate thread. The archive source
-contributes retained history without fabricating request rows.
+sessions. The distribution below preserves the required totals: 31 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode and one Gemini source supply 65
+canonical sessions, 33 Claude sources supply 33, and the single local-usage
+ledger supplies the remaining 902 after one suppressed native-duplicate thread.
+The archive source contributes retained history without fabricating request
+rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -47,9 +48,10 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 32
+CODEX_SOURCES = 31
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
+GEMINI_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
@@ -57,6 +59,7 @@ SOURCE_COUNT = (
     + CODEX_SOURCES
     + ZSTD_SOURCES
     + OPENCODE_SOURCES
+    + GEMINI_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -251,6 +254,44 @@ def _opencode_database(path: Path) -> tuple[str, dict[str, int], int]:
     finally:
         connection.close()
     return session, totals, OBSERVATIONS_PER_JSONL
+
+
+def _gemini_source() -> tuple[str, bytes, dict[str, int], int]:
+    session = "gemini-fixture-000"
+    totals = _counts()
+    messages = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 197 + observation,
+            "output": 30 + observation,
+            "cacheRead": 5,
+            "cacheWrite": 0,
+            "reasoning": 4,
+        }
+        _add_counts(totals, counts)
+        raw_input = 200 + observation
+        raw_output = 30 + observation
+        messages.append(
+            {
+                "id": f"gemini-message-{observation:02d}",
+                "timestamp": f"2026-11-13T10:00:{observation:02d}Z",
+                "model": "gemini-2.5-pro",
+                "tokens": {
+                    "input": raw_input,
+                    "output": raw_output,
+                    "cached": 5,
+                    "thoughts": 4,
+                    "tool": 2,
+                    "total": raw_input + raw_output + 4 + 2,
+                },
+            }
+        )
+    data = json.dumps(
+        {"sessionId": session, "messages": messages},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return session, data, totals, len(messages)
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -820,6 +861,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, opencode_totals)
     physical_bytes += opencode_target.stat().st_size
     decoded_bytes += opencode_target.stat().st_size
+
+    gemini_session, gemini_data, gemini_totals, gemini_rows = _gemini_source()
+    gemini_entry = _source_entry(
+        root,
+        "home/.gemini/tmp/fixture/chats/session-gemini-fixture-000.json",
+        gemini_data,
+        format_name="gemini-transcript",
+        session=gemini_session,
+        observations=gemini_rows,
+        canonical_sessions=1,
+        expected_totals=gemini_totals,
+        physical_bytes=len(gemini_data),
+    )
+    sources.append(gemini_entry)
+    _add_counts(aggregate, gemini_totals)
+    _add_counts(canonical_aggregate, gemini_totals)
+    physical_bytes += len(gemini_data)
+    decoded_bytes += len(gemini_data)
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

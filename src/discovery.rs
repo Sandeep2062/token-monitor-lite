@@ -827,6 +827,83 @@ fn collect_opencode_candidates(
     Ok(())
 }
 
+fn collect_gemini_candidates(
+    root: &Path,
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_gemini_candidates(root, &child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if is_gemini_transcript_path(root, &child) {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
+fn is_gemini_transcript_path(root: &Path, path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    if extension.eq_ignore_ascii_case("jsonl") {
+        return true;
+    }
+    if !extension.eq_ignore_ascii_case("json") {
+        return false;
+    }
+    if name.starts_with("session-") {
+        return true;
+    }
+    path.strip_prefix(root)
+        .ok()
+        .map(|relative| {
+            let components = relative
+                .components()
+                .map(|component| component.as_os_str())
+                .collect::<Vec<_>>();
+            components.len() == 3 && components[1].to_str() == Some("chats")
+        })
+        .unwrap_or(false)
+}
+
 fn discover_sources_with_id(
     inputs: &HostPaths,
     notices: &mut Vec<DiscoveryNotice>,
@@ -887,6 +964,68 @@ fn discover_sources_with_id(
                     }
                     _ => notices.push(DiscoveryNotice::SourceInvalid {
                         client: "opencode",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
+        if client == "gemini" {
+            let root = join_many(inputs.platform, &inputs.home, &[".gemini", "tmp"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_gemini_candidates(
+                &root,
+                &root,
+                0,
+                &mut inspected,
+                &mut candidates,
+                &mut overflow,
+            )?;
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+                continue;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "gemini",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "gemini",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match validate_source(&path, SourceFormat::GeminiTranscript, metadata.len()) {
+                    Ok(session) => {
+                        let source_id = source_id_for(SourceFormat::GeminiTranscript, &path);
+                        if !admitted_ids.insert(source_id) {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::GeminiTranscript,
+                            session,
+                            path,
+                        });
+                    }
+                    Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "gemini",
                         ordinal,
                     }),
                 }
@@ -1136,7 +1275,13 @@ fn validate_source(path: &Path, format: SourceFormat, bytes: u64) -> Result<Stri
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
     let mut input = SourceInput::for_path(format, path.to_path_buf());
-    let max_steps = if is_compressed_source_path(path) {
+    let max_steps = if is_compressed_source_path(path)
+        || (format == SourceFormat::GeminiTranscript
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl")))
+    {
         4
     } else {
         1
@@ -1157,6 +1302,10 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                         None
                     }
                 }
+                SourceFormat::GeminiTranscript => value
+                    .get("sessionId")
+                    .or_else(|| value.get("session_id"))
+                    .and_then(Value::as_str),
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite => None,
@@ -1168,6 +1317,14 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         if !batch.more_available {
             break;
         }
+    }
+    if format == SourceFormat::GeminiTranscript {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
     }
     Err(())
 }

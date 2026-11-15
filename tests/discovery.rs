@@ -121,6 +121,40 @@ fn opencode_database(path: &Path, session: &str) {
         .unwrap();
 }
 
+fn gemini_session_bytes(session: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "sessionId": session,
+        "messages": [{
+            "id": format!("{session}-message"),
+            "timestamp": "2026-11-13T10:00:00Z",
+            "model": "gemini-2.5-pro",
+            "tokens": {"input": 10, "output": 4, "cached": 2, "thoughts": 1, "total": 15}
+        }]
+    }))
+    .unwrap()
+}
+
+fn gemini_jsonl_bytes(session: &str) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&serde_json::json!({
+        "type": "init",
+        "session_id": session,
+        "model": "gemini-2.5-flash"
+    }))
+    .unwrap();
+    bytes.push(b'\n');
+    bytes.extend(
+        serde_json::to_vec(&serde_json::json!({
+            "type": "gemini",
+            "id": "event-1",
+            "timestamp": "2026-11-13T10:00:00Z",
+            "tokens": {"input": 10, "output": 4, "cached": 2, "thoughts": 1, "total": 15}
+        }))
+        .unwrap(),
+    );
+    bytes.push(b'\n');
+    bytes
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -620,6 +654,37 @@ fn opencode_databases_are_discovered_only_at_the_xdg_data_role() {
             ..
         }
     )));
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn gemini_transcripts_are_discovered_only_at_tmp_roles() {
+    let tree = Tree::new();
+    tree.file(
+        ".gemini/tmp/acme/chats/session-a.json",
+        &gemini_session_bytes("session-a"),
+    );
+    tree.file(
+        ".gemini/tmp/session-b.json",
+        &gemini_session_bytes("session-b"),
+    );
+    tree.file(
+        ".gemini/tmp/acme/chats/session-c.jsonl",
+        &gemini_jsonl_bytes("session-c"),
+    );
+    tree.file(
+        ".gemini/tmp/acme/not-a-transcript.json",
+        &gemini_session_bytes("ignored"),
+    );
+
+    let mut paths = tree.paths(&["gemini"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 3);
+    assert!(report.sources.iter().all(|source| {
+        source.format == SourceFormat::GeminiTranscript && !source.session.is_empty()
+    }));
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

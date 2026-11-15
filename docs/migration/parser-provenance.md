@@ -27,6 +27,7 @@ All paths below are relative to the exact Tokscale revision and MIT-covered by `
 | `crates/tokscale-core/src/sessions/opencodex.rs` | 47,759 | `8a84dcfa4d515e75df042172216565ca1dec298d890bf28fae6af5fe3b6056fb` | Supplemental/native-overlap evidence only. It does not authorize a new Gate 2A input format. |
 | `crates/tokscale-core/src/sessions/opencode.rs` | 105,568 | `0c749edc4e7d4fb91c8e51c5c1b4fb9b1e352c21b0e7fff1da1efc7362dd34a7` | OpenCode v1 message parsing, strict cache, model/provider resolution, message-ID identity, and the clamp/truncate behavior the native reader deliberately rejects. Pinned-reader evidence re-read at the exact revision; not part of the original 31-entry retained manifest. |
 | `crates/tokscale-core/src/sessions/opencode_schema.rs` | 90,101 | `c913a72caace8b2aa655393e50b2d7674d34598bafa8c9a5a1eb052722d2a219` | OpenCode v1/v2 SQLite structural queries, dual-schema model/provider resolution, strict cache, inclusive-output/reasoning extraction, and fingerprint dedup. Pinned-reader evidence re-read at the exact revision; not part of the original 31-entry retained manifest. |
+| `crates/tokscale-core/src/sessions/gemini.rs` | 49,239 | `ce84c732dde2aeeabdd776d4d1c322f98e0530d91d1659fd0f2d4e09a059e6f8` | Gemini session-document, headless JSONL/direct-event, stats/model attribution, token aliases, cache-inclusive prompt normalization, tool-in-input, and file-mtime fallback. Pinned-reader evidence re-read at the exact revision. |
 
 The native implementation does not embed `tokscale-core` and does not invoke a parser subprocess. Pinned code sometimes skips malformed or oversized rows and uses signed/saturating behavior; Gate 2A deliberately selects strict checked non-negative counters and whole-candidate failure. Those native differences are part of the written contract, not accidental drift.
 
@@ -68,6 +69,8 @@ The following OpenCode files are also **supplemental exact-pin evidence** from t
 | `src/shared/providers/opencode/goLimits.js` | 9,053 | `e8eeb3c05d46ddcc2332e8213d502373ec13448aac3b3133a193bd5a959660c3` | `OPENCODE_DB` override, `XDG_DATA_HOME`/`<home>/.local/share` data root, and `opencode.db` / `opencode-<channel>.db` filename rule. |
 
 The native reader deliberately does not implement the reference's `OPENCODE_DB` override or its summary/subtask restoration; those are recorded as visible unsupported coverage in [reader contracts](reader-contracts.md).
+
+Source-root evidence for the JSON readers is also supplemental exact-pin evidence: `src/shared/clientSources.js` (33,255 bytes, SHA-256 `2bc0f73720bbee23aa422dfb15bef6dd858ba8a042ff665043b1865a907f0849`) and `src/shared/clientSourceRegistration.js` (6,832 bytes, SHA-256 `96587007a3677270c051277093c9099a429338984fb7c19d2ab8d6943dcd75ba`) establish the Gemini `tmp` root, the Cline VS Code globalStorage roots, the Amp thread/cache roots, and the Copilot `otel`/`session-state` roots.
 
 `scripts/vendor/tokscale.json` (9,427 bytes, SHA-256 `07f9c905b51ebc4bdac55565bab9d624338b6b7c55f843fd37b18afbef86aa07`) records the application-side parser pin. It is provenance evidence, not code loaded by Token Monitor Lite.
 
