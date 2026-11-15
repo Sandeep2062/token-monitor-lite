@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 19
+CLAUDE_SOURCES = 18
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -74,6 +74,7 @@ QODERCN_SOURCES = 1
 DSH_SOURCES = 1
 CHERRYSTUDIO_SOURCES = 1
 LMSTUDIO_SOURCES = 1
+UNSLOTH_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -114,6 +115,7 @@ SOURCE_COUNT = (
     + DSH_SOURCES
     + CHERRYSTUDIO_SOURCES
     + LMSTUDIO_SOURCES
+    + UNSLOTH_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1332,6 +1334,76 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
             )
         )
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
+
+
+def _unsloth_database(path: Path) -> tuple[str, dict[str, int], int]:
+    """One Unsloth Studio ledger: a local chat thread plus API events.
+
+    The chat lane carries cache and reasoning detail, so the row stores the
+    inclusive `promptTokens`/`completionTokens` and the reader splits the
+    shares back out.
+    """
+    session = "unsloth-thread"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE chat_threads (id TEXT PRIMARY KEY, model_id TEXT);
+            CREATE TABLE chat_messages (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                metadata_json TEXT,
+                created_at INTEGER NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO chat_threads (id, model_id) VALUES (?, ?)", (session, "llama-3")
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 160 + observation,
+                "output": 32 + observation,
+                "cacheRead": 7,
+                "cacheWrite": 3,
+                "reasoning": 4,
+            }
+            _add_counts(totals, counts)
+            metadata = {
+                "contextUsage": {
+                    "promptTokens": counts["input"] + counts["cacheRead"] + counts["cacheWrite"],
+                    "completionTokens": counts["output"] + counts["reasoning"],
+                    "totalTokens": counts["input"]
+                    + counts["output"]
+                    + counts["cacheRead"]
+                    + counts["cacheWrite"]
+                    + counts["reasoning"],
+                    "cachedTokens": counts["cacheRead"],
+                    "cacheWriteTokens": counts["cacheWrite"],
+                    "reasoningTokens": counts["reasoning"],
+                    "modelId": "llama-3",
+                },
+                # Local inference: an authoritative zero cost.
+                "responseDetails": {"providerType": "local"},
+            }
+            connection.execute(
+                "INSERT INTO chat_messages"
+                " (id, thread_id, role, metadata_json, created_at)"
+                " VALUES (?, ?, 'assistant', ?, ?)",
+                (
+                    f"msg-{observation:03d}",
+                    session,
+                    json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+                    1_782_718_000 + observation,
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
 
 
 def _dsh_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2654,6 +2726,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, lmstudio_totals)
     physical_bytes += len(lmstudio_data)
     decoded_bytes += len(lmstudio_data)
+
+    unsloth_target = root / "home" / ".unsloth" / "studio" / "studio.db"
+    unsloth_session, unsloth_totals, unsloth_rows = _unsloth_database(unsloth_target)
+    unsloth_entry = dict(
+        _existing_entry(root, "home/.unsloth/studio/studio.db", unsloth_target),
+        format="unsloth-sqlite",
+        session=unsloth_session,
+        observations=unsloth_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=unsloth_target.stat().st_size,
+        physicalBytes=unsloth_target.stat().st_size,
+        expectedTotals=unsloth_totals,
+        retainedPeriods=0,
+    )
+    sources.append(unsloth_entry)
+    _add_counts(aggregate, unsloth_totals)
+    _add_counts(canonical_aggregate, unsloth_totals)
+    physical_bytes += unsloth_target.stat().st_size
+    decoded_bytes += unsloth_target.stat().st_size
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

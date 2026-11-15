@@ -233,6 +233,28 @@ The counters are inclusive: `prompt_tokens` already contains both cache buckets 
 | A log larger than 16 MiB | visible unsupported | This codebase delivers one whole source revision, so the scan sees the complete slice and needs no eviction carry; the trade is that a log past the document limit fails visibly instead of silently losing every record. | Prior committed generation remains active. |
 | `is_turn_start`, and host-local-timezone resolution of the naive header | not implemented | This codebase has no turn-start field, and `chrono` here has no `clock` feature, so headers are read as UTC. A record's timestamp therefore differs from the pinned reader's by the host's UTC offset. Record ordering is unaffected. | No source slot. |
 
+## Unsloth matrix
+
+Unsloth Studio keeps durable chat and API usage in `studio.db` beneath `$UNSLOTH_STUDIO_HOME` (normally `~/.unsloth/studio`). Two lanes are read, and neither selects message content, prompts, attachments or response previews — only scalar usage and routing fields cross the database boundary.
+
+The counters are inclusive, so cache and reasoning are moved out of prompt/completion rather than added on top.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `chat_messages` assistant row with `contextUsage` | supported | One observation from the inclusive prompt/completion minus the cache and reasoning shares. | Session is the thread id, else `unsloth:chat:<message>`. |
+| `responseDetails.responseModelId` | supported, preferred | The responding model wins over `contextUsage.modelId`, then the thread's `model_id`. | As above. |
+| `responseDetails.providerType: "local"` | supported | Authoritative zero cost: the model ran on this machine. | As above. |
+| A recognized metered route (`anthropic`, `deepseek`, `gemini`, `huggingface`, `kimi`, `mistral`, `openai`, `openrouter`, `qwen`) | supported | Keeps its catalog provider namespace (`gemini`→`google`, `kimi`→`moonshotai`, `mistral`→`mistralai`) with no cost, so pricing applies. | As above. |
+| Custom, subscription-backed or unknown route | supported, unpriced | No provider hint at all, so nothing is billed against a guess. The pinned reader's `unpriced:<route>` pseudo-provider is not reproduced; the outcome is the same. | As above. |
+| No `providerType` recorded | supported, unpriced | No provider hint and no cost. | As above. |
+| `api_usage_events` row | supported | One observation. The table stores only prompt/completion/total, so cache and reasoning are zero because the data does not exist — not because it was measured at zero. | Session is the fixed `unsloth:api`. |
+| The `api_usage_events` table is absent | supported | An older Studio build; the chat lane still imports. | No source slot for the API lane. |
+| `total_tokens` larger than the bucket sum | supported | Trusted, so a provider that counts differently is not shortened. | As above. |
+| Cache larger than the prompt, reasoning larger than completion | clamped | Shares are capped; input and output floor at zero. | As above. |
+| Timestamp zero or negative | ignored non-usage | No observation. | No source slot. |
+| Negative counter, empty id | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| `is_turn_start` | not implemented | This codebase has no such field. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

@@ -818,6 +818,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "proma",
         "catpaw",
         "cherrystudio",
+        "unsloth",
         "qodercn",
         "dsh",
         "lmstudio",
@@ -906,6 +907,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "proma"
             | "catpaw"
             | "cherrystudio"
+            | "unsloth"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -949,6 +951,7 @@ fn is_supported_client(client: &str) -> bool {
             | "proma"
             | "catpaw"
             | "cherrystudio"
+            | "unsloth"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -990,6 +993,7 @@ fn client_label(client: &str) -> &'static str {
         "proma" => "Proma",
         "catpaw" => "CatPaw",
         "cherrystudio" => "Cherry Studio",
+        "unsloth" => "Unsloth",
         "qodercn" => "Qoder CN",
         "dsh" => "DeepSeek Harness",
         "lmstudio" => "LM Studio",
@@ -1462,6 +1466,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::PromaJsonl => "Proma",
         SourceFormat::CatpawSqlite => "CatPaw",
         SourceFormat::CherrystudioSqlite => "Cherry Studio",
+        SourceFormat::UnslothSqlite => "Unsloth",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "Qoder CN",
         SourceFormat::DshJsonl => "DeepSeek Harness",
         SourceFormat::LmstudioLog => "LM Studio",

@@ -78,6 +78,7 @@ pub enum SourceFormat {
     DshJsonl,
     CommandCodeJsonl,
     LmstudioLog,
+    UnslothSqlite,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -125,6 +126,7 @@ impl SourceFormat {
             Self::QodercnJsonl | Self::QodercnSqlite => "qodercn",
             Self::DshJsonl => "dsh",
             Self::LmstudioLog => "lmstudio",
+            Self::UnslothSqlite => "unsloth",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -171,6 +173,7 @@ impl SourceFormat {
             Self::QodercnSqlite => "qodercn-sqlite",
             Self::DshJsonl => "dsh-jsonl",
             Self::LmstudioLog => "lmstudio-log",
+            Self::UnslothSqlite => "unsloth-sqlite",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -219,6 +222,7 @@ impl SourceFormat {
             "qodercn-sqlite" => Some(Self::QodercnSqlite),
             "dsh-jsonl" => Some(Self::DshJsonl),
             "lmstudio-log" => Some(Self::LmstudioLog),
+            "unsloth-sqlite" => Some(Self::UnslothSqlite),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -245,6 +249,7 @@ impl SourceFormat {
                 | Self::ZcodeSqlite
                 | Self::CatpawSqlite
                 | Self::CherrystudioSqlite
+                | Self::UnslothSqlite
                 | Self::QodercnSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
@@ -1046,6 +1051,7 @@ impl SourceReader {
             | SourceFormat::ZcodeSqlite
             | SourceFormat::CatpawSqlite
             | SourceFormat::CherrystudioSqlite
+            | SourceFormat::UnslothSqlite
             | SourceFormat::QodercnSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
@@ -1073,6 +1079,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Qodercn(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Catpaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Cherrystudio(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Unsloth(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),

@@ -291,6 +291,62 @@ fn qodercn_database(path: &Path) {
         .unwrap();
 }
 
+fn unsloth_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            r#"CREATE TABLE chat_threads (id TEXT PRIMARY KEY, model_id TEXT);
+             CREATE TABLE chat_messages (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                metadata_json TEXT,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE api_usage_events (
+                id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                model TEXT NOT NULL,
+                status TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL,
+                completion_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+             INSERT INTO chat_threads (id, model_id) VALUES ('t1', 'llama-3');
+             INSERT INTO chat_messages (id, thread_id, role, metadata_json, created_at)
+             VALUES ('m1', 't1', 'assistant',
+                '{"contextUsage":{"promptTokens":100,"completionTokens":20,"totalTokens":120},"responseDetails":{"providerType":"local"}}',
+                1782718000);
+             INSERT INTO api_usage_events
+                (id, subject, endpoint, model, status, prompt_tokens,
+                 completion_tokens, total_tokens, created_at)
+             VALUES ('e1', 's', '/v1/chat/completions', 'llama-3', 'ok', 50, 10, 60, 1782718000);"#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn unsloth_studio_ledger_is_discovered_under_the_studio_role() {
+    let tree = Tree::new();
+    let database = tree.file(".unsloth/studio/studio.db", b"");
+    unsloth_database(&database);
+
+    let report = discover(&tree.paths(&["unsloth"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::UnslothSqlite);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::UnslothSqlite)
+    );
+}
+
 fn cherrystudio_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();

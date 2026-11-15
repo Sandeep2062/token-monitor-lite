@@ -19,6 +19,7 @@ use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
 use crate::parsers::qodercn;
+use crate::parsers::unsloth;
 use crate::parsers::workbuddy::sqlite_row_to_usage;
 use crate::parsers::zcode;
 use crate::parsers::zed::ZedReader;
@@ -294,6 +295,24 @@ impl CherrystudioAdapter {
 
     pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
         read_cherrystudio(&self.path)
+    }
+}
+
+pub struct UnslothAdapter {
+    path: PathBuf,
+}
+
+impl UnslothAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_unsloth(&self.path)
     }
 }
 
@@ -604,6 +623,7 @@ pub enum InputAdapterStatus {
     LmstudioLog,
     CatpawSqlite,
     CherrystudioSqlite,
+    UnslothSqlite,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -622,6 +642,7 @@ pub(crate) enum SqliteInputData {
     Qodercn(Arc<[ResponseUsage]>),
     Catpaw(Arc<[ResponseUsage]>),
     Cherrystudio(Arc<[ResponseUsage]>),
+    Unsloth(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
@@ -740,6 +761,7 @@ pub enum SourceInput {
     Qodercn(QodercnAdapter),
     Catpaw(CatpawAdapter),
     Cherrystudio(CherrystudioAdapter),
+    Unsloth(UnslothAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
     OpenClaw(OpenClawAdapter),
@@ -768,6 +790,7 @@ impl SourceInput {
             SourceFormat::QodercnSqlite => Self::Qodercn(QodercnAdapter::new(path)),
             SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
             SourceFormat::CherrystudioSqlite => Self::Cherrystudio(CherrystudioAdapter::new(path)),
+            SourceFormat::UnslothSqlite => Self::Unsloth(UnslothAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
@@ -960,6 +983,7 @@ impl SourceInput {
             Self::Qodercn(_) => InputAdapterStatus::QodercnSqlite,
             Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
             Self::Cherrystudio(_) => InputAdapterStatus::CherrystudioSqlite,
+            Self::Unsloth(_) => InputAdapterStatus::UnslothSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
@@ -998,6 +1022,7 @@ impl SourceInput {
             | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
+            | Self::Unsloth(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -1036,6 +1061,7 @@ impl SourceInput {
             | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
+            | Self::Unsloth(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -1060,6 +1086,7 @@ impl SourceInput {
             Self::Qodercn(adapter) => Ok(Some(SqliteInputData::Qodercn(adapter.read()?))),
             Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
             Self::Cherrystudio(adapter) => Ok(Some(SqliteInputData::Cherrystudio(adapter.read()?))),
+            Self::Unsloth(adapter) => Ok(Some(SqliteInputData::Unsloth(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
@@ -1120,6 +1147,7 @@ impl SourceInput {
             Self::Qodercn(adapter) => Some(adapter.path()),
             Self::Catpaw(adapter) => Some(adapter.path()),
             Self::Cherrystudio(adapter) => Some(adapter.path()),
+            Self::Unsloth(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
@@ -1238,6 +1266,7 @@ impl SourceInput {
             | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Cherrystudio(_)
+            | Self::Unsloth(_)
             | Self::Goose(_)
             | Self::Hermes(_)
             | Self::OpenClaw(_)
@@ -2883,6 +2912,141 @@ fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     Ok(Arc::from(responses))
 }
 
+fn read_unsloth(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    let mut reader = unsloth::UnslothReader::new();
+
+    // The internal chat lane. Only scalar usage and routing columns are
+    // selected: message content, prompts and previews never cross the boundary.
+    if table_exists(&transaction, "chat_messages")? {
+        let sql = "SELECT m.id, m.thread_id, m.created_at,
+                          json_extract(m.metadata_json, '$.contextUsage.promptTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.completionTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.totalTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.cachedTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.cacheWriteTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.reasoningTokens'),
+                          json_extract(m.metadata_json, '$.contextUsage.modelId'),
+                          json_extract(m.metadata_json, '$.responseDetails.responseModelId'),
+                          json_extract(m.metadata_json, '$.responseDetails.providerType'),
+                          t.model_id
+                   FROM chat_messages m
+                   LEFT JOIN chat_threads t ON t.id = m.thread_id
+                   WHERE m.role = 'assistant'
+                     AND json_valid(m.metadata_json)
+                   ORDER BY m.created_at, m.id LIMIT ?1 OFFSET ?2";
+        read_unsloth_lane(&transaction, sql, unsloth::Lane::Chat, &mut reader)?;
+    }
+
+    // The external API lane. Older Studio builds have no such table, which is
+    // not an error: their chat usage still imports.
+    if table_exists(&transaction, "api_usage_events")? {
+        let sql = "SELECT id, endpoint, model, prompt_tokens, completion_tokens,
+                          total_tokens, created_at
+                   FROM api_usage_events
+                   ORDER BY created_at, id LIMIT ?1 OFFSET ?2";
+        read_unsloth_lane(&transaction, sql, unsloth::Lane::Api, &mut reader)?;
+    }
+
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_unsloth_lane(
+    transaction: &rusqlite::Transaction<'_>,
+    sql: &str,
+    lane: unsloth::Lane,
+    reader: &mut unsloth::UnslothReader,
+) -> Result<(), SqliteSourceError> {
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            // Bind every borrowed string before building the row: the row holds
+            // references, so the temporaries have to outlive it.
+            let (endpoint, thread_id, requested, response, provider_type, thread_model) = match lane
+            {
+                unsloth::Lane::Chat => (
+                    None,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                ),
+                unsloth::Lane::Api => (
+                    row.get::<_, Option<String>>(1)?,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            };
+            let row = match lane {
+                unsloth::Lane::Chat => unsloth::UnslothRow {
+                    lane,
+                    id: &id,
+                    thread_id: thread_id.as_deref(),
+                    endpoint: None,
+                    created_at_secs: row.get(2)?,
+                    prompt_tokens: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    completion_tokens: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    total_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cached_tokens: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_write_tokens: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    reasoning_tokens: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    requested_model: requested.as_deref(),
+                    response_model: response.as_deref(),
+                    provider_type: provider_type.as_deref(),
+                    thread_model: thread_model.as_deref(),
+                },
+                unsloth::Lane::Api => unsloth::UnslothRow {
+                    lane,
+                    id: &id,
+                    thread_id: None,
+                    endpoint: endpoint.as_deref(),
+                    created_at_secs: row.get(6)?,
+                    prompt_tokens: row.get(3)?,
+                    completion_tokens: row.get(4)?,
+                    total_tokens: row.get(5)?,
+                    cached_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    requested_model: None,
+                    response_model: None,
+                    provider_type: None,
+                    thread_model: None,
+                },
+            };
+            reader.ingest(row).map_err(map_unsloth_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    Ok(())
+}
+
+fn map_unsloth_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
+}
+
 fn read_cherrystudio(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     let snapshot = SqliteSnapshot::open(path)?;
     let transaction = snapshot.connection.unchecked_transaction()?;
@@ -3020,6 +3184,17 @@ fn read_cherrystudio(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceEr
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+/// Whether `table` exists in this database.
+fn table_exists(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+) -> Result<bool, SqliteSourceError> {
+    let mut statement =
+        transaction.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?;
+    let mut rows = statement.query([table])?;
+    Ok(rows.next()?.is_some())
 }
 
 /// Whether `table` exists and carries `name`, for probing optional joins.

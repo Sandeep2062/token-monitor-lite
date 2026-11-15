@@ -1171,6 +1171,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::PromaJsonl => "proma",
         SourceFormat::CatpawSqlite => "catpaw",
         SourceFormat::CherrystudioSqlite => "cherrystudio",
+        SourceFormat::UnslothSqlite => "unsloth",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "qodercn",
         SourceFormat::DshJsonl => "dsh",
         SourceFormat::LmstudioLog => "lmstudio",

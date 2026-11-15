@@ -8,8 +8,8 @@ use crate::source_inputs::{
     AntigravitySqliteAdapter, CatpawAdapter, CherrystudioAdapter, CodexLocalUsageAdapter,
     GooseAdapter, HermesAdapter, KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter,
     OpenCodeAdapter, QodercnAdapter, SessionArchiveAdapter, SourceInput, SqliteSourceError,
-    WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter, has_zstd_suffix, is_compressed_source_path,
-    is_opencode_db_filename,
+    UnslothAdapter, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter, has_zstd_suffix,
+    is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2564,6 +2564,52 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "unsloth" {
+            // Unsloth Studio keeps durable chat and API usage in `studio.db`
+            // beneath `$UNSLOTH_STUDIO_HOME` (normally `~/.unsloth/studio`).
+            // Older builds may lack either lane's table, which the reader
+            // probes silently.
+            let database = join_many(
+                inputs.platform,
+                &inputs.home,
+                &[".unsloth", "studio", "studio.db"],
+            );
+            let metadata = match fs::symlink_metadata(&database) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(metadata) = metadata {
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "unsloth",
+                        ordinal: 1,
+                    });
+                } else if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                } else if metadata.len() > MAX_SOURCE_FILE_BYTES
+                    || UnslothAdapter::new(&database).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "unsloth",
+                        ordinal: 1,
+                    });
+                } else {
+                    let source_id = source_id_for(SourceFormat::UnslothSqlite, &database);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::UnslothSqlite,
+                            session: "studio".to_owned(),
+                            path: database,
+                        });
+                    } else {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    }
+                }
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3594,6 +3640,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::LmstudioLog => None,
                 // Cherry Studio's ledger names its session inside the record.
                 SourceFormat::CherrystudioSqlite => None,
+                // Unsloth names its session inside the ledger row.
+                SourceFormat::UnslothSqlite => None,
                 // Qoder CN names its session inside the record; the caller
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
