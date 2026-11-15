@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 14
+CLAUDE_SOURCES = 13
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -79,6 +79,7 @@ DEVIN_SOURCES = 1
 FX_SOURCES = 1
 MISTRAL_SOURCES = 1
 PRIME_AGENT_SOURCES = 1
+JCODE_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -124,6 +125,7 @@ SOURCE_COUNT = (
     + FX_SOURCES
     + MISTRAL_SOURCES
     + PRIME_AGENT_SOURCES
+    + JCODE_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1342,6 +1344,56 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
             )
         )
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
+
+
+def _jcode_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Jcode session snapshot: one message with usage per observation.
+
+    Every usage carries `cache_creation_input_tokens`, which is the
+    Anthropic-style signal that the cache buckets are already split out of
+    `input_tokens`, so no overlap is removed.
+    """
+    session = "jcode-fixture-000"
+    totals = _counts()
+    messages = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 155 + observation,
+            "output": 31 + observation,
+            "cacheRead": 11,
+            "cacheWrite": 4,
+            "reasoning": 6,
+        }
+        _add_counts(totals, counts)
+        messages.append(
+            {
+                "id": f"msg-{observation:03d}",
+                "role": "assistant",
+                "timestamp": f"2026-07-09T11:00:{observation:02d}.000Z",
+                "token_usage": {
+                    "input_tokens": counts["input"],
+                    "output_tokens": counts["output"],
+                    "cache_read_input_tokens": counts["cacheRead"],
+                    "cache_creation_input_tokens": counts["cacheWrite"],
+                    "reasoning_output_tokens": counts["reasoning"],
+                },
+            }
+        )
+    # A user message carries no usage and must be skipped.
+    messages.append({"id": "user-1", "role": "user", "content": "hello"})
+    document = {
+        "id": session,
+        "provider_key": "anthropic",
+        "model": "claude-sonnet-4",
+        "working_dir": "/work/jcode-fixture",
+        "messages": messages,
+    }
+    return (
+        f"session_20260709_110000_fixture",
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode(),
+        totals,
+        OBSERVATIONS_PER_JSONL,
+    )
 
 
 def _prime_agent_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -3035,6 +3087,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, prime_totals)
     physical_bytes += len(prime_data)
     decoded_bytes += len(prime_data)
+
+    jcode_path, jcode_data, jcode_totals, jcode_rows = _jcode_source()
+    jcode_entry = _source_entry(
+        root,
+        f"home/.jcode/sessions/{jcode_path}.json",
+        jcode_data,
+        format_name="jcode-json",
+        session="jcode-fixture-000",
+        observations=jcode_rows,
+        canonical_sessions=1,
+        expected_totals=jcode_totals,
+        physical_bytes=len(jcode_data),
+    )
+    sources.append(jcode_entry)
+    _add_counts(aggregate, jcode_totals)
+    _add_counts(canonical_aggregate, jcode_totals)
+    physical_bytes += len(jcode_data)
+    decoded_bytes += len(jcode_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

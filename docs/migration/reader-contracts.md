@@ -341,6 +341,29 @@ Prime Agent stores root sessions in `~/.prime/agent/sessions/*.jsonl` and RLM ch
 | RLM child transcript under `session-artifacts/` | supported | Each child file is its own source, scanned directly. | As above. |
 | Fork aggregate reversal on the parent | not implemented | Needs the child transcript the parent's aggregate covers — a cross-file read this per-source contract cannot perform, so the parent copy is skipped (above) rather than adjusted by a guess. | No source slot. |
 
+## Jcode matrix
+
+Jcode writes one compact JSON session snapshot per session at `~/.jcode/sessions/session_*.json`. Authoritative assistant token usage sits on each message under `token_usage`; user and tool messages carry none and are skipped.
+
+Cache accounting is decided from the **message-local** usage shape, never from the session. Jcode stores `provider_key` and `model` only at session scope, so either may describe a later route after a mid-session switch.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Message with `token_usage` | supported | One observation from its counters. | Session is the snapshot's `id`, else the file stem. |
+| Usage carrying `cache_creation_input_tokens` (even `0`) | supported, split shape | The cache buckets are already separate, so `input_tokens` is used verbatim. The field's **presence** is the signal, not its value. | As above. |
+| Usage with `cache_read_input_tokens` but no creation field | supported, subset shape | Cache reads are a subset of `input_tokens`, so the overlap is removed: `input = input - min(cache_read, input)`. Charging both would count the cached reads twice. | As above. |
+| `cache_read > input` with no creation field | supported, split shape | Impossible under subset accounting, so it proves the split shape without needing the creation field. | As above. |
+| Message with no `token_usage` | ignored non-usage | User and tool messages carry none. | No source slot. |
+| All-zero usage | ignored non-usage | No observation. | No source slot. |
+| Message `timestamp` plus `tool_duration_ms` | supported | The timestamp is the turn's **end**, so the start is back-calculated from the elapsed duration. | As above. |
+| No own timestamp | supported | The session/file fallback is used and is **not** back-anchored: subtracting a turn duration from it would move the message into the wrong day. | As above. |
+| `working_dir` | supported | Only the final path component survives, as a label; a raw absolute path is refused in every runtime identity column. | As above. |
+| Blank session `id`, `model`, or `provider_key` | supported | Falls back to the file stem, `unknown`, and `jcode` respectively. | As above. |
+| Message with no `id` | supported | A `snapshot:<ordinal>` fallback keeps a custom or malformed file parseable without colliding. | As above. |
+| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Sibling journal (`*.journal.jsonl`) | visible unsupported | Not read. Merging it means appending the unsaved suffix, replacing a snapshot entry in place when the journal repeats its id, and re-scoping the billing provider per append batch — a cross-file merge this per-source contract cannot perform. The snapshot alone is self-contained. | No source slot. |
+| `is_turn_start`, `message_count`, provider canonicalization | not implemented | No such fields on this codebase's observation; `provider_key` is reported verbatim as the billing hint. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

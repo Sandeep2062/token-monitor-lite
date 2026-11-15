@@ -2857,6 +2857,64 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "jcode" {
+            // Jcode writes one compact JSON session snapshot per session at
+            // `~/.jcode/sessions/session_*.json`. The sibling journal is not
+            // read, because a per-source reader cannot reconcile across files.
+            let root = join_many(inputs.platform, &inputs.home, &[".jcode", "sessions"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.retain(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("session_"))
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::JcodeJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "jcode",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::JcodeJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::JcodeJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3900,6 +3958,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
                 SourceFormat::QodercnSqlite => None,
+                // Jcode names its session inside the snapshot.
+                SourceFormat::JcodeJson => None,
                 // DSH's transcript directory is named after its session id.
                 SourceFormat::DshJsonl => None,
                 // Kimi's wire stream carries no session id; the caller derives
@@ -4001,6 +4061,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
                     .map(str::to_owned)
             })
+            .ok_or(());
+    }
+    // `~/.jcode/sessions/session_<stamp>_<id>.json`: the snapshot names its
+    // session, so the caller falls back to the file stem when it is blank.
+    if format == SourceFormat::JcodeJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
             .ok_or(());
     }
     // `~/.fx/sessions/<session-id>/usage-v2.json`: the session is the containing

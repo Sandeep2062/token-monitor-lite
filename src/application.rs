@@ -1176,6 +1176,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::FxUsageJson => "fx",
         SourceFormat::VibeJson => "mistral",
         SourceFormat::PrimeAgentJsonl => "prime-agent",
+        SourceFormat::JcodeJson => "jcode",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "qodercn",
         SourceFormat::DshJsonl => "dsh",
         SourceFormat::LmstudioLog => "lmstudio",

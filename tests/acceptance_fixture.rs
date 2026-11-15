@@ -182,6 +182,7 @@ impl Fixture {
                 "fx".to_owned(),
                 "mistral".to_owned(),
                 "prime-agent".to_owned(),
+                "jcode".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
                 "codebuddy".to_owned(),
@@ -267,6 +268,7 @@ fn source_format(format: &str) -> SourceFormat {
         "fx-usage-json" => SourceFormat::FxUsageJson,
         "vibe-json" => SourceFormat::VibeJson,
         "prime-agent-jsonl" => SourceFormat::PrimeAgentJsonl,
+        "jcode-json" => SourceFormat::JcodeJson,
         "dsh-jsonl" => SourceFormat::DshJsonl,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
         "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
@@ -375,7 +377,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     assert_eq!(
         manifest.coverage.source_formats,
         BTreeMap::from([
-            ("claude-cli".to_owned(), 14),
+            ("claude-cli".to_owned(), 13),
             ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
@@ -395,6 +397,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("fx-usage-json".to_owned(), 1),
             ("vibe-json".to_owned(), 1),
             ("prime-agent-jsonl".to_owned(), 1),
+            ("jcode-json".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
             ("cline-json".to_owned(), 1),

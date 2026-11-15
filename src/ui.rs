@@ -823,6 +823,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "fx",
         "mistral",
         "prime-agent",
+        "jcode",
         "qodercn",
         "dsh",
         "lmstudio",
@@ -916,6 +917,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "fx"
             | "mistral"
             | "prime-agent"
+            | "jcode"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -964,6 +966,7 @@ fn is_supported_client(client: &str) -> bool {
             | "fx"
             | "mistral"
             | "prime-agent"
+            | "jcode"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -1010,6 +1013,7 @@ fn client_label(client: &str) -> &'static str {
         "fx" => "fx",
         "mistral" => "Mistral Vibe",
         "prime-agent" => "Prime Agent",
+        "jcode" => "Jcode",
         "qodercn" => "Qoder CN",
         "dsh" => "DeepSeek Harness",
         "lmstudio" => "LM Studio",
@@ -1487,6 +1491,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::FxUsageJson => "fx",
         SourceFormat::VibeJson => "Mistral Vibe",
         SourceFormat::PrimeAgentJsonl => "Prime Agent",
+        SourceFormat::JcodeJson => "Jcode",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "Qoder CN",
         SourceFormat::DshJsonl => "DeepSeek Harness",
         SourceFormat::LmstudioLog => "LM Studio",

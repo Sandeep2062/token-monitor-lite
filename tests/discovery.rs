@@ -292,6 +292,29 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn jcode_session_snapshots_are_discovered_under_the_sessions_role() {
+    let tree = Tree::new();
+    tree.file(
+        ".jcode/sessions/session_20260709_110000_abc.json",
+        br#"{"id":"jcode-1","provider_key":"anthropic","model":"claude-sonnet-4","messages":[{"id":"m1","role":"assistant","timestamp":"2026-07-09T11:00:00.000Z","token_usage":{"input_tokens":100,"output_tokens":20}}]}"#,
+    );
+    // A non-`session_` JSON beside it is not admitted.
+    tree.file(".jcode/sessions/config.json", br#"{"id":"other"}"#);
+
+    let report = discover(&tree.paths(&["jcode"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::JcodeJson);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::JcodeJson)
+    );
+}
+
+#[test]
 fn prime_agent_sessions_are_discovered_from_both_roots() {
     let tree = Tree::new();
     let header = br#"{"type":"session","version":3,"id":"prime-1","timestamp":"2026-07-09T11:00:00.000Z"}
