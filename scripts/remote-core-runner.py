@@ -124,6 +124,7 @@ elif mode == "linux-package":
             "--metainfo", str(snapshot / "packaging" / "linux" / "io.github.sandeep2062.TokenMonitorLite.metainfo.xml"),
             "--icon", str(snapshot / "packaging" / "linux" / "token-monitor-lite.svg"),
             "--license", str(snapshot / "LICENSE"),
+            "--notices", str(snapshot / "THIRD_PARTY_NOTICES.md"),
             "--work-root", str(snapshot / "linux-package-evidence"),
             "--report", str(snapshot / "linux-package-report.json"),
             "--source-snapshot-sha256", snapshot_hash,

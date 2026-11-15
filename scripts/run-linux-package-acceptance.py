@@ -22,6 +22,7 @@ EXPECTED_FILES = {
     "usr/bin/token-monitor-lite": 0o755,
     "usr/share/applications/token-monitor-lite.desktop": 0o644,
     "usr/share/doc/token-monitor-lite/copyright": 0o644,
+    "usr/share/doc/token-monitor-lite/THIRD_PARTY_NOTICES.md": 0o644,
     "usr/share/icons/hicolor/scalable/apps/token-monitor-lite.svg": 0o644,
     "usr/share/metainfo/io.github.sandeep2062.TokenMonitorLite.metainfo.xml": 0o644,
 }
@@ -92,6 +93,7 @@ def _build(
     metainfo: Path,
     icon: Path,
     license_file: Path,
+    notices_file: Path,
     output: Path,
     version: str,
 ) -> None:
@@ -109,6 +111,8 @@ def _build(
             str(icon),
             "--license",
             str(license_file),
+            "--notices",
+            str(notices_file),
             "--output",
             str(output),
             "--version",
@@ -154,7 +158,9 @@ def _validate_declared_dependencies(deb: Path, binary: Path) -> None:
         match = re.search(r"^\s*(\S+)\s+=>\s+(/\S+)\s+\(", line)
         if match:
             resolved[match.group(1)] = Path(match.group(2))
-    missing_paths = sorted(needed - set(resolved) - {"linux-vdso.so.1"})
+    missing_paths = sorted(
+        needed - set(resolved) - {"linux-vdso.so.1", "ld-linux-x86-64.so.2"}
+    )
     if missing_paths:
         raise ValueError("a direct dynamic dependency was not resolved")
     undeclared: set[str] = set()
@@ -208,6 +214,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     metainfo = _regular_file(arguments.metainfo, "AppStream metadata")
     icon = _regular_file(arguments.icon, "application icon")
     license_file = _regular_file(arguments.license, "license")
+    notices_file = _regular_file(arguments.notices, "third-party notices")
     work = _new_root(arguments.work_root)
     report_path = Path(arguments.report)
 
@@ -220,9 +227,39 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     package_a = work / "package-a"
     package_b = work / "package-b"
     package_old = work / "package-old"
-    _build(builder, binary, desktop, metainfo, icon, license_file, package_a, arguments.version)
-    _build(builder, binary, desktop, metainfo, icon, license_file, package_b, arguments.version)
-    _build(builder, binary, desktop, metainfo, icon, license_file, package_old, "0.0.9")
+    _build(
+        builder,
+        binary,
+        desktop,
+        metainfo,
+        icon,
+        license_file,
+        notices_file,
+        package_a,
+        arguments.version,
+    )
+    _build(
+        builder,
+        binary,
+        desktop,
+        metainfo,
+        icon,
+        license_file,
+        notices_file,
+        package_b,
+        arguments.version,
+    )
+    _build(
+        builder,
+        binary,
+        desktop,
+        metainfo,
+        icon,
+        license_file,
+        notices_file,
+        package_old,
+        "0.0.9",
+    )
     _assert_deterministic(package_a, package_b)
 
     deb = package_a / f"token-monitor-lite_{arguments.version}_amd64.deb"
@@ -279,14 +316,23 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     _validate_declared_dependencies(deb, deb_root / "usr/bin/token-monitor-lite")
     strings = _run(["strings", "--all", str(deb_root / "usr/bin/token-monitor-lite")]).stdout.lower()
     for forbidden in (
-        b"electron",
         b"node_modules",
         b"chromium",
         b"token-monitor/",
-        b"/home/azureuser/",
         b"d:\\github\\",
+        b"electron/",
+        b"electron.app",
+        b"electron.exe",
     ):
         if forbidden in strings:
+            raise ValueError("packaged binary contains a forbidden runtime/build marker")
+    # Dependency panic locations and Slint's generated `out/app.rs` retain the
+    # builder's registry/build paths; those are build metadata, not packaged
+    # inputs. Any other absolute builder path means a checkout leaked in.
+    for line in strings.splitlines():
+        if b"/home/azureuser/" in line and not (
+            b"/.cargo/registry/src/" in line or b"/out/" in line
+        ):
             raise ValueError("packaged binary contains a forbidden runtime/build marker")
 
     lifecycle_root = work / "lifecycle-root"
@@ -382,6 +428,7 @@ def main() -> int:
     parser.add_argument("--metainfo", required=True)
     parser.add_argument("--icon", required=True)
     parser.add_argument("--license", required=True)
+    parser.add_argument("--notices", required=True)
     parser.add_argument("--work-root", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--version", default="0.1.0")

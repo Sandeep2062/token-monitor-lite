@@ -4,7 +4,7 @@ param(
     [string]$Test = 'core'
 )
 $ErrorActionPreference = 'Stop'
-$Files = @('Cargo.toml', 'build.rs', 'src/lib.rs', 'tests/core.rs', 'LICENSE')
+$Files = @('Cargo.toml', 'build.rs', 'src/lib.rs', 'tests/core.rs', 'LICENSE', 'THIRD_PARTY_NOTICES.md')
 foreach ($Optional in @('Cargo.lock', 'src/catalog.rs', 'src/accounting.rs', 'assets/catalog.json')) {
     if (Test-Path -LiteralPath $Optional) { $Files += $Optional }
 }
@@ -14,6 +14,11 @@ foreach ($AcceptanceFile in @('scripts/generate-acceptance-fixture.py', 'scripts
 $Files += @(Get-ChildItem -Path 'src','tests' -Recurse -File | ForEach-Object {
     $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')
 } | Where-Object { $_ -notin $Files })
+if (Test-Path -LiteralPath 'assets') {
+    $Files += @(Get-ChildItem -Path 'assets' -Recurse -File | ForEach-Object {
+        $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')
+    } | Where-Object { $_ -notin $Files })
+}
 if (Test-Path -LiteralPath 'ui') {
     $Files += @(Get-ChildItem -Path 'ui' -Recurse -File | ForEach-Object {
         $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')

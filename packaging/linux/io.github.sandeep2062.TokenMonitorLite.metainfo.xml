@@ -5,6 +5,7 @@
   <summary>Native token usage monitor</summary>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/Sandeep2062/token-monitor-lite</url>
   <description>
     <p>Monitor supported local AI coding-session token usage with a native Rust and Slint desktop application.</p>
   </description>

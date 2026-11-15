@@ -98,6 +98,7 @@ def build(arguments: argparse.Namespace) -> list[Path]:
     metainfo = _regular_file(arguments.metainfo, "AppStream metadata")
     icon = _regular_file(arguments.icon, "application icon")
     license_file = _regular_file(arguments.license, "license")
+    notices_file = _regular_file(arguments.notices, "third-party notices")
     output = _new_directory(arguments.output)
     if arguments.epoch < 0:
         raise ValueError("source epoch must be non-negative")
@@ -119,6 +120,11 @@ def build(arguments: argparse.Namespace) -> list[Path]:
             0o644,
         ),
         _entry("usr/share/doc/token-monitor-lite/copyright", license_file, 0o644),
+        _entry(
+            "usr/share/doc/token-monitor-lite/THIRD_PARTY_NOTICES.md",
+            notices_file,
+            0o644,
+        ),
     ]
     installed_size = max(1, (sum(len(data) for _, data, _ in data_entries) + 1023) // 1024)
     control = (
@@ -179,7 +185,7 @@ def build(arguments: argparse.Namespace) -> list[Path]:
             "--no-progress",
             "--force",
             str(raw_tar),
-            "--output",
+            "-o",
             str(tar_zst),
         ],
         check=False,
@@ -204,6 +210,7 @@ def main() -> int:
     parser.add_argument("--metainfo", required=True)
     parser.add_argument("--icon", required=True)
     parser.add_argument("--license", required=True)
+    parser.add_argument("--notices", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--version", default="0.1.0")
     parser.add_argument("--epoch", type=int, default=DEFAULT_EPOCH)

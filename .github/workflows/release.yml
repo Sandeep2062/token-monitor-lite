@@ -27,6 +27,7 @@ jobs:
             --metainfo packaging/linux/io.github.sandeep2062.TokenMonitorLite.metainfo.xml \
             --icon packaging/linux/token-monitor-lite.svg \
             --license LICENSE \
+            --notices THIRD_PARTY_NOTICES.md \
             --output dist \
             --version "$version"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
