@@ -11,12 +11,12 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 31 Codex JSONL
-and 32 zstd Codex sources plus one OpenCode and one Gemini source supply 65
-canonical sessions, 33 Claude sources supply 33, and the single local-usage
-ledger supplies the remaining 902 after one suppressed native-duplicate thread.
-The archive source contributes retained history without fabricating request
-rows.
+sessions. The distribution below preserves the required totals: 30 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode, one Gemini and one Cursor source
+supply 65 canonical sessions, 33 Claude sources supply 33, and the single
+local-usage ledger supplies the remaining 902 after one suppressed
+native-duplicate thread. The archive source contributes retained history
+without fabricating request rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -48,10 +48,11 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 31
+CODEX_SOURCES = 30
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
+CURSOR_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
@@ -60,6 +61,7 @@ SOURCE_COUNT = (
     + ZSTD_SOURCES
     + OPENCODE_SOURCES
     + GEMINI_SOURCES
+    + CURSOR_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -292,6 +294,41 @@ def _gemini_source() -> tuple[str, bytes, dict[str, int], int]:
         separators=(",", ":"),
     ).encode("utf-8")
     return session, data, totals, len(messages)
+
+
+def _cursor_source() -> tuple[str, bytes, dict[str, int], int]:
+    session = "cursor-fixture-000"
+    totals = _counts()
+    events = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 400 + observation,
+            "output": 50 + observation,
+            "cacheRead": 20,
+            "cacheWrite": 5,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        events.append(
+            {
+                "usageEventId": f"cursor-event-{observation:02d}",
+                "conversationId": session,
+                "timestamp": str(1_763_000_000_000 + observation * 1_000),
+                "model": "claude-sonnet-4-5",
+                "tokenUsage": {
+                    "inputTokens": counts["input"],
+                    "outputTokens": counts["output"],
+                    "cacheReadTokens": counts["cacheRead"],
+                    "cacheWriteTokens": counts["cacheWrite"],
+                },
+            }
+        )
+    data = json.dumps(
+        {"usageEventsDisplay": events},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return session, data, totals, len(events)
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -879,6 +916,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, gemini_totals)
     physical_bytes += len(gemini_data)
     decoded_bytes += len(gemini_data)
+
+    cursor_session, cursor_data, cursor_totals, cursor_rows = _cursor_source()
+    cursor_entry = _source_entry(
+        root,
+        "home/.config/tokscale/cursor-cache/usage.json",
+        cursor_data,
+        format_name="cursor-cache-json",
+        session=cursor_session,
+        observations=cursor_rows,
+        canonical_sessions=1,
+        expected_totals=cursor_totals,
+        physical_bytes=len(cursor_data),
+    )
+    sources.append(cursor_entry)
+    _add_counts(aggregate, cursor_totals)
+    _add_counts(canonical_aggregate, cursor_totals)
+    physical_bytes += len(cursor_data)
+    decoded_bytes += len(cursor_data)
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

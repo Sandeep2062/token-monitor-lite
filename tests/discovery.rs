@@ -155,6 +155,19 @@ fn gemini_jsonl_bytes(session: &str) -> Vec<u8> {
     bytes
 }
 
+fn cursor_cache_bytes(session: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "usageEventsDisplay": [{
+            "usageEventId": format!("{session}-event"),
+            "conversationId": session,
+            "timestamp": 1_794_564_000_000_i64,
+            "model": "claude-sonnet-4-5",
+            "tokenUsage": {"inputTokens": 10, "outputTokens": 4}
+        }]
+    }))
+    .unwrap()
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -684,6 +697,34 @@ fn gemini_transcripts_are_discovered_only_at_tmp_roles() {
     assert_eq!(report.sources.len(), 3);
     assert!(report.sources.iter().all(|source| {
         source.format == SourceFormat::GeminiTranscript && !source.session.is_empty()
+    }));
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn cursor_cache_is_discovered_only_at_exact_json_roles() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/tokscale/cursor-cache/usage.json",
+        &cursor_cache_bytes("conv-active"),
+    );
+    tree.file(
+        ".config/tokscale/cursor-cache/usage.account-a.json",
+        &cursor_cache_bytes("conv-account"),
+    );
+    tree.file(".config/tokscale/cursor-cache/usage.csv", b"Date,Model\n");
+    tree.file(
+        ".config/tokscale/cursor-cache/archive/usage.json",
+        &cursor_cache_bytes("archived"),
+    );
+
+    let mut paths = tree.paths(&["cursor"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(report.sources.iter().all(|source| {
+        source.format == SourceFormat::CursorCacheJson && source.session == "cursor"
     }));
 
     paths.enabled_clients = BTreeSet::new();

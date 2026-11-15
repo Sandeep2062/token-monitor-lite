@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
-const SUPPORTED_CLIENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+const SUPPORTED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "gemini", "opencode"];
 const COMMAND_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1132,6 +1132,7 @@ fn source_client(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "claude",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
+        SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
         SourceFormat::SessionArchiveSqlite => "mixed",
         SourceFormat::OpenCodeSqlite => "opencode",

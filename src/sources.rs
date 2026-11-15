@@ -5,7 +5,8 @@
 
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
-    ReaderError, ResponseUsage, claude::ClaudeReader, codex::CodexReader, gemini::GeminiReader,
+    ReaderError, ResponseUsage, claude::ClaudeReader, codex::CodexReader, cursor::CursorReader,
+    gemini::GeminiReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -22,6 +23,7 @@ pub enum SourceFormat {
     ClaudeCli,
     CodexCli,
     GeminiTranscript,
+    CursorCacheJson,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -33,6 +35,7 @@ impl SourceFormat {
             Self::ClaudeCli => "claude",
             Self::CodexCli | Self::CodexLocalUsageSqlite => "codex",
             Self::GeminiTranscript => "gemini",
+            Self::CursorCacheJson => "cursor",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
         }
@@ -43,6 +46,7 @@ impl SourceFormat {
             Self::ClaudeCli => "claude-jsonl",
             Self::CodexCli => "codex-jsonl",
             Self::GeminiTranscript => "gemini-transcript",
+            Self::CursorCacheJson => "cursor-cache-json",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -54,6 +58,7 @@ impl SourceFormat {
             "claude-jsonl" => Some(Self::ClaudeCli),
             "codex-jsonl" => Some(Self::CodexCli),
             "gemini-transcript" => Some(Self::GeminiTranscript),
+            "cursor-cache-json" => Some(Self::CursorCacheJson),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -247,6 +252,7 @@ enum ResponseReader {
     Claude(Box<ClaudeReader>),
     Codex(Box<CodexReader>),
     Gemini(Box<GeminiReader>),
+    Cursor(Box<CursorReader>),
 }
 
 impl ResponseReader {
@@ -255,6 +261,7 @@ impl ResponseReader {
             Self::Claude(reader) => reader.ingest(record),
             Self::Codex(reader) => reader.ingest(record),
             Self::Gemini(reader) => reader.ingest(record),
+            Self::Cursor(reader) => reader.ingest(record),
         }
     }
 
@@ -263,6 +270,7 @@ impl ResponseReader {
             Self::Claude(reader) => reader.snapshot(),
             Self::Codex(reader) => reader.snapshot(),
             Self::Gemini(reader) => reader.snapshot(),
+            Self::Cursor(reader) => reader.snapshot(),
         }
     }
 
@@ -270,7 +278,7 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => Ok(()),
             Self::Codex(reader) => reader.finish(),
-            Self::Gemini(_) => Ok(()),
+            Self::Gemini(_) | Self::Cursor(_) => Ok(()),
         }
     }
 
@@ -279,6 +287,7 @@ impl ResponseReader {
             Self::Claude(_) => !rows.is_empty(),
             Self::Codex(reader) => reader.has_supported_usage(),
             Self::Gemini(reader) => reader.has_supported_usage(),
+            Self::Cursor(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -551,6 +560,14 @@ impl SourceReader {
                     GeminiReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
+            SourceFormat::CursorCacheJson => {
+                let account = self
+                    .input
+                    .source_path()
+                    .map(cursor_account_from_path)
+                    .unwrap_or_else(|| "unknown".to_owned());
+                ResponseReader::Cursor(Box::new(CursorReader::new(account)))
+            }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite => {
@@ -619,6 +636,32 @@ impl SourceReader {
             progress: SourceProgress::Published { delta },
         })
     }
+}
+
+fn cursor_account_from_path(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("usage.json");
+    if name == "usage.json" {
+        return "active".to_owned();
+    }
+    name.strip_prefix("usage.")
+        .and_then(|name| name.strip_suffix(".json"))
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            name.chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                        character
+                    } else {
+                        '-'
+                    }
+                })
+                .collect()
+        })
+        .filter(|name: &String| !name.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn claude_client_from_path(path: &Path) -> String {

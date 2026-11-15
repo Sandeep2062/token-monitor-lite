@@ -766,7 +766,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 }
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
-    ["claude", "codex", "gemini", "opencode"]
+    ["claude", "codex", "cursor", "gemini", "opencode"]
         .into_iter()
         .map(|client| SettingsClientRow {
             id: client.to_owned(),
@@ -816,17 +816,24 @@ fn safe_source(source: &SourceChoice) -> bool {
 }
 
 fn is_selectable_source_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex" | "gemini" | "opencode" | "mixed")
+    matches!(
+        client,
+        "claude" | "codex" | "cursor" | "gemini" | "opencode" | "mixed"
+    )
 }
 
 fn is_supported_client(client: &str) -> bool {
-    matches!(client, "claude" | "codex" | "gemini" | "opencode")
+    matches!(
+        client,
+        "claude" | "codex" | "cursor" | "gemini" | "opencode"
+    )
 }
 
 fn client_label(client: &str) -> &'static str {
     match client {
         "claude" => "Claude CLI",
         "codex" => "Codex CLI",
+        "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
         "opencode" => "OpenCode",
         "mixed" => "Session archive",
@@ -1230,6 +1237,7 @@ fn source_format(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "Claude CLI",
         SourceFormat::CodexCli => "Codex CLI",
+        SourceFormat::CursorCacheJson => "Cursor",
         SourceFormat::GeminiTranscript => "Gemini CLI",
         SourceFormat::SessionArchiveSqlite => "Session archive",
         SourceFormat::CodexLocalUsageSqlite => "Codex local usage",

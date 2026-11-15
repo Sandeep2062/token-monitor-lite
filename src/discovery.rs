@@ -827,6 +827,13 @@ fn collect_opencode_candidates(
     Ok(())
 }
 
+fn is_cursor_cache_filename(name: &str) -> bool {
+    name == "usage.json"
+        || (name.starts_with("usage.")
+            && name.ends_with(".json")
+            && name.len() > "usage..json".len())
+}
+
 fn collect_gemini_candidates(
     root: &Path,
     directory: &Path,
@@ -1026,6 +1033,75 @@ fn discover_sources_with_id(
                     }
                     Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
                         client: "gemini",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
+        if client == "cursor" {
+            let root = join_many(
+                inputs.platform,
+                &inputs.home,
+                &[".config", "tokscale", "cursor-cache"],
+            );
+            let mut candidates = Vec::new();
+            let entries = match fs::read_dir(&root) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            for entry in entries {
+                let entry = entry?;
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(is_cursor_cache_filename)
+                {
+                    candidates.push(entry.path());
+                }
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "cursor",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "cursor",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match validate_source(&path, SourceFormat::CursorCacheJson, metadata.len()) {
+                    Ok(_) => {
+                        let source_id = source_id_for(SourceFormat::CursorCacheJson, &path);
+                        if !admitted_ids.insert(source_id) {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::CursorCacheJson,
+                            session: "cursor".to_owned(),
+                            path,
+                        });
+                    }
+                    Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "cursor",
                         ordinal,
                     }),
                 }
@@ -1308,7 +1384,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .and_then(Value::as_str),
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
-                | SourceFormat::OpenCodeSqlite => None,
+                | SourceFormat::OpenCodeSqlite
+                | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {
                 return Ok(session.to_owned());
@@ -1317,6 +1394,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         if !batch.more_available {
             break;
         }
+    }
+    if format == SourceFormat::CursorCacheJson {
+        return Ok("cursor".to_owned());
     }
     if format == SourceFormat::GeminiTranscript {
         return path

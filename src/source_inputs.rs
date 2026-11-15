@@ -243,6 +243,7 @@ const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
 pub enum InputAdapterStatus {
     OrdinaryJsonl,
     GeminiTranscript,
+    CursorCacheJson,
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
@@ -291,6 +292,11 @@ pub struct GeminiInput {
     kind: GeminiInputKind,
 }
 
+pub struct CursorInput {
+    path: PathBuf,
+    cursor: DocumentCursor,
+}
+
 enum GeminiInputKind {
     Jsonl(JsonlCursor),
     Document(DocumentCursor),
@@ -333,6 +339,7 @@ struct CompressedStream<R> {
 pub enum SourceInput {
     OrdinaryJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
+    Cursor(CursorInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
@@ -354,6 +361,7 @@ impl SourceInput {
             }
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::GeminiTranscript => Self::gemini(path),
+            SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -396,10 +404,18 @@ impl SourceInput {
         Self::Gemini(GeminiInput { path, kind })
     }
 
+    pub(crate) fn cursor(path: PathBuf) -> Self {
+        Self::Cursor(CursorInput {
+            path,
+            cursor: DocumentCursor::default(),
+        })
+    }
+
     pub fn status(&self) -> InputAdapterStatus {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
+            Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
@@ -411,6 +427,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
+            Self::Cursor(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {}
         }
@@ -420,6 +437,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
+            Self::Cursor(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => Ok(true),
         }
@@ -434,7 +452,10 @@ impl SourceInput {
                 Ok(Some(SqliteInputData::CodexLocalUsage(adapter.read()?)))
             }
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
-            Self::OrdinaryJsonl(_) | Self::Gemini(_) | Self::CompressedJsonl(_) => Ok(None),
+            Self::OrdinaryJsonl(_)
+            | Self::Gemini(_)
+            | Self::Cursor(_)
+            | Self::CompressedJsonl(_) => Ok(None),
         }
     }
 
@@ -442,6 +463,7 @@ impl SourceInput {
         match self {
             Self::OrdinaryJsonl(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
+            Self::Cursor(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
@@ -463,6 +485,7 @@ impl SourceInput {
                 })
             }
             Self::Gemini(input) => input.read_batch(),
+            Self::Cursor(input) => input.read_batch(),
             Self::CompressedJsonl(input) => input.read_batch(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {
                 Err(invalid("sqlite input has no JSONL batch"))
@@ -513,6 +536,21 @@ impl GeminiInput {
             }
             GeminiInputKind::Document(cursor) => cursor.read_batch(&self.path),
         }
+    }
+}
+
+impl CursorInput {
+    fn reset(&mut self) {
+        self.cursor.stamp = None;
+    }
+
+    fn is_current(&self) -> io::Result<bool> {
+        let stamp = current_stamp(&self.path)?;
+        Ok(self.cursor.stamp.as_ref() == Some(&stamp))
+    }
+
+    fn read_batch(&mut self) -> io::Result<InputBatch> {
+        self.cursor.read_batch(&self.path)
     }
 }
 
