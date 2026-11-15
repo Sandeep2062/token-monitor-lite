@@ -48,10 +48,10 @@ from typing import Any, Callable
 
 
 SCHEMA = "token-monitor-lite-acceptance-v2"
-REVISION = "mixed-2026-11-13.2"
+REVISION = "mixed-2026-11-13.3"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 20
+CODEX_SOURCES = 15
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
@@ -66,6 +66,11 @@ WORKBUDDY_SOURCES = 1
 PI_SOURCES = 1
 OMP_SOURCES = 1
 SENPI_SOURCES = 1
+ANTIGRAVITY_SOURCES = 1
+QWEN_SOURCES = 1
+REASONIX_SOURCES = 1
+MUSE_SOURCES = 1
+MCODE_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 EXTRA_CLAUDE_OBSERVATIONS = 9
@@ -86,6 +91,11 @@ SOURCE_COUNT = (
     + PI_SOURCES
     + OMP_SOURCES
     + SENPI_SOURCES
+    + ANTIGRAVITY_SOURCES
+    + QWEN_SOURCES
+    + REASONIX_SOURCES
+    + MUSE_SOURCES
+    + MCODE_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -300,6 +310,184 @@ def _pi_source(
                     },
                     "timestamp": f"2026-11-13T12:{index % 60:02d}:{observation + 1:02d}Z",
                     "type": "message",
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _antigravity_source(_client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"antigravity-fixture-{index:03d}"
+    records = [
+        _json_line(
+            {
+                "type": "session_meta",
+                "sessionId": session,
+                "modelId": "claude-sonnet-4-6",
+            }
+        )
+    ]
+    totals = _counts()
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 100 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 5,
+            "cacheWrite": 2,
+            "reasoning": 1,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "type": "usage",
+                    "sessionId": session,
+                    "timestamp": 1_780_000_000_000 + observation * 1_000,
+                    "responseId": f"ag-{index:03d}-{observation:02d}",
+                    **{key: counts[key] for key in ("input", "output", "cacheRead", "cacheWrite", "reasoning")},
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _qwen_source(_client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"qwen-fixture-{index:03d}"
+    totals = _counts()
+    records: list[bytes] = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 100 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 5,
+            "cacheWrite": 0,
+            "reasoning": 3,
+        }
+        _add_counts(totals, counts)
+        prompt = counts["input"] + counts["cacheRead"]
+        candidates = counts["output"]
+        thoughts = counts["reasoning"]
+        records.append(
+            _json_line(
+                {
+                    "type": "assistant",
+                    "sessionId": session,
+                    "model": "qwen3-coder",
+                    "timestamp": f"2026-11-13T10:{index % 60:02d}:{observation:02d}Z",
+                    "usageMetadata": {
+                        "promptTokenCount": prompt,
+                        "candidatesTokenCount": candidates,
+                        "thoughtsTokenCount": thoughts,
+                        "cachedContentTokenCount": counts["cacheRead"],
+                        "totalTokenCount": prompt + candidates + thoughts,
+                    },
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _reasonix_source(_client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"reasonix-fixture-{index:03d}"
+    totals = _counts()
+    records: list[bytes] = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 100 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 5,
+            "cacheWrite": 0,
+            "reasoning": 3,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "ts": f"2026-11-13T10:{index % 60:02d}:{observation:02d}Z",
+                    "model": "deepseek/chat",
+                    "prompt": counts["input"] + counts["cacheRead"],
+                    "completion": counts["output"] + counts["reasoning"],
+                    "reasoning": counts["reasoning"],
+                    "cache_hit": counts["cacheRead"],
+                    "cache_miss": counts["input"],
+                    "total": counts["input"] + counts["cacheRead"] + counts["output"] + counts["reasoning"],
+                    "requests": 1,
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _muse_source(_client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"muse-fixture-{index:03d}"
+    totals = _counts()
+    records: list[bytes] = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 100 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 5,
+            "cacheWrite": 0,
+            "reasoning": 3,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "recorded_at": 1_780_000_000_000_000 + observation * 1_000_000,
+                    "sequence": observation,
+                    "stream": {"id": session},
+                    "payload_type": "runtime.session",
+                    "payload": {
+                        "kind": "run",
+                        "event": {
+                            "kind": "model_completed",
+                            "model": "muse-spark-1.3-contributor",
+                            "usage": {
+                                "input_tokens": counts["input"] + counts["cacheRead"],
+                                "output_tokens": counts["output"] + counts["reasoning"],
+                                "cached_tokens": counts["cacheRead"],
+                                "cache_read_tokens": counts["cacheRead"],
+                                "cache_write_tokens": 0,
+                                "reasoning_tokens": counts["reasoning"],
+                            },
+                        },
+                    },
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _mcode_source(_client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"mcode-fixture-{index:03d}"
+    totals = _counts()
+    records: list[bytes] = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 100 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "type": "exec.completed",
+                    "turnId": f"turn-{observation:02d}",
+                    "sessionId": session,
+                    "timestampMs": 1_780_000_000_000 + observation * 1_000,
+                    "result": {
+                        "model": {"providerId": "minimax", "modelId": "MiniMax-M2"},
+                        "usage": {
+                            "inputTokens": counts["input"],
+                            "outputTokens": counts["output"],
+                            "cacheReadTokens": 0,
+                            "cacheWriteTokens": 0,
+                        },
+                    },
                 }
             )
         )
@@ -1172,6 +1360,11 @@ def generate(raw_root: str) -> Path:
         ("pi", PI_SOURCES, "home/.pi/agent/sessions/acceptance", _pi_source),
         ("omp", OMP_SOURCES, "home/.omp/agent/sessions/acceptance", _pi_source),
         ("senpi", SENPI_SOURCES, "home/.senpi/agent/sessions/acceptance", _pi_source),
+        ("antigravity", ANTIGRAVITY_SOURCES, "home/.config/tokscale/antigravity-cache", _antigravity_source),
+        ("qwen", QWEN_SOURCES, "home/.qwen/projects/acceptance/chats", _qwen_source),
+        ("reasonix", REASONIX_SOURCES, "home/.reasonix/stats", _reasonix_source),
+        ("muse", MUSE_SOURCES, "home/.local/share/muse/sessions/2026/11/13", _muse_source),
+        ("mcode", MCODE_SOURCES, "home/.minimax/v2/sessions/2026/11/13", _mcode_source),
     ]:
         for index in range(count):
             session, data, totals, rows = generator(client, index)

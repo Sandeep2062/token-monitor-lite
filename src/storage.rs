@@ -37,7 +37,7 @@ pub const BACKUP_DIRECTORY_NAME: &str = "backups";
 pub const RECOVERY_DIRECTORY_NAME: &str = "recovery";
 
 const RECOVERY_MARKER_NAME: &str = "recovery-required";
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 const PARSER_CONTRACT_REVISION: &str = "gate-2a-v1";
 const COMMAND_CAPACITY: usize = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -585,6 +585,35 @@ FROM runtime_sources;
 
 DROP TABLE runtime_sources;
 ALTER TABLE runtime_sources_v13 RENAME TO runtime_sources;
+"#;
+
+const SCHEMA_V14: &str = r#"
+CREATE TABLE runtime_sources_v14 (
+    source_id TEXT PRIMARY KEY CHECK (length(source_id) = 42),
+    format TEXT NOT NULL CHECK (format IN ('claude-jsonl', 'codex-jsonl', 'gemini-transcript', 'cursor-cache-json', 'cline-json', 'amp-json', 'copilot-jsonl', 'codebuddy-jsonl', 'workbuddy-jsonl', 'pi-jsonl', 'omp-jsonl', 'senpi-jsonl', 'antigravity-jsonl', 'qwen-jsonl', 'reasonix-jsonl', 'muse-jsonl', 'mcode-jsonl')),
+    client TEXT NOT NULL CHECK (length(client) BETWEEN 1 AND 64),
+    parser_pin TEXT NOT NULL CHECK (length(parser_pin) BETWEEN 1 AND 128),
+    source_generation INTEGER NOT NULL CHECK (source_generation > 0),
+    source_state TEXT NOT NULL CHECK (source_state IN ('live', 'retained')),
+    observation_count INTEGER NOT NULL CHECK (observation_count >= 0 AND observation_count <= 262144),
+    session_count INTEGER NOT NULL CHECK (session_count >= 0 AND session_count <= 10000),
+    last_observed_at INTEGER,
+    incomplete_tail INTEGER NOT NULL CHECK (incomplete_tail IN (0, 1)),
+    has_supported_usage INTEGER NOT NULL CHECK (has_supported_usage IN (0, 1)),
+    UNIQUE (source_id, source_generation)
+) STRICT;
+
+INSERT INTO runtime_sources_v14
+    (source_id, format, client, parser_pin, source_generation, source_state,
+     observation_count, session_count, last_observed_at, incomplete_tail,
+     has_supported_usage)
+SELECT source_id, format, client, parser_pin, source_generation, source_state,
+       observation_count, session_count, last_observed_at, incomplete_tail,
+       has_supported_usage
+FROM runtime_sources;
+
+DROP TABLE runtime_sources;
+ALTER TABLE runtime_sources_v14 RENAME TO runtime_sources;
 "#;
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -1386,6 +1415,7 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
             migrate_ten_to_eleven(&mut connection)?;
             migrate_eleven_to_twelve(&mut connection)?;
             migrate_twelve_to_thirteen(&mut connection)?;
+            migrate_thirteen_to_fourteen(&mut connection)?;
             let snapshot = load_snapshot(&connection)?;
             return Ok((connection, snapshot));
         }
@@ -1431,6 +1461,8 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
         create_backup_internal(&connection, root, "pre-migration-v11", 11, 0)?;
     } else if version == 12 {
         create_backup_internal(&connection, root, "pre-migration-v12", 12, 0)?;
+    } else if version == 13 {
+        create_backup_internal(&connection, root, "pre-migration-v13", 13, 0)?;
     }
     configure_connection(&connection)?;
     if version == 0 {
@@ -1471,6 +1503,9 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
     }
     if version <= 12 {
         migrate_twelve_to_thirteen(&mut connection)?;
+    }
+    if version <= 13 {
+        migrate_thirteen_to_fourteen(&mut connection)?;
     }
     let snapshot = match load_snapshot(&connection) {
         Ok(snapshot) => snapshot,
@@ -1803,6 +1838,32 @@ fn migrate_twelve_to_thirteen(connection: &mut Connection) -> Result<(), StoreEr
 enum IntegrityCheck {
     Full,
     Quick,
+}
+
+fn migrate_thirteen_to_fourteen(connection: &mut Connection) -> Result<(), StoreError> {
+    sqlite(connection.pragma_update(None, "foreign_keys", false))?;
+    let migrated = (|| {
+        let transaction =
+            sqlite(connection.transaction_with_behavior(TransactionBehavior::Exclusive))?;
+        sqlite(transaction.execute_batch(SCHEMA_V14))?;
+        sqlite(transaction.execute(
+            "UPDATE schema_meta SET version = ?1, applied_at = ?2 WHERE id = 1",
+            params![14_i64, now_seconds()?],
+        ))?;
+        sqlite(transaction.pragma_update(None, "user_version", 14))?;
+        sqlite(transaction.commit())
+    })();
+    sqlite(connection.pragma_update(None, "foreign_keys", true))?;
+    migrated?;
+    let violations: i64 = sqlite(connection.query_row(
+        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+        [],
+        |row| row.get(0),
+    ))?;
+    if violations != 0 {
+        return Err(StoreError::Sqlite);
+    }
+    Ok(())
 }
 
 fn inspect_database(path: &Path, check: IntegrityCheck) -> Result<u32, StoreError> {

@@ -224,6 +224,11 @@ fn source_format(format: &str) -> SourceFormat {
         "pi-jsonl" => SourceFormat::PiJsonl,
         "omp-jsonl" => SourceFormat::OmpJsonl,
         "senpi-jsonl" => SourceFormat::SenpiJsonl,
+        "antigravity-jsonl" => SourceFormat::AntigravityJsonl,
+        "qwen-jsonl" => SourceFormat::QwenJsonl,
+        "reasonix-jsonl" => SourceFormat::ReasonixJsonl,
+        "muse-jsonl" => SourceFormat::MuseJsonl,
+        "mcode-jsonl" => SourceFormat::McodeJsonl,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -320,7 +325,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 20),
+            ("codex-cli".to_owned(), 15),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
@@ -335,6 +340,11 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("pi-jsonl".to_owned(), 1),
             ("omp-jsonl".to_owned(), 1),
             ("senpi-jsonl".to_owned(), 1),
+            ("antigravity-jsonl".to_owned(), 1),
+            ("qwen-jsonl".to_owned(), 1),
+            ("reasonix-jsonl".to_owned(), 1),
+            ("muse-jsonl".to_owned(), 1),
+            ("mcode-jsonl".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])

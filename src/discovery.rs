@@ -1177,6 +1177,70 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn tokscale_config_dir(inputs: &HostPaths) -> PathBuf {
+    if let Some(dir) = inputs
+        .env_paths
+        .get("TOKSCALE_CONFIG_DIR")
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return dir.clone();
+    }
+    match inputs.platform {
+        HostPlatform::Windows => {
+            let base = inputs
+                .app_data
+                .clone()
+                .unwrap_or_else(|| inputs.home.join("AppData").join("Roaming"));
+            join_many(inputs.platform, &base, &["tokscale"])
+        }
+        _ => {
+            let base = inputs
+                .xdg_config_home
+                .clone()
+                .unwrap_or_else(|| inputs.home.join(".config"));
+            join_many(inputs.platform, &base, &["tokscale"])
+        }
+    }
+}
+
+fn reasonix_home(inputs: &HostPaths) -> PathBuf {
+    for name in ["REASONIX_STATE_HOME", "REASONIX_HOME"] {
+        if let Some(dir) = inputs
+            .env_paths
+            .get(name)
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            return dir.clone();
+        }
+    }
+    match inputs.platform {
+        HostPlatform::Windows => {
+            let base = inputs
+                .app_data
+                .clone()
+                .unwrap_or_else(|| inputs.home.join("AppData").join("Roaming"));
+            join_many(inputs.platform, &base, &["reasonix"])
+        }
+        _ => join_many(inputs.platform, &inputs.home, &[".reasonix"]),
+    }
+}
+
+fn mcode_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
+    for name in ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"] {
+        if let Some(dir) = inputs
+            .env_paths
+            .get(name)
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            return vec![join_many(inputs.platform, dir, &["v2", "sessions"])];
+        }
+    }
+    [".minimax", ".mavis"]
+        .into_iter()
+        .map(|base| join_many(inputs.platform, &inputs.home, &[base, "v2", "sessions"]))
+        .collect()
+}
+
 fn senpi_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     match inputs
@@ -1979,7 +2043,10 @@ fn validate_source(path: &Path, format: SourceFormat, bytes: u64) -> Result<Stri
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
     let mut input = SourceInput::for_path(format, path.to_path_buf());
-    let max_steps = if is_compressed_source_path(path)
+    let max_steps = if matches!(
+        format,
+        SourceFormat::CodexCli | SourceFormat::McodeJsonl | SourceFormat::GeminiTranscript
+    ) || is_compressed_source_path(path)
         || (format == SourceFormat::GeminiTranscript
             && path
                 .extension()
@@ -2037,6 +2104,22 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                         None
                     }
                 }
+                SourceFormat::AntigravityJsonl | SourceFormat::QwenJsonl => {
+                    value.get("sessionId").and_then(Value::as_str)
+                }
+                SourceFormat::MuseJsonl => value
+                    .pointer("/stream/id")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.get("sessionId").and_then(Value::as_str)),
+                SourceFormat::McodeJsonl => {
+                    value.get("sessionId").and_then(Value::as_str).or_else(|| {
+                        value
+                            .get("message")
+                            .and_then(|message| message.get("sessionId"))
+                            .and_then(Value::as_str)
+                    })
+                }
+                SourceFormat::ReasonixJsonl => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -2072,6 +2155,15 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .map(str::to_owned)
             .ok_or(());
     }
+    if format == SourceFormat::MuseJsonl {
+        return path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
     if matches!(
         format,
         SourceFormat::CopilotJsonl
@@ -2081,6 +2173,10 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::PiJsonl
             | SourceFormat::OmpJsonl
             | SourceFormat::SenpiJsonl
+            | SourceFormat::AntigravityJsonl
+            | SourceFormat::QwenJsonl
+            | SourceFormat::ReasonixJsonl
+            | SourceFormat::McodeJsonl
     ) {
         return path
             .file_stem()

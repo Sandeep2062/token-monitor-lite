@@ -767,8 +767,9 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
     [
-        "amp", "claude", "cline", "codebuddy", "codex", "copilot", "cursor", "gemini", "goose",
-        "kilo", "omp", "opencode", "pi", "senpi", "workbuddy",
+        "amp", "antigravity", "claude", "cline", "codebuddy", "codex", "copilot", "cursor",
+        "gemini", "goose", "kilo", "mcode", "muse", "omp", "opencode", "pi", "qwen", "reasonix",
+        "senpi", "workbuddy",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
@@ -822,6 +823,7 @@ fn is_selectable_source_client(client: &str) -> bool {
     matches!(
         client,
         "amp"
+            | "antigravity"
             | "claude"
             | "cline"
             | "codebuddy"
@@ -831,9 +833,13 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "gemini"
             | "goose"
             | "kilo"
+            | "mcode"
+            | "muse"
             | "omp"
             | "opencode"
             | "pi"
+            | "qwen"
+            | "reasonix"
             | "senpi"
             | "workbuddy"
             | "mixed"
@@ -844,6 +850,7 @@ fn is_supported_client(client: &str) -> bool {
     matches!(
         client,
         "amp"
+            | "antigravity"
             | "claude"
             | "cline"
             | "codebuddy"
@@ -853,9 +860,13 @@ fn is_supported_client(client: &str) -> bool {
             | "gemini"
             | "goose"
             | "kilo"
+            | "mcode"
+            | "muse"
             | "omp"
             | "opencode"
             | "pi"
+            | "qwen"
+            | "reasonix"
             | "senpi"
             | "workbuddy"
     )
@@ -864,6 +875,7 @@ fn is_supported_client(client: &str) -> bool {
 fn client_label(client: &str) -> &'static str {
     match client {
         "amp" => "Amp",
+        "antigravity" => "Antigravity",
         "claude" => "Claude CLI",
         "cline" => "Cline",
         "codebuddy" => "CodeBuddy",
@@ -873,9 +885,13 @@ fn client_label(client: &str) -> &'static str {
         "gemini" => "Gemini CLI",
         "goose" => "Goose",
         "kilo" => "Kilo",
+        "mcode" => "MiniMax Code",
+        "muse" => "Muse Code",
         "omp" => "Oh My Pi",
         "opencode" => "OpenCode",
         "pi" => "Pi",
+        "qwen" => "Qwen",
+        "reasonix" => "Reasonix",
         "senpi" => "OmO Native",
         "workbuddy" => "WorkBuddy",
         "mixed" => "Session archive",

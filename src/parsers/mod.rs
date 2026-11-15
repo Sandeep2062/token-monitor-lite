@@ -1,6 +1,7 @@
 //! Bounded source reading. Client-specific parsers are separate modules/tasks.
 
 pub mod amp;
+pub mod antigravity;
 pub mod claude;
 pub mod cline;
 pub mod codebuddy;
@@ -11,11 +12,16 @@ pub mod gemini;
 pub mod goose;
 pub mod jsonl;
 pub mod kilo;
+pub mod mcode;
+pub mod muse;
 pub mod omp;
 pub mod opencode;
 pub mod pi;
+pub mod qwen;
+pub mod reasonix;
 pub mod senpi;
 pub mod tencent_buddy;
+pub mod timestamps;
 pub mod workbuddy;
 
 use crate::accounting::{SessionKey, TokenCounts};

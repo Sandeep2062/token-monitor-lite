@@ -1093,3 +1093,50 @@ fn pi_family_and_tencent_buddy_jsonl_sources_use_their_catalog_roots() {
     assert!(found.contains(&(SourceFormat::CodeBuddyJsonl, "buddy-session")));
     assert!(found.contains(&(SourceFormat::WorkBuddyJsonl, "buddy-session")));
 }
+
+#[test]
+fn catalog_jsonl_roots_are_discovered_at_their_documented_locations() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/tokscale/antigravity-cache/cache.jsonl",
+        br#"{"type":"usage","sessionId":"ag-session","timestamp":1780000000000,"input":2,"output":1}
+"#,
+    );
+    tree.file(
+        ".qwen/projects/project/chats/qwen.jsonl",
+        br#"{"type":"assistant","sessionId":"qwen-session","timestamp":"2026-11-13T10:00:00Z","usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1}}
+"#,
+    );
+    tree.file(
+        ".reasonix/stats/2026-11-13.jsonl",
+        br#"{"ts":"2026-11-13T10:00:00Z","model":"deepseek/chat","prompt":5,"completion":1,"total":6}
+"#,
+    );
+    tree.file(
+        ".local/share/muse/sessions/2026/11/13/muse-session/session.jsonl",
+        br#"{"recorded_at":1789790455896395,"sequence":1,"payload":{"event":{"kind":"model_completed","model":"muse-spark","usage":{"input_tokens":2,"output_tokens":1}}}}
+"#,
+    );
+    tree.file(
+        ".minimax/v2/sessions/2026/11/13/mcode.jsonl",
+        br#"{"type":"exec.completed","turnId":"t1","sessionId":"mcode-session","timestampMs":1780000000000,"result":{"model":{"providerId":"minimax","modelId":"MiniMax-M2"},"usage":{"inputTokens":2,"outputTokens":1}}}
+"#,
+    );
+
+    let report =
+        discover(&tree.paths(&["antigravity", "qwen", "reasonix", "muse", "mcode"])).unwrap();
+    let found = report
+        .sources
+        .iter()
+        .map(|source| (source.format, source.session.as_str()))
+        .collect::<BTreeSet<_>>();
+    assert!(found.contains(&(SourceFormat::AntigravityJsonl, "ag-session")));
+    assert!(found.contains(&(SourceFormat::QwenJsonl, "qwen-session")));
+    assert!(found.contains(&(SourceFormat::MuseJsonl, "muse-session")));
+    assert!(found.contains(&(SourceFormat::McodeJsonl, "mcode-session")));
+    assert!(
+        found
+            .iter()
+            .any(|(format, _)| *format == SourceFormat::ReasonixJsonl)
+    );
+}

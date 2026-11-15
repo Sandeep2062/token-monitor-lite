@@ -40,6 +40,11 @@ All arithmetic is checked. Invalid signs, non-integral or unsafe values, inconsi
 | Copilot OTel record | Canonical client + conversation/session attribute (or trace ID) + response/span ID | A file that mixes record sources keeps only the highest-priority source present. Duplicate identities collapse to the largest token total. |
 | CodeBuddy/WorkBuddy message | Canonical client + session ID + provider message/trace/row ID | Missing IDs use a stable source-local line ordinal. Repeated identities keep the largest token total within one source. |
 | Pi-format response | Canonical client + `responseId`, or entry ID plus immutable event fields | The identity is deliberately session-independent so copied fork records merge only when their content agrees; conflicts are visible unsupported. |
+| Antigravity usage row | Canonical client + session + `responseId`, else source-local ordinal | A repeated response identity is not collapsed across files. |
+| Qwen assistant row | Canonical client + session + emitted ordinal | Qwen JSONL carries no per-message id, so the stable ordinal is the identity. |
+| Reasonix stat | Canonical client + stats file session + line ordinal + request/total counts | The daily stats file partitions otherwise identical rows. |
+| Muse completion | Canonical client + stream session + `sequence` and token components | Replayed events collapse while distinct calls cannot share one. |
+| MiniMax Code envelope | Canonical client + session + turn + pending index + token components | Usage waits for the model-bearing result and never gets a guessed model. |
 
 Opaque source IDs, never lexical paths, order provenance. Paths exist only in discovery/watch memory and are absent from SQLite, diagnostics, exports, Slint, and value-bearing `Debug` output.
 
@@ -232,6 +237,18 @@ Pi, OMP and Senpi share one JSONL record layout under distinct roots: `<home>/.p
 | `session_info`, `title_change`, user messages, and other control records | ignored non-usage | No row. `session_info.name` is not treated as an agent identity. | No ownership change. |
 | Missing header, missing assistant usage/model, invalid counter, `cacheWrite1h > cacheWrite`, malformed timestamp/JSON, or conflicting duplicate response identity | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 | RLM parent/child accounting, OMP subagent parent links, session titles, workspace attribution, turn-duration timing, reported cost, provider inference, and lossy damaged-record recovery | visible unsupported / ignored | Each transcript is parsed independently; no cross-file allocation, title, workspace or price is invented. | No additional source slot. |
+
+## Catalog JSONL matrix (Antigravity, Qwen, Reasonix, Muse, MiniMax Code)
+
+| Client | Supported source and records | Normalization and identity | Unsupported |
+|---|---|---|---|
+| Antigravity | `<TOKSCALE_CONFIG_DIR>/antigravity-cache/**/*.jsonl`; `session_meta` model fallback and `usage` rows | Direct input/output/cache/reasoning counters; explicit `responseId` identity, else source-local ordinal. Native conversation SQLite stores are not read by this cache reader. | Native `.db` usage, workspace/project metadata, pricing-model aliases, cost. |
+| Qwen | `<home>/.qwen/projects/<project>/chats/*.jsonl` assistant rows with `usageMetadata` | Prompt is cache-inclusive; cached content splits once. Thoughts split from candidates only when an explicit total proves they are inclusive; otherwise they stay additive. Session ID falls back to the file stem; identity is the session and emitted ordinal. | Workspace attribution, provider inference, cache writes, cost. |
+| Reasonix | `<REASONIX_HOME or state home>/stats/YYYY-MM-DD.jsonl` request stats | A non-zero `cache_miss` is the uncached input; otherwise `prompt - cache_hit`. Reasoning is clamped to completion and split once. `provider/model` refs split at the first slash. | Session transcripts, turn markers, cost, workspace. |
+| Muse | `<XDG data>/muse/sessions/**/session.jsonl` `runtime.session` `model_completed` events | Cached input and reasoning split once; `stream.id` supplies the session, `sequence` the stable ordinal. | Metadata provider overrides, workflow child aggregates, titles, duration, workspace, cost. |
+| MiniMax Code | Captured `mcode exec --output-format stream-json` JSONL under the mcode session roots | Assistant usage is buffered by turn and emitted only with a model-bearing `exec.result`; `exec.completed.result` supplies its own usage. Envelope identity is `session:turn:index:tokens`. | A capture with no model-bearing final result, local configuration guessing, desktop store inference, cost. |
+
+All five readers reject negative or non-integral counters, malformed required fields, missing explicit timestamps where the pinned reader requires one, and zero-token rows are ignored. File-mtime fallback applies only to Qwen, Muse and MiniMax Code, matching the pinned readers.
 
 ## Input and source matrix
 

@@ -5,10 +5,11 @@
 
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
-    ReaderError, ResponseUsage, amp::AmpReader, claude::ClaudeReader, cline::ClineReader,
-    codebuddy::CodeBuddyReader, codex::CodexReader, copilot::CopilotReader, cursor::CursorReader,
-    gemini::GeminiReader, omp::OmpReader, pi::PiReader, senpi::SenpiReader,
-    workbuddy::WorkBuddyReader,
+    ReaderError, ResponseUsage, amp::AmpReader, antigravity::AntigravityReader,
+    claude::ClaudeReader, cline::ClineReader, codebuddy::CodeBuddyReader, codex::CodexReader,
+    copilot::CopilotReader, cursor::CursorReader, gemini::GeminiReader, mcode::McodeReader,
+    muse::MuseReader, omp::OmpReader, pi::PiReader, qwen::QwenReader, reasonix::ReasonixReader,
+    senpi::SenpiReader, workbuddy::WorkBuddyReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -34,6 +35,11 @@ pub enum SourceFormat {
     PiJsonl,
     OmpJsonl,
     SenpiJsonl,
+    AntigravityJsonl,
+    QwenJsonl,
+    ReasonixJsonl,
+    MuseJsonl,
+    McodeJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -56,6 +62,11 @@ impl SourceFormat {
             Self::PiJsonl => "pi",
             Self::OmpJsonl => "omp",
             Self::SenpiJsonl => "senpi",
+            Self::AntigravityJsonl => "antigravity",
+            Self::QwenJsonl => "qwen",
+            Self::ReasonixJsonl => "reasonix",
+            Self::MuseJsonl => "muse",
+            Self::McodeJsonl => "mcode",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
@@ -77,6 +88,11 @@ impl SourceFormat {
             Self::PiJsonl => "pi-jsonl",
             Self::OmpJsonl => "omp-jsonl",
             Self::SenpiJsonl => "senpi-jsonl",
+            Self::AntigravityJsonl => "antigravity-jsonl",
+            Self::QwenJsonl => "qwen-jsonl",
+            Self::ReasonixJsonl => "reasonix-jsonl",
+            Self::MuseJsonl => "muse-jsonl",
+            Self::McodeJsonl => "mcode-jsonl",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -99,6 +115,11 @@ impl SourceFormat {
             "pi-jsonl" => Some(Self::PiJsonl),
             "omp-jsonl" => Some(Self::OmpJsonl),
             "senpi-jsonl" => Some(Self::SenpiJsonl),
+            "antigravity-jsonl" => Some(Self::AntigravityJsonl),
+            "qwen-jsonl" => Some(Self::QwenJsonl),
+            "reasonix-jsonl" => Some(Self::ReasonixJsonl),
+            "muse-jsonl" => Some(Self::MuseJsonl),
+            "mcode-jsonl" => Some(Self::McodeJsonl),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -307,6 +328,11 @@ enum ResponseReader {
     Pi(Box<PiReader>),
     Omp(Box<OmpReader>),
     Senpi(Box<SenpiReader>),
+    Antigravity(Box<AntigravityReader>),
+    Qwen(Box<QwenReader>),
+    Reasonix(Box<ReasonixReader>),
+    Muse(Box<MuseReader>),
+    Mcode(Box<McodeReader>),
 }
 
 impl ResponseReader {
@@ -324,6 +350,11 @@ impl ResponseReader {
             Self::Pi(reader) => reader.ingest(record),
             Self::Omp(reader) => reader.ingest(record),
             Self::Senpi(reader) => reader.ingest(record),
+            Self::Antigravity(reader) => reader.ingest(record),
+            Self::Qwen(reader) => reader.ingest(record),
+            Self::Reasonix(reader) => reader.ingest(record),
+            Self::Muse(reader) => reader.ingest(record),
+            Self::Mcode(reader) => reader.ingest(record),
         }
     }
 
@@ -341,6 +372,11 @@ impl ResponseReader {
             Self::Pi(reader) => reader.snapshot(),
             Self::Omp(reader) => reader.snapshot(),
             Self::Senpi(reader) => reader.snapshot(),
+            Self::Antigravity(reader) => reader.snapshot(),
+            Self::Qwen(reader) => reader.snapshot(),
+            Self::Reasonix(reader) => reader.snapshot(),
+            Self::Muse(reader) => reader.snapshot(),
+            Self::Mcode(reader) => reader.snapshot(),
         }
     }
 
@@ -357,7 +393,12 @@ impl ResponseReader {
             | Self::WorkBuddy(_)
             | Self::Pi(_)
             | Self::Omp(_)
-            | Self::Senpi(_) => Ok(()),
+            | Self::Senpi(_)
+            | Self::Antigravity(_)
+            | Self::Qwen(_)
+            | Self::Reasonix(_)
+            | Self::Muse(_)
+            | Self::Mcode(_) => Ok(()),
         }
     }
 
@@ -375,6 +416,11 @@ impl ResponseReader {
             Self::Pi(reader) => reader.has_supported_usage(),
             Self::Omp(reader) => reader.has_supported_usage(),
             Self::Senpi(reader) => reader.has_supported_usage(),
+            Self::Antigravity(reader) => reader.has_supported_usage(),
+            Self::Qwen(reader) => reader.has_supported_usage(),
+            Self::Reasonix(reader) => reader.has_supported_usage(),
+            Self::Muse(reader) => reader.has_supported_usage(),
+            Self::Mcode(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -703,6 +749,33 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Senpi(Box::new(
                     SenpiReader::new("senpi", &self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::AntigravityJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Antigravity(Box::new(
+                    AntigravityReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::QwenJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Qwen(Box::new(
+                    QwenReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::ReasonixJsonl => {
+                ResponseReader::Reasonix(Box::new(ReasonixReader::new(&self.key.session)))
+            }
+            SourceFormat::MuseJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Muse(Box::new(
+                    MuseReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::McodeJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Mcode(Box::new(
+                    McodeReader::new().with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::SessionArchiveSqlite
