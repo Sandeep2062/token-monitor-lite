@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 24
+CLAUDE_SOURCES = 23
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -69,6 +69,7 @@ COMMANDCODE_SOURCES = 1
 MIMO_SOURCES = 1
 ZCODE_SOURCES = 1
 KIRO_SOURCES = 1
+PROMA_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -104,6 +105,7 @@ SOURCE_COUNT = (
     + MIMO_SOURCES
     + ZCODE_SOURCES
     + KIRO_SOURCES
+    + PROMA_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1164,6 +1166,42 @@ def _commandcode_source() -> tuple[str, bytes, dict[str, int], int]:
         parent = entry_id
     data = b"".join(records)
     return f"{slug}/{session}", data, totals, OBSERVATIONS_PER_JSONL
+
+
+def _proma_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Proma legacy SDK transcript: one assistant line per observation."""
+    session = "proma-fixture-000"
+    totals = _counts()
+    lines = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 170 + observation,
+            "output": 34 + observation,
+            "cacheRead": 9,
+            "cacheWrite": 2,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        lines.append(
+            {
+                "type": "assistant",
+                "session_id": session,
+                "_createdAt": f"2026-06-20T10:00:{observation:02d}.000Z",
+                "message": {
+                    "id": f"resp-{observation:03d}",
+                    "model": "claude-sonnet-4",
+                    "provider": "proma",
+                    "usage": {
+                        "input_tokens": counts["input"],
+                        "output_tokens": counts["output"],
+                        "cache_read_input_tokens": counts["cacheRead"],
+                        "cache_creation_input_tokens": counts["cacheWrite"],
+                    },
+                },
+            }
+        )
+    data = b"".join(_json_line(entry) for entry in lines)
+    return f"{session}.jsonl", data, totals, len(lines)
 
 
 def _kiro_source() -> tuple[str, bytes, dict[str, int], int]:
@@ -2298,6 +2336,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, kiro_totals)
     physical_bytes += len(kiro_data)
     decoded_bytes += len(kiro_data)
+
+    proma_path, proma_data, proma_totals, proma_rows = _proma_source()
+    proma_entry = _source_entry(
+        root,
+        f"home/.proma/sdk-config/projects/{proma_path}",
+        proma_data,
+        format_name="proma-jsonl",
+        session="proma-fixture-000",
+        observations=proma_rows,
+        canonical_sessions=1,
+        expected_totals=proma_totals,
+        physical_bytes=len(proma_data),
+    )
+    sources.append(proma_entry)
+    _add_counts(aggregate, proma_totals)
+    _add_counts(canonical_aggregate, proma_totals)
+    physical_bytes += len(proma_data)
+    decoded_bytes += len(proma_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

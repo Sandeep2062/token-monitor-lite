@@ -25,6 +25,7 @@ pub mod omp;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
+pub mod proma;
 pub mod qwen;
 pub mod reasonix;
 pub mod senpi;

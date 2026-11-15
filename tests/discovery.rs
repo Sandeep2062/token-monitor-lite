@@ -1072,6 +1072,46 @@ fn mimo_databases_are_discovered_at_the_xdg_data_role() {
 }
 
 #[test]
+fn proma_journals_and_sdk_transcripts_are_discovered_under_both_homes() {
+    let tree = Tree::new();
+    // JSONL sources need a terminating newline, or the final record is an
+    // incomplete tail and the source never validates.
+    let assistant = concat!(
+        r#"{"type":"assistant","session_id":"sess-1","_createdAt":"2026-06-20T10:00:05Z","message":{"id":"resp-1","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":2}}}"#,
+        "\n"
+    );
+    for home in [".proma", ".proma-dev"] {
+        tree.file(
+            &format!("{home}/agent-sessions/journal.jsonl"),
+            assistant.as_bytes(),
+        );
+        tree.file(
+            &format!("{home}/sdk-config/sessions/session.jsonl"),
+            assistant.as_bytes(),
+        );
+        tree.file(
+            &format!("{home}/sdk-config/projects/proj.jsonl"),
+            assistant.as_bytes(),
+        );
+        // Config and credentials are not usage sources.
+        tree.file(&format!("{home}/agent-sessions.json"), b"{}");
+    }
+
+    let mut paths = tree.paths(&["proma"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 6);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::PromaJsonl)
+    );
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
 fn kiro_cli_sessions_are_discovered_under_the_sessions_role() {
     let tree = Tree::new();
     tree.file(

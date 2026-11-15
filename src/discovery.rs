@@ -2140,6 +2140,79 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "proma" {
+            // Proma applies the same three source trees under both `.proma` and
+            // `.proma-dev`: the `agent-sessions` display journals, and the two
+            // legacy SDK transcript roots. Each file is its own source; the
+            // pinned reader's cross-file reconciliation over the sibling
+            // `agent-sessions.json` index is not performed.
+            let mut roots = Vec::new();
+            for home_name in [".proma", ".proma-dev"] {
+                let root = join_many(inputs.platform, &inputs.home, &[home_name]);
+                for subtree in [
+                    "agent-sessions",
+                    "sdk-config/sessions",
+                    "sdk-config/projects",
+                ] {
+                    roots.push(join_many(
+                        inputs.platform,
+                        &root,
+                        &subtree.split('/').collect::<Vec<_>>(),
+                    ));
+                }
+            }
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for root in &roots {
+                collect_source_candidates(root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+                if overflow {
+                    break;
+                }
+            }
+            candidates.retain(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+            });
+            candidates.sort();
+            candidates.dedup();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let bytes = fs::symlink_metadata(&path)
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                let session = match validate_source(&path, SourceFormat::PromaJsonl, bytes) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "proma",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::PromaJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::PromaJsonl,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "zcode" {
             // ZCode keeps two stores: transcript JSONL under
             // `~/.zcode/projects/<slug>/<session>.jsonl`, and the authoritative
@@ -3112,6 +3185,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Kiro's session document names its own session_id; the caller
                 // derives one from the <session>.json stem when absent.
                 SourceFormat::KiroJson => None,
+                // Proma names no session in its SDK records beyond an optional
+                // session_id; the caller derives one from the file stem.
+                SourceFormat::PromaJsonl => None,
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
@@ -3224,6 +3300,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::CommandCodeJsonl
             | SourceFormat::ZcodeJsonl
             | SourceFormat::KiroJson
+            | SourceFormat::PromaJsonl
     ) {
         return path
             .file_stem()

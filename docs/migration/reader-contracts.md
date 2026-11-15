@@ -183,6 +183,24 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## Proma matrix
+
+Proma keeps usage in three shapes under `~/.proma` and `~/.proma-dev`: the `agent-sessions/*.jsonl` display journals, and the legacy SDK transcripts under `sdk-config/sessions` and `sdk-config/projects`. This reader walks all six trees and decides a file's shape from its first line: a `type: "session"` record means native Pi format, handled by the Pi reader under the `proma` client; anything else is a legacy SDK transcript.
+
+The pinned reader's cross-file reconciliation is deliberately not implemented. It loads every source, reads the sibling `agent-sessions.json` index, gives native Pi sessions precedence over their display-journal mirrors, and de-duplicates copied fork history by `(uuid, response id)`. That is a whole-root operation over several files plus an index document, which a per-source byte reader cannot perform, so each file is reported independently and no content or token-count fingerprint is invented as an identity.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| SDK `assistant` record with a `message.usage` object | supported | One observation from `input_tokens`, `output_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`. Reasoning stays zero because Proma does not persist it separately. | `session_id` (or `sessionId`) wins over the file stem. |
+| SDK `result` record | ignored non-usage | No row. It is a session aggregate, not another API request. | No ownership change. |
+| Record whose model is `<synthetic>` | ignored non-usage | No row. It marks a locally constructed message that was never billed. | No ownership change. |
+| Record with no `model` | supported | Model reported as `unknown`; the counts are still real. | As above. |
+| First line of `type: "session"` | supported | The whole file is native Pi format and is delegated to the Pi reader under the `proma` client, including Pi's own model-change and tool-result rules. | Pi's own session ownership applies. |
+| All-zero counters | ignored non-usage | No row. | No ownership change. |
+| Negative or non-integral counter, or a missing timestamp with no file mtime | visible unsupported | Discard the whole candidate. Counters are never clamped. | Prior committed generation remains active. |
+| `_createdAt`, then `timestamp`, then the file mtime | supported | The first usable timestamp wins; the chain matches the pinned reader. | As above. |
+| Cross-file reconciliation, the `agent-sessions.json` index, journal-over-native precedence, fork-history dedup, `inferred_provider_from_model`, and the Pi per-call USD cost | visible unsupported / ignored | Not guessed; see the note above. | No source slot. |
+
 ## Kiro matrix
 
 Kiro keeps usage in four independently-shaped stores. The supported one is the CLI session document at `~/.kiro/sessions/cli/<session>.json`, whose `session_state.conversation_metadata.user_turn_metadatas` array holds one entry per turn. The remaining three — the SQLite `conversations_v2` table, the IDE `sessions/<workspace>/sess_<uuid>/` layout, and the IDE `globalStorage` snapshots — are not read.

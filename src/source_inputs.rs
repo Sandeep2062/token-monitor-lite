@@ -426,6 +426,7 @@ pub enum InputAdapterStatus {
     AmpJson,
     DroidJson,
     KiroJson,
+    PromaJsonl,
     CopilotJsonl,
     CodeBuddyLog,
     CompressedCodexJsonl,
@@ -547,6 +548,7 @@ pub enum SourceInput {
     CommandCode(OrdinaryJsonlInput),
     Grok(OrdinaryJsonlInput),
     ZcodeJsonl(OrdinaryJsonlInput),
+    PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
     Cursor(CursorInput),
     Cline(DocumentInput),
@@ -612,6 +614,10 @@ impl SourceInput {
                     cursor: JsonlCursor::default(),
                 })
             }
+            SourceFormat::PromaJsonl => Self::PromaJsonl(OrdinaryJsonlInput {
+                path,
+                cursor: JsonlCursor::default(),
+            }),
             SourceFormat::ZcodeJsonl => Self::ZcodeJsonl(OrdinaryJsonlInput {
                 path,
                 cursor: JsonlCursor::default(),
@@ -746,6 +752,7 @@ impl SourceInput {
             Self::Amp(_) => InputAdapterStatus::AmpJson,
             Self::Droid(_) => InputAdapterStatus::DroidJson,
             Self::Kiro(_) => InputAdapterStatus::KiroJson,
+            Self::PromaJsonl(_) => InputAdapterStatus::PromaJsonl,
             Self::Copilot(_) => InputAdapterStatus::CopilotJsonl,
             Self::CodeBuddyLog(_) => InputAdapterStatus::CodeBuddyLog,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
@@ -770,6 +777,7 @@ impl SourceInput {
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
+            Self::PromaJsonl(input) => input.cursor.reset(),
             Self::Kimi(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
             Self::Cursor(input) => input.reset(),
@@ -801,6 +809,7 @@ impl SourceInput {
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
+            Self::PromaJsonl(input) => input.cursor.is_current(&input.path),
             Self::Kimi(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
             Self::Cursor(input) => input.is_current(),
@@ -853,6 +862,7 @@ impl SourceInput {
             | Self::CommandCode(_)
             | Self::Grok(_)
             | Self::ZcodeJsonl(_)
+            | Self::PromaJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
             | Self::Cline(_)
@@ -871,6 +881,7 @@ impl SourceInput {
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
+            Self::PromaJsonl(input) => Some(&input.path),
             Self::Kimi(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
             Self::Cursor(input) => Some(&input.path),
@@ -921,6 +932,17 @@ impl SourceInput {
                 })
             }
             Self::ZcodeJsonl(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
+            Self::PromaJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
                     records: batch.records,

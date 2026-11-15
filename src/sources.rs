@@ -25,6 +25,7 @@ use crate::parsers::{
     omp::OmpReader,
     openclaw::OpenClawReader,
     pi::PiReader,
+    proma::PromaReader,
     qwen::QwenReader,
     reasonix::ReasonixReader,
     senpi::SenpiReader,
@@ -51,6 +52,7 @@ pub enum SourceFormat {
     AmpJson,
     DroidJson,
     KiroJson,
+    PromaJsonl,
     KimiJsonl,
     CopilotJsonl,
     CodeBuddyJsonl,
@@ -92,6 +94,7 @@ impl SourceFormat {
             Self::AmpJson => "amp",
             Self::DroidJson => "droid",
             Self::KiroJson => "kiro",
+            Self::PromaJsonl => "proma",
             Self::KimiJsonl => "kimi",
             Self::CommandCodeJsonl => "commandcode",
             Self::GrokJsonl => "grok",
@@ -130,6 +133,7 @@ impl SourceFormat {
             Self::AmpJson => "amp-json",
             Self::DroidJson => "droid-json",
             Self::KiroJson => "kiro-json",
+            Self::PromaJsonl => "proma-jsonl",
             Self::KimiJsonl => "kimi-jsonl",
             Self::CommandCodeJsonl => "commandcode-jsonl",
             Self::GrokJsonl => "grok-jsonl",
@@ -171,6 +175,7 @@ impl SourceFormat {
             "amp-json" => Some(Self::AmpJson),
             "droid-json" => Some(Self::DroidJson),
             "kiro-json" => Some(Self::KiroJson),
+            "proma-jsonl" => Some(Self::PromaJsonl),
             "kimi-jsonl" => Some(Self::KimiJsonl),
             "commandcode-jsonl" => Some(Self::CommandCodeJsonl),
             "grok-jsonl" => Some(Self::GrokJsonl),
@@ -405,6 +410,7 @@ enum ResponseReader {
     Amp(Box<AmpReader>),
     Droid(Box<DroidReader>),
     Kiro(Box<KiroReader>),
+    Proma(Box<PromaReader>),
     Kimi(Box<KimiReader>),
     CommandCode(Box<CommandCodeReader>),
     Grok(Box<GrokReader>),
@@ -435,6 +441,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.ingest(record),
             Self::Droid(reader) => reader.ingest(record),
             Self::Kiro(reader) => reader.ingest(record),
+            Self::Proma(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
             Self::CommandCode(reader) => reader.ingest(record),
             Self::Grok(reader) => reader.ingest(record),
@@ -465,6 +472,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.snapshot(),
             Self::Droid(reader) => reader.snapshot(),
             Self::Kiro(reader) => reader.snapshot(),
+            Self::Proma(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
             Self::CommandCode(reader) => reader.snapshot(),
             Self::Grok(reader) => reader.snapshot(),
@@ -495,6 +503,7 @@ impl ResponseReader {
             | Self::Amp(_)
             | Self::Droid(_)
             | Self::Kiro(_)
+            | Self::Proma(_)
             | Self::Kimi(_)
             | Self::CommandCode(_)
             | Self::Grok(_)
@@ -525,6 +534,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Droid(reader) => reader.has_supported_usage(),
             Self::Kiro(reader) => reader.has_supported_usage(),
+            Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
             Self::Grok(reader) => reader.has_supported_usage(),
@@ -844,6 +854,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Kiro(Box::new(
                     KiroReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::PromaJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Proma(Box::new(
+                    PromaReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::CopilotJsonl => {
