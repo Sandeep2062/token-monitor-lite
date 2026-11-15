@@ -119,6 +119,9 @@ fn source_snapshot_supports_many_sessions_with_exact_checked_totals() {
             billing_provider_hint: None,
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         },
         ResponseUsage {
@@ -137,6 +140,9 @@ fn source_snapshot_supports_many_sessions_with_exact_checked_totals() {
             billing_provider_hint: None,
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         },
     ]

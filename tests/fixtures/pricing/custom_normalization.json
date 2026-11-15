@@ -1,0 +1,45 @@
+{
+  "_source": "Transcribed from token-monitor/tests/shared/tokscaleCustomPricing.test.js (normalization cases)",
+  "normalize": {
+    "input": [
+      {"modelId": "  mimo-v2.5-pro ", "inputPerM": 0.4, "outputPerM": 0.8, "cacheReadPerM": 0.003},
+      {"modelId": "", "inputPerM": 1},
+      {"modelId": "x", "inputPerM": "", "outputPerM": ""},
+      {"modelId": "y", "inputPerM": -1, "outputPerM": ""},
+      {"modelId": "free", "inputPerM": 0, "outputPerM": 0},
+      {"modelId": "z", "outputPerM": 0.5}
+    ],
+    "expected": [
+      {"modelId": "mimo-v2.5-pro", "inputPerM": 0.4, "outputPerM": 0.8, "cacheReadPerM": 0.003},
+      {"modelId": "free", "inputPerM": 0, "outputPerM": 0},
+      {"modelId": "z", "outputPerM": 0.5}
+    ]
+  },
+  "dedupe_last_wins": {
+    "input": [
+      {"modelId": "m", "inputPerM": 1, "outputPerM": 2, "cacheReadPerM": 9},
+      {"modelId": "m", "inputPerM": 0.4, "outputPerM": 0.8, "cacheReadPerM": ""}
+    ],
+    "expected": [
+      {"modelId": "m", "inputPerM": 0.4, "outputPerM": 0.8}
+    ]
+  },
+  "explicit_zero_cache_read": {
+    "input": [
+      {"modelId": "m", "outputPerM": 0.8, "cacheReadPerM": 0}
+    ],
+    "expected": [
+      {"modelId": "m", "outputPerM": 0.8, "cacheReadPerM": 0}
+    ]
+  },
+  "invalid_rows_are_dropped": {
+    "input": [
+      {"modelId": "invalid", "inputPerM": false, "outputPerM": 0},
+      {"modelId": "invalid", "inputPerM": "   ", "outputPerM": 0},
+      {"modelId": "invalid", "inputPerM": [], "outputPerM": 0},
+      {"modelId": "invalid", "inputPerM": -1, "outputPerM": 0},
+      {"modelId": "invalid", "inputPerM": 1, "outputPerM": 0, "cacheReadPerM": -1}
+    ],
+    "expected": []
+  }
+}

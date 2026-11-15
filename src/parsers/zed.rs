@@ -80,6 +80,9 @@ impl ZedReader {
             billing_provider_hint: Some(HOSTED_PROVIDER.to_owned()),
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         });
         Ok(())

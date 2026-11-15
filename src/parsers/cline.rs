@@ -172,6 +172,9 @@ impl ClineReader {
             billing_provider_hint: provider,
             service_tier: None,
             agent: agent.map(str::to_owned),
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         });
         self.assistant_ordinal += 1;

@@ -172,6 +172,9 @@ impl McodeReader {
                 billing_provider_hint: Some(provider.to_owned()),
                 service_tier: None,
                 agent: Some("headless".to_owned()),
+                workspace_key: None,
+                workspace_label: None,
+                title: None,
                 cost: CostStatus::Unavailable,
             });
         }

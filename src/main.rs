@@ -7,6 +7,7 @@ use token_monitor_lite::application::{
     ApplicationCommand, ApplicationError, ApplicationService, ApplicationSubmitError,
 };
 use token_monitor_lite::discovery::{HostPaths, resolve_paths};
+use token_monitor_lite::pricing::{self, PricingCatalog};
 use token_monitor_lite::ui::{
     ImportReportRow, ModelRow, SessionRow, SettingsClientRow, SettingsSourceRow, SourceHealthRow,
     SourceSeverity, TrendRow, UiController, UiPresentation,
@@ -39,6 +40,8 @@ fn run(
 ) -> Result<()> {
     let window = AppWindow::new()?;
     let mut initial_controller = UiController::new();
+    let (pricing_catalog, _) = PricingCatalog::load_or_bundled(update_root.as_deref());
+    initial_controller.set_pricing_catalog(pricing_catalog);
     let application = match application {
         Ok(application) => {
             if let Ok(snapshot) = application.snapshot() {
@@ -53,6 +56,22 @@ fn run(
     };
     let controller = Arc::new(Mutex::new(initial_controller));
     apply_presentation(&window, presentation(&controller));
+    let pricing_handle = update_root.as_ref().map(|root| {
+        let weak = window.as_weak();
+        let controller = controller.clone();
+        pricing::spawn(root.clone(), move |catalog| {
+            let weak = weak.clone();
+            let controller = controller.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Ok(mut controller) = controller.lock() {
+                    controller.set_pricing_catalog(catalog);
+                }
+                if let Some(window) = weak.upgrade() {
+                    apply_presentation(&window, presentation(&controller));
+                }
+            });
+        })
+    });
 
     let delivery_timer = slint::Timer::default();
     if let Some(application) = application.clone() {
@@ -288,6 +307,9 @@ fn run(
     }
 
     let event_loop_result = window.run();
+    if let Some(mut handle) = pricing_handle {
+        handle.stop();
+    }
     delivery_timer.stop();
     drop(delivery_timer);
     drop(window);
@@ -505,6 +527,7 @@ fn session_model(rows: Vec<SessionRow>) -> ModelRc<SessionRowData> {
                 cache: row.cache.into(),
                 reasoning: row.reasoning.into(),
                 tracked_tokens: row.tracked_tokens.into(),
+                cost: row.cost.into(),
             })
             .collect::<Vec<_>>(),
     ))
@@ -528,6 +551,7 @@ fn model_model(rows: Vec<ModelRow>) -> ModelRc<ModelRowData> {
             .map(|row| ModelRowData {
                 label: row.label.into(),
                 total: row.total.into(),
+                cost: row.cost.into(),
                 permille: row.permille,
             })
             .collect::<Vec<_>>(),

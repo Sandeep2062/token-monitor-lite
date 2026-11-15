@@ -160,6 +160,8 @@ pub enum AggregationError {
     StaleGeneration,
     #[error("canonical generation overflow")]
     GenerationOverflow,
+    #[error("rollup accumulator has no observation timestamp")]
+    MissingObservationTimestamp,
 }
 
 /// Holds only successfully aggregated sources. A failed replacement leaves
@@ -330,6 +332,15 @@ impl RollupAccumulator {
         self.sources.extend(row.sources.iter().cloned());
         Ok(())
     }
+
+    /// Timestamps are only absent before the first row is added. A default
+    /// accumulator therefore cannot produce a rollup with a seen range.
+    fn seen(&self) -> Result<(i64, i64), AggregationError> {
+        match (self.first_seen_ms, self.last_seen_ms) {
+            (Some(first), Some(last)) => Ok((first, last)),
+            _ => Err(AggregationError::MissingObservationTimestamp),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -473,29 +484,39 @@ fn aggregate_sources(
 
     let day_models = days
         .into_iter()
-        .map(|((day, client, model), value)| DayModelRollup {
-            day,
-            client,
-            model,
-            tokens: value.tokens,
-            cache_write_1h: value.cache_write_1h,
-            first_seen_ms: value.first_seen_ms.expect("nonempty accumulator"),
-            last_seen_ms: value.last_seen_ms.expect("nonempty accumulator"),
-            sources: value.sources.into_iter().collect::<Vec<_>>().into(),
-        })
-        .collect::<Vec<_>>();
+        .map(
+            |((day, client, model), value)| -> Result<DayModelRollup, AggregationError> {
+                let (first_seen_ms, last_seen_ms) = value.seen()?;
+                Ok(DayModelRollup {
+                    day,
+                    client,
+                    model,
+                    tokens: value.tokens,
+                    cache_write_1h: value.cache_write_1h,
+                    first_seen_ms,
+                    last_seen_ms,
+                    sources: value.sources.into_iter().collect::<Vec<_>>().into(),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
     let session_models = sessions
         .into_iter()
-        .map(|((client, session, model), value)| SessionModelRollup {
-            key: SessionKey::new(client, session),
-            model,
-            tokens: value.tokens,
-            cache_write_1h: value.cache_write_1h,
-            first_seen_ms: value.first_seen_ms.expect("nonempty accumulator"),
-            last_seen_ms: value.last_seen_ms.expect("nonempty accumulator"),
-            sources: value.sources.into_iter().collect::<Vec<_>>().into(),
-        })
-        .collect::<Vec<_>>();
+        .map(
+            |((client, session, model), value)| -> Result<SessionModelRollup, AggregationError> {
+                let (first_seen_ms, last_seen_ms) = value.seen()?;
+                Ok(SessionModelRollup {
+                    key: SessionKey::new(client, session),
+                    model,
+                    tokens: value.tokens,
+                    cache_write_1h: value.cache_write_1h,
+                    first_seen_ms,
+                    last_seen_ms,
+                    sources: value.sources.into_iter().collect::<Vec<_>>().into(),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
     let session_days = session_days
         .into_iter()
         .map(|((day, client, session), value)| SessionDayRollup {
@@ -665,5 +686,36 @@ fn source_ref(source: &SourceSnapshot) -> SourceRef {
     SourceRef {
         source_id: source.source_id,
         generation: source.generation,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AggregationError, RollupAccumulator};
+
+    #[test]
+    fn accumulator_without_observations_reports_a_typed_error() {
+        assert_eq!(
+            RollupAccumulator::default().seen(),
+            Err(AggregationError::MissingObservationTimestamp)
+        );
+    }
+
+    #[test]
+    fn accumulator_seen_range_requires_both_timestamps() {
+        let mut accumulator = RollupAccumulator {
+            first_seen_ms: Some(1_700_000_000_000),
+            last_seen_ms: Some(1_700_000_100_000),
+            ..RollupAccumulator::default()
+        };
+        assert_eq!(
+            accumulator.seen(),
+            Ok((1_700_000_000_000, 1_700_000_100_000))
+        );
+        accumulator.last_seen_ms = None;
+        assert_eq!(
+            accumulator.seen(),
+            Err(AggregationError::MissingObservationTimestamp)
+        );
     }
 }

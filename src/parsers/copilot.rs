@@ -166,6 +166,9 @@ impl CopilotReader {
                     .and_then(Value::as_str)
                     .filter(|value| valid_identity(value))
                     .map(str::to_owned),
+                workspace_key: None,
+                workspace_label: None,
+                title: None,
                 cost: CostStatus::Unavailable,
             },
         });

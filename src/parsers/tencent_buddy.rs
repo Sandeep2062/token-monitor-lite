@@ -148,6 +148,9 @@ impl BuddyReader {
             billing_provider_hint: None,
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         };
         let total = tokens_total(tokens)?;
@@ -279,6 +282,9 @@ impl BuddyLogReader {
                 billing_provider_hint: None,
                 service_tier: None,
                 agent: Some(agent),
+                workspace_key: None,
+                workspace_label: None,
+                title: None,
                 cost: CostStatus::Unavailable,
             });
         }

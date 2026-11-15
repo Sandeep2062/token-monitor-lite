@@ -1,0 +1,46 @@
+{
+  "source": {
+    "name": "litellm",
+    "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    "revision": "7147793e586ca9668140be9a655e25e60af91839ab53a09f556d8d6b226f976f",
+    "fetched": "2026-11-13"
+  },
+  "models": {
+    "claude-sonnet-4-5": {
+      "input_per_m": "3",
+      "output_per_m": "15",
+      "cache_read_per_m": "0.3",
+      "cache_write_per_m": "3.75",
+      "cache_write_1h_per_m": "6"
+    },
+    "claude-sonnet-4-5-20250929": {
+      "input_per_m": "3",
+      "output_per_m": "15",
+      "cache_read_per_m": "0.3",
+      "cache_write_per_m": "3.75",
+      "cache_write_1h_per_m": "6"
+    },
+    "claude-haiku-4-5": {
+      "input_per_m": "1",
+      "output_per_m": "5",
+      "cache_read_per_m": "0.1",
+      "cache_write_per_m": "1.25",
+      "cache_write_1h_per_m": "2"
+    },
+    "gpt-5": {
+      "input_per_m": "1.25",
+      "output_per_m": "10",
+      "cache_read_per_m": "0.125"
+    },
+    "gpt-5-codex": {
+      "input_per_m": "1.25",
+      "output_per_m": "10",
+      "cache_read_per_m": "0.125"
+    },
+    "gpt-5-mini": {
+      "input_per_m": "0.25",
+      "output_per_m": "2",
+      "cache_read_per_m": "0.025"
+    }
+  }
+}

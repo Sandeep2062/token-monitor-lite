@@ -9,6 +9,7 @@ use crate::application::{
     ApplicationNotice, ApplicationSnapshot, CredentialAvailability, SettingsDraft, SettingsView,
     SourceChoice,
 };
+use crate::pricing::{CostEstimate, PricingCatalog, estimate};
 use crate::runtime::{MonitorSnapshot, SourceHealthStatus, WatchStatus};
 use crate::sources::{SourceFormat, SourceId};
 use crate::storage::{ActivationState, ImportState, PreserveState};
@@ -40,6 +41,7 @@ pub struct SessionRow {
     pub cache: String,
     pub reasoning: String,
     pub tracked_tokens: String,
+    pub cost: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +167,7 @@ pub struct TrendsPresentation {
 pub struct ModelRow {
     pub label: String,
     pub total: String,
+    pub cost: String,
     pub permille: i32,
 }
 
@@ -227,7 +230,6 @@ pub struct UiPresentation {
     pub settings: SettingsPresentation,
 }
 
-#[derive(Default)]
 pub struct UiController {
     snapshot: Option<Arc<MonitorSnapshot>>,
     application_snapshot: Option<Arc<ApplicationSnapshot>>,
@@ -241,11 +243,36 @@ pub struct UiController {
     period: UsagePeriod,
     clock_ms: Option<i64>,
     update: UpdatePresentation,
+    pricing: Arc<PricingCatalog>,
+}
+
+impl Default for UiController {
+    fn default() -> Self {
+        Self {
+            snapshot: None,
+            application_snapshot: None,
+            settings_draft: None,
+            startup_notice: None,
+            command_notice: None,
+            search_query: String::new(),
+            page: 0,
+            selected_session: None,
+            selection_notice: None,
+            period: UsagePeriod::default(),
+            clock_ms: None,
+            update: UpdatePresentation::default(),
+            pricing: PricingCatalog::bundled(),
+        }
+    }
 }
 
 impl UiController {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_pricing_catalog(&mut self, catalog: Arc<PricingCatalog>) {
+        self.pricing = catalog;
     }
 
     pub fn accept_snapshot(&mut self, snapshot: Arc<MonitorSnapshot>) -> bool {
@@ -528,10 +555,11 @@ impl UiController {
             return presentation;
         };
         let sorted = sorted_sessions(snapshot);
+        let pricing = self.pricing.as_ref();
         let recent_sessions = sorted
             .iter()
             .take(HOME_RECENT_LIMIT)
-            .map(|row| session_row(row))
+            .map(|row| session_row(row, pricing))
             .collect();
         let filtered = sorted
             .into_iter()
@@ -543,16 +571,16 @@ impl UiController {
         let end = start.saturating_add(SESSION_PAGE_SIZE).min(filtered.len());
         let sessions = filtered[start..end]
             .iter()
-            .map(|row| session_row(row))
+            .map(|row| session_row(row, pricing))
             .collect();
         let sources = source_rows(snapshot);
 
         UiPresentation {
             generation: snapshot.generation,
-            home: home_summary(snapshot, &sources, self.period, self.clock_ms),
+            home: home_summary(snapshot, &sources, self.period, self.clock_ms, pricing),
             trends: trends_presentation(snapshot, self.clock_ms),
-            models: models_presentation(snapshot, self.period, self.clock_ms),
-            detail: session_detail(snapshot, self.selected_session.as_ref()),
+            models: models_presentation(snapshot, self.period, self.clock_ms, pricing),
+            detail: session_detail(snapshot, self.selected_session.as_ref(), pricing),
             update: self.update.clone(),
             recent_sessions,
             sessions,
@@ -1039,7 +1067,7 @@ fn matches_query(row: &SessionModelRollup, query: &str) -> bool {
         .all(|term| haystack.contains(&term.to_lowercase()))
 }
 
-fn session_row(row: &SessionModelRollup) -> SessionRow {
+fn session_row(row: &SessionModelRollup, pricing: &PricingCatalog) -> SessionRow {
     let cache = u128::from(row.tokens.cache_read) + u128::from(row.tokens.cache_write);
     SessionRow {
         identity: identity(row),
@@ -1050,6 +1078,13 @@ fn session_row(row: &SessionModelRollup) -> SessionRow {
         cache: format_number(cache),
         reasoning: format_number(u128::from(row.tokens.reasoning)),
         tracked_tokens: format_number(tracked_total(row.tokens)),
+        cost: estimate(
+            pricing.resolve(Some(row.key.client.as_str()), &row.model),
+            row.tokens,
+            row.cache_write_1h,
+            None,
+        )
+        .format(),
     }
 }
 
@@ -1109,10 +1144,20 @@ fn home_summary(
     sources: &[SourceHealthRow],
     period: UsagePeriod,
     clock_ms: Option<i64>,
+    pricing: &PricingCatalog,
 ) -> HomeSummary {
     let now_ms = clock_ms.unwrap_or_else(current_time_ms);
     let periods = period_totals(&snapshot.canonical, now_ms).unwrap_or_default();
     let usage = periods.get(period);
+    let cost = model_breakdown(&snapshot.canonical, period, now_ms, pricing)
+        .ok()
+        .filter(|rows| !rows.is_empty())
+        .map(|rows| {
+            rows.iter()
+                .fold(CostEstimate::default(), |total, row| total.merge(row.cost))
+                .format()
+        })
+        .unwrap_or_else(|| "—".to_owned());
     let totals = usage.tokens;
     let input = u128::from(totals.input);
     let output = u128::from(totals.output);
@@ -1139,7 +1184,7 @@ fn home_summary(
         output: format_number(output),
         cache: format_number(cache),
         reasoning: format_number(reasoning),
-        cost: "Unavailable".to_owned(),
+        cost,
         has_usage,
         empty_message: if has_usage {
             String::new()
@@ -1197,9 +1242,10 @@ fn models_presentation(
     snapshot: &MonitorSnapshot,
     period: UsagePeriod,
     clock_ms: Option<i64>,
+    pricing: &PricingCatalog,
 ) -> ModelsPresentation {
     let now_ms = clock_ms.unwrap_or_else(current_time_ms);
-    let Ok(rows) = model_breakdown(&snapshot.canonical, period, now_ms) else {
+    let Ok(rows) = model_breakdown(&snapshot.canonical, period, now_ms, pricing) else {
         return ModelsPresentation {
             headline: "Model breakdown unavailable".to_owned(),
             rows: Vec::new(),
@@ -1219,6 +1265,7 @@ fn models_presentation(
             .map(|row| ModelRow {
                 label: format!("{} · {}", row.client, row.model),
                 total: format_number(row.total),
+                cost: row.cost.format(),
                 permille: fraction_permille(row.total, total),
             })
             .collect(),
@@ -1228,6 +1275,7 @@ fn models_presentation(
 fn session_detail(
     snapshot: &MonitorSnapshot,
     selected: Option<&SessionIdentity>,
+    pricing: &PricingCatalog,
 ) -> Option<SessionDetail> {
     let selected = selected?;
     let rows = snapshot
@@ -1271,6 +1319,13 @@ fn session_detail(
                 ModelRow {
                     label: row.model.clone(),
                     total: format_number(total),
+                    cost: estimate(
+                        pricing.resolve(Some(row.key.client.as_str()), &row.model),
+                        row.tokens,
+                        row.cache_write_1h,
+                        None,
+                    )
+                    .format(),
                     permille: fraction_permille(total, tracked),
                 }
             })

@@ -37,7 +37,7 @@ pub const BACKUP_DIRECTORY_NAME: &str = "backups";
 pub const RECOVERY_DIRECTORY_NAME: &str = "recovery";
 
 const RECOVERY_MARKER_NAME: &str = "recovery-required";
-const SCHEMA_VERSION: u32 = 17;
+const SCHEMA_VERSION: u32 = 18;
 const PARSER_CONTRACT_REVISION: &str = "gate-2a-v1";
 const COMMAND_CAPACITY: usize = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -1419,6 +1419,7 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
             migrate_fourteen_to_fifteen(&mut connection)?;
             migrate_fifteen_to_sixteen(&mut connection)?;
             migrate_sixteen_to_seventeen(&mut connection)?;
+            migrate_seventeen_to_eighteen(&mut connection)?;
             let snapshot = load_snapshot(&connection)?;
             return Ok((connection, snapshot));
         }
@@ -1472,6 +1473,8 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
         create_backup_internal(&connection, root, "pre-migration-v15", 15, 0)?;
     } else if version == 16 {
         create_backup_internal(&connection, root, "pre-migration-v16", 16, 0)?;
+    } else if version == 17 {
+        create_backup_internal(&connection, root, "pre-migration-v17", 17, 0)?;
     }
     configure_connection(&connection)?;
     if version == 0 {
@@ -1524,6 +1527,9 @@ fn bootstrap(root: &Path) -> Result<(Connection, StoreSnapshot), StoreError> {
     }
     if version <= 16 {
         migrate_sixteen_to_seventeen(&mut connection)?;
+    }
+    if version <= 17 {
+        migrate_seventeen_to_eighteen(&mut connection)?;
     }
     let snapshot = match load_snapshot(&connection) {
         Ok(snapshot) => snapshot,
@@ -1979,6 +1985,49 @@ fn migrate_sixteen_to_seventeen(connection: &mut Connection) -> Result<(), Store
             params![17_i64, now_seconds()?],
         ))?;
         sqlite(transaction.pragma_update(None, "user_version", 17))?;
+        sqlite(transaction.commit())
+    })();
+    sqlite(connection.pragma_update(None, "foreign_keys", true))?;
+    migrated?;
+    let violations: i64 = sqlite(connection.query_row(
+        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+        [],
+        |row| row.get(0),
+    ))?;
+    if violations != 0 {
+        return Err(StoreError::Sqlite);
+    }
+    Ok(())
+}
+
+const SCHEMA_V18: &str = r#"
+ALTER TABLE source_observations ADD COLUMN workspace_key TEXT CHECK (workspace_key IS NULL OR length(workspace_key) BETWEEN 1 AND 4096);
+ALTER TABLE source_observations ADD COLUMN workspace_label TEXT CHECK (workspace_label IS NULL OR length(workspace_label) BETWEEN 1 AND 4096);
+ALTER TABLE source_observations ADD COLUMN cost_status TEXT NOT NULL DEFAULT 'unavailable' CHECK (cost_status IN ('unavailable', 'reported', 'estimated'));
+ALTER TABLE source_observations ADD COLUMN cost_nano_usd INTEGER CHECK (cost_nano_usd IS NULL OR cost_nano_usd >= 0);
+
+ALTER TABLE source_sqlite_observations ADD COLUMN workspace_key TEXT CHECK (workspace_key IS NULL OR length(workspace_key) BETWEEN 1 AND 4096);
+ALTER TABLE source_sqlite_observations ADD COLUMN workspace_label TEXT CHECK (workspace_label IS NULL OR length(workspace_label) BETWEEN 1 AND 4096);
+ALTER TABLE source_sqlite_observations ADD COLUMN cost_status TEXT NOT NULL DEFAULT 'unavailable' CHECK (cost_status IN ('unavailable', 'reported', 'estimated'));
+ALTER TABLE source_sqlite_observations ADD COLUMN cost_nano_usd INTEGER CHECK (cost_nano_usd IS NULL OR cost_nano_usd >= 0);
+
+ALTER TABLE canonical_observations ADD COLUMN workspace_key TEXT CHECK (workspace_key IS NULL OR length(workspace_key) BETWEEN 1 AND 4096);
+ALTER TABLE canonical_observations ADD COLUMN workspace_label TEXT CHECK (workspace_label IS NULL OR length(workspace_label) BETWEEN 1 AND 4096);
+ALTER TABLE canonical_observations ADD COLUMN cost_status TEXT NOT NULL DEFAULT 'unavailable' CHECK (cost_status IN ('unavailable', 'reported', 'estimated'));
+ALTER TABLE canonical_observations ADD COLUMN cost_nano_usd INTEGER CHECK (cost_nano_usd IS NULL OR cost_nano_usd >= 0);
+"#;
+
+fn migrate_seventeen_to_eighteen(connection: &mut Connection) -> Result<(), StoreError> {
+    sqlite(connection.pragma_update(None, "foreign_keys", false))?;
+    let migrated = (|| {
+        let transaction =
+            sqlite(connection.transaction_with_behavior(TransactionBehavior::Exclusive))?;
+        sqlite(transaction.execute_batch(SCHEMA_V18))?;
+        sqlite(transaction.execute(
+            "UPDATE schema_meta SET version = ?1, applied_at = ?2 WHERE id = 1",
+            params![18_i64, now_seconds()?],
+        ))?;
+        sqlite(transaction.pragma_update(None, "user_version", 18))?;
         sqlite(transaction.commit())
     })();
     sqlite(connection.pragma_update(None, "foreign_keys", true))?;
@@ -2819,9 +2868,10 @@ fn validate_runtime_commit(
 }
 
 fn validate_usage(row: &ResponseUsage, identity_bytes: &mut usize) -> Result<(), StoreError> {
-    if row.cost != CostStatus::Unavailable || row.cache_write_1h > row.tokens.cache_write {
+    if row.cache_write_1h > row.tokens.cache_write {
         return Err(StoreError::InvalidRuntime);
     }
+    let _ = cost_parts(row.cost)?;
     for value in [&row.key.client, &row.key.session, &row.model] {
         validate_runtime_text(value, MAX_RUNTIME_IDENTITY_BYTES)?;
         *identity_bytes = identity_bytes
@@ -2833,6 +2883,9 @@ fn validate_usage(row: &ResponseUsage, identity_bytes: &mut usize) -> Result<(),
         row.billing_provider_hint.as_ref(),
         row.service_tier.as_ref(),
         row.agent.as_ref(),
+        row.workspace_key.as_ref(),
+        row.workspace_label.as_ref(),
+        row.title.as_ref(),
     ]
     .into_iter()
     .flatten()
@@ -2909,9 +2962,10 @@ fn insert_runtime_source(
                  source_id, source_generation, ordinal, client, session, model, observed_at,
                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                  reasoning_tokens, cache_write_1h_tokens, dedup_identity, identity_class,
-                 provider_hint, service_tier, agent
+                 provider_hint, service_tier, agent, workspace_key, workspace_label,
+                 cost_status, cost_nano_usd
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                       ?14, ?15, ?16, ?17, ?18)",
+                       ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 source_id,
                 runtime_i64(source.generation)?,
@@ -2935,6 +2989,10 @@ fn insert_runtime_source(
                 row.billing_provider_hint,
                 row.service_tier,
                 row.agent,
+                row.workspace_key,
+                row.workspace_label,
+                cost_parts(row.cost)?.0,
+                cost_parts(row.cost)?.1,
             ],
         ))?;
     }
@@ -2990,9 +3048,10 @@ fn insert_sqlite_source(
                  source_id, source_generation, ordinal, client, session, model, observed_at,
                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                  reasoning_tokens, cache_write_1h_tokens, dedup_identity, identity_class,
-                 provider_hint, service_tier, agent
+                 provider_hint, service_tier, agent, workspace_key, workspace_label,
+                 cost_status, cost_nano_usd
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                       ?14, ?15, ?16, ?17, ?18)",
+                       ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 source_id,
                 runtime_i64(source.generation)?,
@@ -3016,6 +3075,10 @@ fn insert_sqlite_source(
                 row.billing_provider_hint,
                 row.service_tier,
                 row.agent,
+                row.workspace_key,
+                row.workspace_label,
+                cost_parts(row.cost)?.0,
+                cost_parts(row.cost)?.1,
             ],
         ))?;
     }
@@ -3084,9 +3147,10 @@ fn insert_canonical_rows(
                  canonical_id, ordinal, client, session, model, observed_at, input_tokens,
                  output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
                  cache_write_1h_tokens, dedup_identity, provider_hint, service_tier, agent,
+                 workspace_key, workspace_label, cost_status, cost_nano_usd,
                  source_state
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                       ?15, ?16, ?17)",
+                       ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 row.canonical_id,
                 runtime_i64(ordinal as u64)?,
@@ -3104,6 +3168,10 @@ fn insert_canonical_rows(
                 row.usage.billing_provider_hint,
                 row.usage.service_tier,
                 row.usage.agent,
+                row.usage.workspace_key,
+                row.usage.workspace_label,
+                cost_parts(row.usage.cost)?.0,
+                cost_parts(row.usage.cost)?.1,
                 row.source_state.as_str(),
             ],
         ))?;
@@ -3142,6 +3210,29 @@ fn insert_canonical_rows(
         }
     }
     Ok(())
+}
+
+fn cost_parts(cost: CostStatus) -> Result<(&'static str, Option<i64>), StoreError> {
+    match cost {
+        CostStatus::Unavailable => Ok(("unavailable", None)),
+        CostStatus::Reported(nano) => Ok((
+            "reported",
+            Some(i64::try_from(nano).map_err(|_| StoreError::InvalidRuntime)?),
+        )),
+        CostStatus::Estimated(nano) => Ok((
+            "estimated",
+            Some(i64::try_from(nano).map_err(|_| StoreError::InvalidRuntime)?),
+        )),
+    }
+}
+
+fn parse_cost(status: &str, nano: Option<i64>) -> Result<CostStatus, StoreError> {
+    match (status, nano) {
+        ("unavailable", None) => Ok(CostStatus::Unavailable),
+        ("reported", Some(nano)) if nano >= 0 => Ok(CostStatus::Reported(nano as u64)),
+        ("estimated", Some(nano)) if nano >= 0 => Ok(CostStatus::Estimated(nano as u64)),
+        _ => Err(StoreError::Sqlite),
+    }
 }
 
 fn token_i64(value: u64) -> Result<i64, StoreError> {
@@ -3260,10 +3351,15 @@ struct RawUsage {
     provider_hint: Option<String>,
     service_tier: Option<String>,
     agent: Option<String>,
+    workspace_key: Option<String>,
+    workspace_label: Option<String>,
+    cost_status: String,
+    cost_nano_usd: Option<i64>,
 }
 
 impl RawUsage {
     fn into_usage(self) -> Result<ResponseUsage, StoreError> {
+        let cost = parse_cost(&self.cost_status, self.cost_nano_usd)?;
         Ok(ResponseUsage {
             key: SessionKey::new(self.client, self.session),
             model: self.model,
@@ -3280,7 +3376,12 @@ impl RawUsage {
             billing_provider_hint: self.provider_hint,
             service_tier: self.service_tier,
             agent: self.agent,
-            cost: CostStatus::Unavailable,
+            workspace_key: self.workspace_key,
+            workspace_label: self.workspace_label,
+            // Titles are presentation-only and deliberately never persisted, so a
+            // reload cannot resurrect private source text.
+            title: None,
+            cost,
         })
     }
 }
@@ -3593,7 +3694,8 @@ fn load_source_sqlite_observations(
     let mut statement = sqlite(connection.prepare(
         "SELECT ordinal, client, session, model, observed_at, input_tokens, output_tokens,
                 cache_read_tokens, cache_write_tokens, reasoning_tokens, cache_write_1h_tokens,
-                dedup_identity, identity_class, provider_hint, service_tier, agent
+                dedup_identity, identity_class, provider_hint, service_tier, agent,
+                workspace_key, workspace_label, cost_status, cost_nano_usd
          FROM source_sqlite_observations
          WHERE source_id = ?1 AND source_generation = ?2
          ORDER BY ordinal",
@@ -3618,6 +3720,10 @@ fn load_source_sqlite_observations(
                     provider_hint: row.get(13)?,
                     service_tier: row.get(14)?,
                     agent: row.get(15)?,
+                    workspace_key: row.get(16)?,
+                    workspace_label: row.get(17)?,
+                    cost_status: row.get(18)?,
+                    cost_nano_usd: row.get(19)?,
                 },
                 row.get::<_, String>(12)?,
             ))
@@ -3803,7 +3909,8 @@ fn load_source_observations(
     let mut statement = sqlite(connection.prepare(
         "SELECT ordinal, client, session, model, observed_at, input_tokens, output_tokens,
                 cache_read_tokens, cache_write_tokens, reasoning_tokens, cache_write_1h_tokens,
-                dedup_identity, identity_class, provider_hint, service_tier, agent
+                dedup_identity, identity_class, provider_hint, service_tier, agent,
+                workspace_key, workspace_label, cost_status, cost_nano_usd
          FROM source_observations
          WHERE source_id = ?1 AND source_generation = ?2
          ORDER BY ordinal",
@@ -3828,6 +3935,10 @@ fn load_source_observations(
                     provider_hint: row.get(13)?,
                     service_tier: row.get(14)?,
                     agent: row.get(15)?,
+                    workspace_key: row.get(16)?,
+                    workspace_label: row.get(17)?,
+                    cost_status: row.get(18)?,
+                    cost_nano_usd: row.get(19)?,
                 },
                 row.get::<_, String>(12)?,
             ))
@@ -3921,6 +4032,7 @@ fn load_canonical_rows(
             "SELECT ordinal, canonical_id, client, session, model, observed_at, input_tokens,
                     output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
                     cache_write_1h_tokens, dedup_identity, provider_hint, service_tier, agent,
+                    workspace_key, workspace_label, cost_status, cost_nano_usd,
                     source_state
              FROM canonical_observations ORDER BY ordinal",
         ))?;
@@ -3943,8 +4055,12 @@ fn load_canonical_rows(
                     provider_hint: row.get(13)?,
                     service_tier: row.get(14)?,
                     agent: row.get(15)?,
+                    workspace_key: row.get(16)?,
+                    workspace_label: row.get(17)?,
+                    cost_status: row.get(18)?,
+                    cost_nano_usd: row.get(19)?,
                 },
-                row.get::<_, String>(16)?,
+                row.get::<_, String>(20)?,
             ))
         }))?
         .collect::<Result<Vec<_>, _>>()

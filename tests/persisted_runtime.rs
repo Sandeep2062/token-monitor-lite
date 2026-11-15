@@ -76,6 +76,9 @@ fn source(seed: u8, generation: u64, input: u64) -> Arc<SourceSnapshot> {
         billing_provider_hint: None,
         service_tier: None,
         agent: None,
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     };
     Arc::new(SourceSnapshot {
@@ -116,6 +119,9 @@ fn sqlite_local_usage_rows_commit_and_rehydrate_as_request_observations() {
         billing_provider_hint: None,
         service_tier: None,
         agent: Some("agent-1".to_owned()),
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     };
     let source = Arc::new(SourceSnapshot {
@@ -177,6 +183,9 @@ fn opencode_sqlite_rows_commit_and_rehydrate_as_request_observations() {
         billing_provider_hint: Some("anthropic".to_owned()),
         service_tier: None,
         agent: None,
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     };
     let source = Arc::new(SourceSnapshot {
@@ -238,6 +247,9 @@ fn gemini_transcript_rows_commit_and_rehydrate_as_request_observations() {
         billing_provider_hint: Some("google".to_owned()),
         service_tier: None,
         agent: None,
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     };
     let source = Arc::new(SourceSnapshot {
@@ -294,6 +306,9 @@ fn cursor_cache_rows_commit_and_rehydrate_as_request_observations() {
         billing_provider_hint: Some("cursor".to_owned()),
         service_tier: None,
         agent: None,
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     };
     let source = Arc::new(SourceSnapshot {
@@ -423,7 +438,7 @@ fn commit_for(
 fn fresh_schema_has_nine_strict_path_and_secret_free_runtime_roles() {
     let tree = NativeTree::new();
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 17);
+    assert_eq!(snapshot.schema_version, 18);
     let runtime = store.runtime_snapshot().unwrap();
     assert_eq!(runtime.generation, 0);
     assert!(!runtime.initialized);
@@ -528,7 +543,7 @@ fn v2_upgrade_preserves_existing_bytes_and_starts_uninitialized_runtime() {
     drop(connection);
 
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 17);
+    assert_eq!(snapshot.schema_version, 18);
     assert_eq!(snapshot.settings.unwrap().json_bytes(), settings);
     assert!(!store.runtime_snapshot().unwrap().initialized);
     store.shutdown().unwrap();
@@ -817,6 +832,9 @@ fn release_scale_rows_remain_shared_behind_immutable_arcs() {
             billing_provider_hint: None,
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         })
         .collect::<Vec<_>>();

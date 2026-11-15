@@ -138,6 +138,9 @@ pub fn normalize_record(record: &OpenCodeRecord<'_>) -> Result<Option<ResponseUs
         billing_provider_hint: provider,
         service_tier: None,
         agent: None,
+        workspace_key: None,
+        workspace_label: None,
+        title: None,
         cost: CostStatus::Unavailable,
     }))
 }

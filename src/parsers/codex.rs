@@ -716,6 +716,9 @@ impl CodexReader {
             billing_provider_hint: row.provider,
             service_tier: row.tier,
             agent,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         });
         self.retained_identity_bytes += identity_bytes;

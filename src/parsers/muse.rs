@@ -109,6 +109,9 @@ impl MuseReader {
             billing_provider_hint: None,
             service_tier: None,
             agent: None,
+            workspace_key: None,
+            workspace_label: None,
+            title: None,
             cost: CostStatus::Unavailable,
         });
         Ok(())

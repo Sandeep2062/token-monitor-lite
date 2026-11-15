@@ -44,12 +44,21 @@ pub struct ResponseUsage {
     pub service_tier: Option<String>,
     /// Optional subagent/sidechain display identity. Not part of request identity.
     pub agent: Option<String>,
+    /// Source-recorded workspace/project identity, when the source carries one.
+    pub workspace_key: Option<String>,
+    pub workspace_label: Option<String>,
+    /// Source-recorded session/turn title. Presentation metadata only.
+    pub title: Option<String>,
     pub cost: CostStatus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CostStatus {
     Unavailable,
+    /// Integer nano-USD reported by the source record.
+    Reported(u64),
+    /// Integer nano-USD estimated from a source-reported rate.
+    Estimated(u64),
 }
 
 /// Diagnostics contain only fixed field names, never source values or text.

@@ -11,6 +11,7 @@ use token_monitor_lite::application::{
     ImportReportItemView, ImportReportView, SettingsDraft, SettingsView, SourceAvailability,
     SourceChoice,
 };
+use token_monitor_lite::pricing::{CustomRate, ModelRates, PricingCatalog, Rate};
 use token_monitor_lite::runtime::{
     MonitorSnapshot, RuntimeMetrics, SourceHealth, SourceHealthStatus, WatchStatus,
 };
@@ -354,7 +355,7 @@ fn exact_values_and_current_reader_components_remain_truthful() {
     assert_eq!(presentation.home.tracked_tokens, "9,007,199,254,741,006");
     assert_eq!(presentation.home.cache, "5");
     assert_eq!(presentation.home.reasoning, "1");
-    assert_eq!(presentation.home.cost, "Unavailable");
+    assert_eq!(presentation.home.cost, "—");
     assert!(presentation.home.has_usage);
 }
 
@@ -923,4 +924,42 @@ fn mailbox_coalesces_to_one_latest_scheduled_snapshot() {
         WatchStatus::Available,
     )));
     assert_eq!(mailbox.take().unwrap().generation, 10_001);
+}
+
+#[test]
+fn cost_columns_use_the_active_catalog_for_home_models_and_sessions() {
+    let mut controller = UiController::new();
+    controller.set_clock_ms(10);
+    controller.set_pricing_catalog(Arc::new(
+        PricingCatalog::bundled()
+            .as_ref()
+            .clone()
+            .with_custom(vec![CustomRate {
+                provider: Some("claude".to_owned()),
+                model: "sonnet".to_owned(),
+                rates: ModelRates {
+                    input: Some(Rate::from_per_million("3").expect("rate")),
+                    output: Some(Rate::from_per_million("15").expect("rate")),
+                    ..ModelRates::default()
+                },
+            }]),
+    ));
+    let counts = TokenCounts {
+        input: 1_000_000,
+        output: 100_000,
+        ..TokenCounts::default()
+    };
+    assert!(controller.accept_snapshot(snapshot(
+        1,
+        counts,
+        vec![session("claude", "s", "sonnet", 10, counts)],
+        Vec::new(),
+        WatchStatus::Available,
+    )));
+
+    let presentation = controller.presentation();
+    assert_eq!(presentation.home.cost, "$4.50");
+    assert_eq!(presentation.models.rows[0].cost, "$4.50");
+    assert_eq!(presentation.sessions[0].cost, "$4.50");
+    assert_eq!(presentation.recent_sessions[0].cost, "$4.50");
 }

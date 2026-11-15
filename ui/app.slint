@@ -11,6 +11,7 @@ export struct SessionRowData {
     cache: string,
     reasoning: string,
     tracked-tokens: string,
+    cost: string,
 }
 
 export struct SourceHealthRowData {
@@ -30,6 +31,7 @@ export struct TrendRowData {
 export struct ModelRowData {
     label: string,
     total: string,
+    cost: string,
     permille: int,
 }
 
@@ -403,7 +405,7 @@ export component AppWindow inherits Window {
                             horizontal-alignment: center;
                         }
                         for row in root.recent-sessions : Button {
-                            text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.tracked-tokens + "  ·  " + row.last-activity;
+                            text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.tracked-tokens + "  ·  " + row.cost + "  ·  " + row.last-activity;
                             accessible-role: button;
                             accessible-label: self.text;
                             clicked => { root.select-session(row.selection-key); }
@@ -450,7 +452,7 @@ export component AppWindow inherits Window {
                                 horizontal-alignment: center;
                             }
                             for row in root.sessions : Button {
-                                text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.input + " in  ·  " + row.output + " out  ·  " + row.cache + " cache  ·  " + row.reasoning + " reasoning  ·  " + row.tracked-tokens;
+                                text: row.client + "  ·  " + row.session + "  ·  " + row.model + "  ·  " + row.input + " in  ·  " + row.output + " out  ·  " + row.cache + " cache  ·  " + row.reasoning + " reasoning  ·  " + row.tracked-tokens + " tokens  ·  " + row.cost;
                                 accessible-role: button;
                                 accessible-label: self.text;
                                 clicked => { root.select-session(row.selection-key); }
@@ -496,9 +498,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 spacing: 2px;
                                 for model in root.detail-models : Text {
-                                    text: model.label + " · " + model.total + " tokens";
+                                    text: model.label + " · " + model.total + " tokens · " + model.cost;
                                     accessible-role: text;
-                                    accessible-label: model.label + " · " + model.total + " tokens";
+                                    accessible-label: model.label + " · " + model.total + " tokens · " + model.cost;
                                     color: #f2f6fa;
                                     font-size: 11px;
                                     font-family: "monospace";
@@ -875,7 +877,7 @@ export component AppWindow inherits Window {
                                     Text {
                                         text: row.label;
                                         accessible-role: text;
-                                        accessible-label: row.label + " · " + row.total + " tokens";
+                                        accessible-label: row.label + " · " + row.total + " tokens · " + row.cost;
                                         color: #f2f6fa;
                                         font-size: 12px;
                                         width: 320px;
@@ -899,6 +901,15 @@ export component AppWindow inherits Window {
                                         font-size: 12px;
                                         font-family: "monospace";
                                         width: 120px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: row.cost;
+                                        color: #91a0af;
+                                        font-size: 12px;
+                                        font-family: "monospace";
+                                        width: 100px;
                                         horizontal-alignment: right;
                                         vertical-alignment: center;
                                     }

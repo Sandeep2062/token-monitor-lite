@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod discovery;
 pub mod migration;
 pub mod parsers;
+pub mod pricing;
 pub mod runtime;
 pub mod source_inputs;
 pub mod sources;

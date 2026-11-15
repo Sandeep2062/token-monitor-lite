@@ -6,6 +6,7 @@
 
 use crate::accounting::{SessionKey, TokenCounts};
 use crate::aggregation::{BucketTimezone, CanonicalSnapshot, SessionDayRollup};
+use crate::pricing::{CostEstimate, PricingCatalog, estimate};
 use crate::sources::{RetainedPeriod, RetainedPeriodUsage};
 use chrono::{DateTime, Datelike, Days, NaiveDate};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +21,7 @@ pub struct ModelUsage {
     pub model: String,
     pub tokens: TokenCounts,
     pub total: u128,
+    pub cost: CostEstimate,
 }
 
 /// Period-scoped model totals. Native session usage replaces a retained
@@ -29,6 +31,7 @@ pub fn model_breakdown(
     snapshot: &CanonicalSnapshot,
     period: UsagePeriod,
     now_ms: i64,
+    pricing: &PricingCatalog,
 ) -> Result<Vec<ModelUsage>, AnalyticsError> {
     let timezone = BucketTimezone::from_str(&snapshot.timezone_name)
         .map_err(|_| AnalyticsError::InvalidTimezone)?;
@@ -50,7 +53,7 @@ pub fn model_breakdown(
         }
     }
 
-    let mut totals: BTreeMap<(String, String), (TokenCounts, u128)> = BTreeMap::new();
+    let mut totals: BTreeMap<(String, String), (TokenCounts, u128, u64)> = BTreeMap::new();
     for row in snapshot.day_models.iter() {
         if !in_window(row.day) {
             continue;
@@ -62,6 +65,10 @@ pub fn model_breakdown(
         value.1 = value
             .1
             .checked_add(token_total(row.tokens))
+            .ok_or(AnalyticsError::Overflow)?;
+        value.2 = value
+            .2
+            .checked_add(row.cache_write_1h)
             .ok_or(AnalyticsError::Overflow)?;
     }
 
@@ -112,12 +119,25 @@ pub fn model_breakdown(
 
     let mut rows = totals
         .into_iter()
-        .filter(|(_, (tokens, total))| *total > 0 || token_total(*tokens) > 0)
-        .map(|((client, model), (tokens, total))| ModelUsage {
-            client,
-            model,
-            tokens,
-            total,
+        .filter(|(_, (tokens, total, _))| *total > 0 || token_total(*tokens) > 0)
+        .map(|((client, model), (tokens, total, cache_write_1h))| {
+            let cost = if model == "Unclassified" {
+                CostEstimate::unpriced(u64::try_from(total).unwrap_or(u64::MAX))
+            } else {
+                estimate(
+                    pricing.resolve(Some(client.as_str()), &model),
+                    tokens,
+                    cache_write_1h,
+                    None,
+                )
+            };
+            ModelUsage {
+                client,
+                model,
+                tokens,
+                total,
+                cost,
+            }
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
@@ -134,6 +154,7 @@ pub fn model_breakdown(
             model: "Other models".to_owned(),
             tokens: TokenCounts::default(),
             total: 0,
+            cost: CostEstimate::default(),
         };
         for row in overflow {
             other.tokens = add_tokens(other.tokens, row.tokens)?;
@@ -141,6 +162,7 @@ pub fn model_breakdown(
                 .total
                 .checked_add(row.total)
                 .ok_or(AnalyticsError::Overflow)?;
+            other.cost = other.cost.merge(row.cost);
         }
         rows.push(other);
     }
@@ -763,8 +785,13 @@ mod tests {
         ]
         .into();
 
-        let month = super::model_breakdown(&canonical, UsagePeriod::Month, at("2026-11-13"))
-            .expect("month models");
+        let month = super::model_breakdown(
+            &canonical,
+            UsagePeriod::Month,
+            at("2026-11-13"),
+            &crate::pricing::PricingCatalog::empty(),
+        )
+        .expect("month models");
         assert_eq!(
             month
                 .iter()
@@ -772,8 +799,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("haiku", 30), ("sonnet", 7)]
         );
-        let all = super::model_breakdown(&canonical, UsagePeriod::AllTime, at("2026-11-13"))
-            .expect("all models");
+        let all = super::model_breakdown(
+            &canonical,
+            UsagePeriod::AllTime,
+            at("2026-11-13"),
+            &crate::pricing::PricingCatalog::empty(),
+        )
+        .expect("all models");
         assert_eq!(
             all.iter()
                 .map(|row| (row.model.as_str(), row.total))
