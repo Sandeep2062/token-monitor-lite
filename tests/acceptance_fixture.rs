@@ -219,6 +219,11 @@ fn source_format(format: &str) -> SourceFormat {
         "kilo-sqlite" => SourceFormat::KiloSqlite,
         "goose-sqlite" => SourceFormat::GooseSqlite,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
+        "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
+        "workbuddy-jsonl" => SourceFormat::WorkBuddyJsonl,
+        "pi-jsonl" => SourceFormat::PiJsonl,
+        "omp-jsonl" => SourceFormat::OmpJsonl,
+        "senpi-jsonl" => SourceFormat::SenpiJsonl,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -287,7 +292,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     let fixture = Fixture::generate();
     let manifest = read_manifest(&fixture);
     assert_eq!(manifest.schema, "token-monitor-lite-acceptance-v2");
-    assert_eq!(manifest.revision, "mixed-2026-11-13.1");
+    assert_eq!(manifest.revision, "mixed-2026-11-13.2");
     assert_eq!(manifest.coverage.configured_sources, 100);
     assert_eq!(manifest.coverage.canonical_sessions, 1_000);
     assert_eq!(manifest.coverage.usage_observations, 2_786);
@@ -315,7 +320,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 25),
+            ("codex-cli".to_owned(), 20),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
@@ -325,6 +330,11 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("kilo-sqlite".to_owned(), 1),
             ("goose-sqlite".to_owned(), 1),
             ("copilot-jsonl".to_owned(), 1),
+            ("codebuddy-jsonl".to_owned(), 1),
+            ("workbuddy-jsonl".to_owned(), 1),
+            ("pi-jsonl".to_owned(), 1),
+            ("omp-jsonl".to_owned(), 1),
+            ("senpi-jsonl".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])

@@ -1059,3 +1059,37 @@ fn source_count_is_capped_and_excess_is_reported() {
             .contains(&DiscoveryNotice::SourceLimitReached)
     );
 }
+
+#[test]
+fn pi_family_and_tencent_buddy_jsonl_sources_use_their_catalog_roots() {
+    let tree = Tree::new();
+    let pi = br#"{"type":"session","id":"pi-session","timestamp":"2026-11-13T10:00:00Z","cwd":"/tmp"}
+{"type":"message","id":"b1","timestamp":"2026-11-13T10:00:01Z","message":{"role":"assistant","model":"claude-opus-5","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0}}}
+"#;
+    let omp = br#"{"type":"session","id":"omp-session","cwd":"/tmp"}
+{"type":"message","id":"b1","timestamp":"2026-11-13T10:00:01Z","message":{"role":"assistant","model":"claude-opus-5","usage":{"input":1,"output":2}}}
+"#;
+    let senpi = br#"{"type":"session","id":"senpi-session","cwd":"/tmp"}
+{"type":"message","id":"b1","timestamp":"2026-11-13T10:00:01Z","message":{"role":"assistant","model":"claude-opus-5","usage":{"input":1,"output":2}}}
+"#;
+    let buddy = br#"{"id":"a1","timestamp":1780000000000,"type":"message","role":"assistant","sessionId":"buddy-session","providerData":{"model":"glm-5.2","messageId":"m1"},"message":{"usage":{"input_tokens":4,"output_tokens":1}}}
+"#;
+    tree.file(".pi/agent/sessions/project/session.jsonl", pi);
+    tree.file(".omp/agent/sessions/project/session.jsonl", omp);
+    tree.file(".senpi/agent/sessions/project/session.jsonl", senpi);
+    tree.file(".codebuddy/projects/project/session.jsonl", buddy);
+    tree.file(".workbuddy/projects/project/session.jsonl", buddy);
+    tree.file(".workbuddy-ai/projects/project/session.jsonl", buddy);
+
+    let report = discover(&tree.paths(&["pi", "omp", "senpi", "codebuddy", "workbuddy"])).unwrap();
+    let found = report
+        .sources
+        .iter()
+        .map(|source| (source.format, source.session.as_str()))
+        .collect::<BTreeSet<_>>();
+    assert!(found.contains(&(SourceFormat::PiJsonl, "pi-session")));
+    assert!(found.contains(&(SourceFormat::OmpJsonl, "omp-session")));
+    assert!(found.contains(&(SourceFormat::SenpiJsonl, "senpi-session")));
+    assert!(found.contains(&(SourceFormat::CodeBuddyJsonl, "buddy-session")));
+    assert!(found.contains(&(SourceFormat::WorkBuddyJsonl, "buddy-session")));
+}

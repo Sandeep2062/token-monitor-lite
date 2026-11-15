@@ -767,8 +767,8 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
     [
-        "amp", "claude", "cline", "codex", "copilot", "cursor", "gemini", "goose", "kilo",
-        "opencode",
+        "amp", "claude", "cline", "codebuddy", "codex", "copilot", "cursor", "gemini", "goose",
+        "kilo", "omp", "opencode", "pi", "senpi", "workbuddy",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
@@ -824,13 +824,18 @@ fn is_selectable_source_client(client: &str) -> bool {
         "amp"
             | "claude"
             | "cline"
+            | "codebuddy"
             | "codex"
             | "copilot"
             | "cursor"
             | "gemini"
             | "goose"
             | "kilo"
+            | "omp"
             | "opencode"
+            | "pi"
+            | "senpi"
+            | "workbuddy"
             | "mixed"
     )
 }
@@ -841,13 +846,18 @@ fn is_supported_client(client: &str) -> bool {
         "amp"
             | "claude"
             | "cline"
+            | "codebuddy"
             | "codex"
             | "copilot"
             | "cursor"
             | "gemini"
             | "goose"
             | "kilo"
+            | "omp"
             | "opencode"
+            | "pi"
+            | "senpi"
+            | "workbuddy"
     )
 }
 
@@ -856,13 +866,18 @@ fn client_label(client: &str) -> &'static str {
         "amp" => "Amp",
         "claude" => "Claude CLI",
         "cline" => "Cline",
+        "codebuddy" => "CodeBuddy",
         "codex" => "Codex CLI",
         "copilot" => "GitHub Copilot",
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
         "goose" => "Goose",
         "kilo" => "Kilo",
+        "omp" => "Oh My Pi",
         "opencode" => "OpenCode",
+        "pi" => "Pi",
+        "senpi" => "OmO Native",
+        "workbuddy" => "WorkBuddy",
         "mixed" => "Session archive",
         _ => "Unavailable client",
     }

@@ -24,7 +24,21 @@ use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
 const SUPPORTED_CLIENTS: &[&str] = &[
-    "amp", "claude", "cline", "codex", "copilot", "cursor", "gemini", "goose", "kilo", "opencode",
+    "amp",
+    "claude",
+    "cline",
+    "codebuddy",
+    "codex",
+    "copilot",
+    "cursor",
+    "gemini",
+    "goose",
+    "kilo",
+    "omp",
+    "opencode",
+    "pi",
+    "senpi",
+    "workbuddy",
 ];
 const COMMAND_CAPACITY: usize = 8;
 
@@ -1137,6 +1151,11 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
         SourceFormat::ClineJson => "cline",
         SourceFormat::CopilotJsonl => "copilot",
+        SourceFormat::CodeBuddyJsonl => "codebuddy",
+        SourceFormat::WorkBuddyJsonl => "workbuddy",
+        SourceFormat::PiJsonl => "pi",
+        SourceFormat::OmpJsonl => "omp",
+        SourceFormat::SenpiJsonl => "senpi",
         SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
         SourceFormat::GooseSqlite => "goose",

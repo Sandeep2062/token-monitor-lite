@@ -38,6 +38,8 @@ All arithmetic is checked. Invalid signs, non-integral or unsafe values, inconsi
 | Kilo message | Canonical client + payload/row session ID + row ID | Stable across repeated reads of one database. Exact duplicate copies merge only on identical identity/content. |
 | Goose session | Canonical client + session row ID | One cumulative observation per row. The accumulated counter wins independently over the non-accumulated counter. |
 | Copilot OTel record | Canonical client + conversation/session attribute (or trace ID) + response/span ID | A file that mixes record sources keeps only the highest-priority source present. Duplicate identities collapse to the largest token total. |
+| CodeBuddy/WorkBuddy message | Canonical client + session ID + provider message/trace/row ID | Missing IDs use a stable source-local line ordinal. Repeated identities keep the largest token total within one source. |
+| Pi-format response | Canonical client + `responseId`, or entry ID plus immutable event fields | The identity is deliberately session-independent so copied fork records merge only when their content agrees; conflicts are visible unsupported. |
 
 Opaque source IDs, never lexical paths, order provenance. Paths exist only in discovery/watch memory and are absent from SQLite, diagnostics, exports, Slint, and value-bearing `Debug` output.
 
@@ -200,6 +202,36 @@ The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Eac
 | Token-less record, unrelated OTel record, or a record without `attributes` | ignored non-usage | No row. | No ownership change. |
 | Negative/fractional/unsafe counter, missing model, invalid session/identity, or malformed JSON | visible unsupported | Discard the candidate. The pinned reader clamps and enriches across lines; the native reader does neither. | Prior committed generation remains active. |
 | Cross-line trace enrichment, VS Code session-state files, configured exporter paths, agent-relationship merging, and cost/currency | visible unsupported / ignored | No network, cross-file or trace-state guessing. Cost is Gate 3. | No additional source slot. |
+
+## CodeBuddy and WorkBuddy transcript matrix
+
+Both clients share one JSONL record shape under their own project roots. CodeBuddy reads `<home>/.codebuddy/projects/**/*.jsonl`; WorkBuddy reads `<home>/.workbuddy/projects/**/*.jsonl` and `<home>/.workbuddy-ai/projects/**/*.jsonl`. Extension log sinks and WorkBuddy's aggregate `workbuddy.db` are not read.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Completed assistant `message` row with `message.usage` | supported | One observation. Cache read/write and reasoning aliases are read; missing counters are zero. A reported `total_tokens` proves cache-inclusive prompt input only when it equals input+output and differs from the fully additive total, in which case cache read is split out once. | `sessionId`, else the source file stem. Identity is `providerData.messageId`, `traceId`, or row `id`; otherwise a stable source-local line ordinal. |
+| `function_call` row with `providerData.usage` or `providerData.rawUsage` | supported | Same normalization. Model is `providerData.model`, `requestModelId`, or `message.model`, else the client default. | Same identity hierarchy. |
+| `cachedMissTokens` / `cacheMissTokens` present | supported | The miss counter already excludes cached input and becomes the uncached input. | Same record. |
+| Non-completed status, user/turn-metrics/control row, unrelated row, or zero usage | ignored non-usage | No row. | No ownership change. |
+| Repeated message identity | supported | The larger token total replaces the earlier row; equal totals keep the first. | Within one source only. |
+| Negative/fractional counter, malformed JSON, invalid identity, or absent timestamp and file-mtime fallback | visible unsupported | Discard the candidate. The pinned reader clamps and skips; the native reader does neither. | Prior committed generation remains active. |
+| Extension log sinks, WorkBuddy `workbuddy.db`, workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No text-log parser, SQLite fallback, workspace projection, timing or pricing. | No additional source slot. |
+
+## Pi-format matrix (Pi, Oh My Pi, OmO Native)
+
+Pi, OMP and Senpi share one JSONL record layout under distinct roots: `<home>/.pi/agent/sessions`, `<home>/.omp/agent/sessions`, and the Senpi roots `<home>/.omo/agent/sessions`, `<home>/.senpi/agent/sessions`, `<home>/.omo/senpi-task/children`, `<home>/.omo/memory` and `<home>/.omo/agent/projects`. `SENPI_CODING_AGENT_DIR` replaces the `.senpi/agent` root and `SENPI_CODING_AGENT_SESSION_DIR` adds one sessions directory.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Leading `title` record(s), then a `session` header with `id` | supported | The header supplies the canonical session; pre-header title records are ignored. | A non-`session` header or a header without a valid ID rejects the candidate. |
+| Assistant `message` with `message.usage` and a non-blank `message.model` | supported | One observation. `input`, `output`, `cacheRead`, `cacheWrite` and the `cacheWrite1h` subset are checked non-negative. `reasoning` is read as an informational subset of `output` and never added to the canonical total. | Session header ID. `responseId` gives a cross-session identity; otherwise the entry ID plus immutable event fields keeps copied fork records identical. |
+| `model_change` entry | ignored non-usage | Updates the current model/provider used by a following model-less `usage` entry. | No row. |
+| Root `usage` entry with usage | supported | Counted as a billed operation. A root model/provider wins; without one, the current selection is used, else `unknown`. | Same identity hierarchy. |
+| `compaction` or `branch_summary` entry with root usage | supported | Counted as billed operation work. Without a recorded model it uses the `tools/summaries` bucket rather than charging the conversation model. | Same identity hierarchy. |
+| `toolResult` message with usage | supported | Counted as operation work. A recorded model wins; otherwise `tools/summaries`. | Same identity hierarchy. |
+| `session_info`, `title_change`, user messages, and other control records | ignored non-usage | No row. `session_info.name` is not treated as an agent identity. | No ownership change. |
+| Missing header, missing assistant usage/model, invalid counter, `cacheWrite1h > cacheWrite`, malformed timestamp/JSON, or conflicting duplicate response identity | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| RLM parent/child accounting, OMP subagent parent links, session titles, workspace attribution, turn-duration timing, reported cost, provider inference, and lossy damaged-record recovery | visible unsupported / ignored | Each transcript is parsed independently; no cross-file allocation, title, workspace or price is invented. | No additional source slot. |
 
 ## Input and source matrix
 

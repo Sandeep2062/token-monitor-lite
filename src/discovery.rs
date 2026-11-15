@@ -1177,6 +1177,40 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn senpi_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match inputs
+        .env_paths
+        .get("SENPI_CODING_AGENT_DIR")
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        Some(dir) => roots.push(join(inputs.platform, dir, "sessions")),
+        None => roots.push(join_many(
+            inputs.platform,
+            &inputs.home,
+            &[".senpi", "agent", "sessions"],
+        )),
+    }
+    if let Some(dir) = inputs
+        .env_paths
+        .get("SENPI_CODING_AGENT_SESSION_DIR")
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        roots.push(dir.clone());
+    }
+    for parts in [
+        &[".omo", "agent", "sessions"][..],
+        &[".omo", "senpi-task", "children"],
+        &[".omo", "memory"],
+        &[".omo", "agent", "projects"],
+    ] {
+        roots.push(join_many(inputs.platform, &inputs.home, parts));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 fn is_gemini_transcript_path(root: &Path, path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -1679,6 +1713,50 @@ fn discover_sources_with_id(
                     ),
                 ],
             ),
+            "codebuddy" => (
+                "codebuddy",
+                SourceFormat::CodeBuddyJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".codebuddy", "projects"],
+                )],
+            ),
+            "workbuddy" => (
+                "workbuddy",
+                SourceFormat::WorkBuddyJsonl,
+                vec![
+                    join_many(inputs.platform, &inputs.home, &[".workbuddy", "projects"]),
+                    join_many(
+                        inputs.platform,
+                        &inputs.home,
+                        &[".workbuddy-ai", "projects"],
+                    ),
+                ],
+            ),
+            "pi" => (
+                "pi",
+                SourceFormat::PiJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".pi", "agent", "sessions"],
+                )],
+            ),
+            "omp" => (
+                "omp",
+                SourceFormat::OmpJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".omp", "agent", "sessions"],
+                )],
+            ),
+            "senpi" => (
+                "senpi",
+                SourceFormat::SenpiJsonl,
+                senpi_session_roots(inputs),
+            ),
             _ => {
                 notices.push(DiscoveryNotice::UnsupportedClient {
                     client: redacted_client_id(client),
@@ -1949,6 +2027,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                         .find_map(|key| attributes.get(*key).and_then(Value::as_str))
                     })
                     .or_else(|| value.get("traceId").and_then(Value::as_str)),
+                SourceFormat::CodeBuddyJsonl | SourceFormat::WorkBuddyJsonl => {
+                    value.get("sessionId").and_then(Value::as_str)
+                }
+                SourceFormat::PiJsonl | SourceFormat::OmpJsonl | SourceFormat::SenpiJsonl => {
+                    if value.get("type").and_then(Value::as_str) == Some("session") {
+                        value.get("id").and_then(Value::as_str)
+                    } else {
+                        None
+                    }
+                }
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -1984,15 +2072,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .map(str::to_owned)
             .ok_or(());
     }
-    if format == SourceFormat::CopilotJsonl {
-        return path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
-            .map(str::to_owned)
-            .ok_or(());
-    }
-    if format == SourceFormat::GeminiTranscript {
+    if matches!(
+        format,
+        SourceFormat::CopilotJsonl
+            | SourceFormat::GeminiTranscript
+            | SourceFormat::CodeBuddyJsonl
+            | SourceFormat::WorkBuddyJsonl
+            | SourceFormat::PiJsonl
+            | SourceFormat::OmpJsonl
+            | SourceFormat::SenpiJsonl
+    ) {
         return path
             .file_stem()
             .and_then(|stem| stem.to_str())

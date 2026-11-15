@@ -11,9 +11,10 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 25 Codex JSONL
+sessions. The distribution below preserves the required totals: 20 Codex JSONL
 and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor, one Cline,
-one Amp, one Kilo, one Goose and one Copilot source supply 65 canonical
+one Amp, one Kilo, one Goose, one Copilot, one CodeBuddy, one WorkBuddy, one
+Pi, one OMP and one Senpi source supply 65 canonical
 sessions, 33 Claude sources supply 33 (one carries nine extra observations so
 the session-level Goose source does not reduce the observation total), and the
 single local-usage ledger supplies the remaining 902 after one suppressed
@@ -47,10 +48,10 @@ from typing import Any, Callable
 
 
 SCHEMA = "token-monitor-lite-acceptance-v2"
-REVISION = "mixed-2026-11-13.1"
+REVISION = "mixed-2026-11-13.2"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 25
+CODEX_SOURCES = 20
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
@@ -60,6 +61,11 @@ AMP_SOURCES = 1
 KILO_SOURCES = 1
 GOOSE_SOURCES = 1
 COPILOT_SOURCES = 1
+CODEBUDDY_SOURCES = 1
+WORKBUDDY_SOURCES = 1
+PI_SOURCES = 1
+OMP_SOURCES = 1
+SENPI_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 EXTRA_CLAUDE_OBSERVATIONS = 9
@@ -75,6 +81,11 @@ SOURCE_COUNT = (
     + KILO_SOURCES
     + GOOSE_SOURCES
     + COPILOT_SOURCES
+    + CODEBUDDY_SOURCES
+    + WORKBUDDY_SOURCES
+    + PI_SOURCES
+    + OMP_SOURCES
+    + SENPI_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -192,6 +203,103 @@ def _codex_source(index: int, session: str) -> tuple[str, bytes, dict[str, int],
                     },
                     "timestamp": f"2026-11-13T11:{index % 60:02d}:{observation + 1:02d}Z",
                     "type": "event_msg",
+                }
+            )
+        )
+    return session, b"".join(records), totals, OBSERVATIONS_PER_JSONL
+
+
+def _buddy_source(client: str, index: int) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"{client}-fixture-{index:03d}"
+    totals = _counts()
+    records: list[bytes] = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 300 + index * 10 + observation,
+            "output": 20 + observation,
+            "cacheRead": 7 + observation % 3,
+            "cacheWrite": 0,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        gross_input = counts["input"] + counts["cacheRead"]
+        records.append(
+            _json_line(
+                {
+                    "id": f"{client}-assistant-{index:03d}-{observation:02d}",
+                    "message": {
+                        "model": "glm-5.2",
+                        "usage": {
+                            "cache_read_input_tokens": counts["cacheRead"],
+                            "input_tokens": gross_input,
+                            "output_tokens": counts["output"],
+                            "total_tokens": gross_input + counts["output"],
+                        },
+                    },
+                    "providerData": {
+                        "messageId": f"{client}-message-{index:03d}-{observation:02d}",
+                        "model": "glm-5.2",
+                    },
+                    "role": "assistant",
+                    "sessionId": session,
+                    "status": "completed",
+                    "timestamp": 1_780_000_000_000 + observation * 1_000,
+                    "type": "message",
+                }
+            )
+        )
+    return session, b"".join(records), totals, len(records)
+
+
+def _pi_source(
+    client: str, index: int
+) -> tuple[str, bytes, dict[str, int], int]:
+    session = f"{client}-fixture-{index:03d}"
+    records = [
+        _json_line(
+            {
+                "cwd": "/synthetic",
+                "id": session,
+                "timestamp": "2026-11-13T12:00:00Z",
+                "type": "session",
+                "version": 3,
+            }
+        )
+    ]
+    totals = _counts()
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 150 + index * 10 + observation,
+            "output": 18 + observation,
+            "cacheRead": 4 + observation % 2,
+            "cacheWrite": 2,
+            # Pi documents reasoning as a subset of output; the native reader
+            # keeps the canonical reasoning bucket at zero.
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "id": f"{client}-message-{index:03d}-{observation:02d}",
+                    "message": {
+                        "model": "claude-sonnet-4-5",
+                        "provider": "anthropic",
+                        "role": "assistant",
+                        "usage": {
+                            "cacheRead": counts["cacheRead"],
+                            "cacheWrite": counts["cacheWrite"],
+                            "input": counts["input"],
+                            "output": counts["output"],
+                            "reasoning": 5,
+                            "totalTokens": counts["input"]
+                            + counts["output"]
+                            + counts["cacheRead"]
+                            + counts["cacheWrite"],
+                        },
+                    },
+                    "timestamp": f"2026-11-13T12:{index % 60:02d}:{observation + 1:02d}Z",
+                    "type": "message",
                 }
             )
         )
@@ -1057,6 +1165,34 @@ def generate(raw_root: str) -> Path:
         _add_counts(canonical_aggregate, totals)
         physical_bytes += len(data)
         decoded_bytes += len(data)
+
+    for client, count, relative_root, generator in [
+        ("codebuddy", CODEBUDDY_SOURCES, "home/.codebuddy/projects/acceptance", _buddy_source),
+        ("workbuddy", WORKBUDDY_SOURCES, "home/.workbuddy/projects/acceptance", _buddy_source),
+        ("pi", PI_SOURCES, "home/.pi/agent/sessions/acceptance", _pi_source),
+        ("omp", OMP_SOURCES, "home/.omp/agent/sessions/acceptance", _pi_source),
+        ("senpi", SENPI_SOURCES, "home/.senpi/agent/sessions/acceptance", _pi_source),
+    ]:
+        for index in range(count):
+            session, data, totals, rows = generator(client, index)
+            relative = f"{relative_root}/{session}.jsonl"
+            sources.append(
+                _source_entry(
+                    root,
+                    relative,
+                    data,
+                    format_name=f"{client}-jsonl",
+                    session=session,
+                    observations=rows,
+                    canonical_sessions=1,
+                    expected_totals=totals,
+                    physical_bytes=len(data),
+                )
+            )
+            _add_counts(aggregate, totals)
+            _add_counts(canonical_aggregate, totals)
+            physical_bytes += len(data)
+            decoded_bytes += len(data)
 
     for index in range(ZSTD_SOURCES):
         session = f"codex-zstd-{index:03d}"

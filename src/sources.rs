@@ -6,7 +6,9 @@
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
     ReaderError, ResponseUsage, amp::AmpReader, claude::ClaudeReader, cline::ClineReader,
-    codex::CodexReader, copilot::CopilotReader, cursor::CursorReader, gemini::GeminiReader,
+    codebuddy::CodeBuddyReader, codex::CodexReader, copilot::CopilotReader, cursor::CursorReader,
+    gemini::GeminiReader, omp::OmpReader, pi::PiReader, senpi::SenpiReader,
+    workbuddy::WorkBuddyReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -27,6 +29,11 @@ pub enum SourceFormat {
     ClineJson,
     AmpJson,
     CopilotJsonl,
+    CodeBuddyJsonl,
+    WorkBuddyJsonl,
+    PiJsonl,
+    OmpJsonl,
+    SenpiJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -44,6 +51,11 @@ impl SourceFormat {
             Self::ClineJson => "cline",
             Self::AmpJson => "amp",
             Self::CopilotJsonl => "copilot",
+            Self::CodeBuddyJsonl => "codebuddy",
+            Self::WorkBuddyJsonl => "workbuddy",
+            Self::PiJsonl => "pi",
+            Self::OmpJsonl => "omp",
+            Self::SenpiJsonl => "senpi",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
@@ -60,6 +72,11 @@ impl SourceFormat {
             Self::ClineJson => "cline-json",
             Self::AmpJson => "amp-json",
             Self::CopilotJsonl => "copilot-jsonl",
+            Self::CodeBuddyJsonl => "codebuddy-jsonl",
+            Self::WorkBuddyJsonl => "workbuddy-jsonl",
+            Self::PiJsonl => "pi-jsonl",
+            Self::OmpJsonl => "omp-jsonl",
+            Self::SenpiJsonl => "senpi-jsonl",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -77,6 +94,11 @@ impl SourceFormat {
             "cline-json" => Some(Self::ClineJson),
             "amp-json" => Some(Self::AmpJson),
             "copilot-jsonl" => Some(Self::CopilotJsonl),
+            "codebuddy-jsonl" => Some(Self::CodeBuddyJsonl),
+            "workbuddy-jsonl" => Some(Self::WorkBuddyJsonl),
+            "pi-jsonl" => Some(Self::PiJsonl),
+            "omp-jsonl" => Some(Self::OmpJsonl),
+            "senpi-jsonl" => Some(Self::SenpiJsonl),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -280,6 +302,11 @@ enum ResponseReader {
     Cline(Box<ClineReader>),
     Amp(Box<AmpReader>),
     Copilot(Box<CopilotReader>),
+    CodeBuddy(Box<CodeBuddyReader>),
+    WorkBuddy(Box<WorkBuddyReader>),
+    Pi(Box<PiReader>),
+    Omp(Box<OmpReader>),
+    Senpi(Box<SenpiReader>),
 }
 
 impl ResponseReader {
@@ -292,6 +319,11 @@ impl ResponseReader {
             Self::Cline(reader) => reader.ingest(record),
             Self::Amp(reader) => reader.ingest(record),
             Self::Copilot(reader) => reader.ingest(record),
+            Self::CodeBuddy(reader) => reader.ingest(record),
+            Self::WorkBuddy(reader) => reader.ingest(record),
+            Self::Pi(reader) => reader.ingest(record),
+            Self::Omp(reader) => reader.ingest(record),
+            Self::Senpi(reader) => reader.ingest(record),
         }
     }
 
@@ -304,6 +336,11 @@ impl ResponseReader {
             Self::Cline(reader) => reader.snapshot(),
             Self::Amp(reader) => reader.snapshot(),
             Self::Copilot(reader) => reader.snapshot(),
+            Self::CodeBuddy(reader) => reader.snapshot(),
+            Self::WorkBuddy(reader) => reader.snapshot(),
+            Self::Pi(reader) => reader.snapshot(),
+            Self::Omp(reader) => reader.snapshot(),
+            Self::Senpi(reader) => reader.snapshot(),
         }
     }
 
@@ -315,7 +352,12 @@ impl ResponseReader {
             | Self::Cursor(_)
             | Self::Cline(_)
             | Self::Amp(_)
-            | Self::Copilot(_) => Ok(()),
+            | Self::Copilot(_)
+            | Self::CodeBuddy(_)
+            | Self::WorkBuddy(_)
+            | Self::Pi(_)
+            | Self::Omp(_)
+            | Self::Senpi(_) => Ok(()),
         }
     }
 
@@ -328,6 +370,11 @@ impl ResponseReader {
             Self::Cline(reader) => reader.has_supported_usage(),
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Copilot(reader) => reader.has_supported_usage(),
+            Self::CodeBuddy(reader) => reader.has_supported_usage(),
+            Self::WorkBuddy(reader) => reader.has_supported_usage(),
+            Self::Pi(reader) => reader.has_supported_usage(),
+            Self::Omp(reader) => reader.has_supported_usage(),
+            Self::Senpi(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -624,6 +671,38 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Copilot(Box::new(
                     CopilotReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::CodeBuddyJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::CodeBuddy(Box::new(
+                    CodeBuddyReader::new("codebuddy", "codebuddy", &self.key.session)
+                        .with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::WorkBuddyJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::WorkBuddy(Box::new(
+                    WorkBuddyReader::new("workbuddy", "workbuddy", &self.key.session)
+                        .with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::PiJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Pi(Box::new(
+                    PiReader::new("pi", &self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::OmpJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Omp(Box::new(
+                    OmpReader::new("omp", &self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::SenpiJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Senpi(Box::new(
+                    SenpiReader::new("senpi", &self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::SessionArchiveSqlite

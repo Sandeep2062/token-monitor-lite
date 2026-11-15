@@ -3,6 +3,7 @@
 pub mod amp;
 pub mod claude;
 pub mod cline;
+pub mod codebuddy;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;
@@ -10,7 +11,12 @@ pub mod gemini;
 pub mod goose;
 pub mod jsonl;
 pub mod kilo;
+pub mod omp;
 pub mod opencode;
+pub mod pi;
+pub mod senpi;
+pub mod tencent_buddy;
+pub mod workbuddy;
 
 use crate::accounting::{SessionKey, TokenCounts};
 
