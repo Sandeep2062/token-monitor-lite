@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -42,6 +42,7 @@ impl Tree {
             legacy_shared_override: Some(self.0.join("legacy-shared")),
             native_data_override: Some(self.0.join("native-private")),
             enabled_clients: BTreeSet::from(["claude".to_owned()]),
+            env_paths: BTreeMap::new(),
         }
     }
 

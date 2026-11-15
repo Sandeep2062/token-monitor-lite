@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
-const SUPPORTED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "gemini", "opencode"];
+const SUPPORTED_CLIENTS: &[&str] = &["claude", "cline", "codex", "cursor", "gemini", "opencode"];
 const COMMAND_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1132,6 +1132,7 @@ fn source_client(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "claude",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
+        SourceFormat::ClineJson => "cline",
         SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
         SourceFormat::SessionArchiveSqlite => "mixed",
@@ -1182,6 +1183,7 @@ mod credential_tests {
                 legacy_shared_override: Some(self.0.join("legacy-shared")),
                 native_data_override: Some(self.0.join("native-private")),
                 enabled_clients: BTreeSet::from(["claude".to_owned()]),
+                env_paths: BTreeMap::new(),
             }
         }
     }

@@ -156,11 +156,13 @@ impl Fixture {
             native_data_override: Some(self.root.join("native")),
             enabled_clients: BTreeSet::from([
                 "claude".to_owned(),
+                "cline".to_owned(),
                 "codex".to_owned(),
                 "cursor".to_owned(),
                 "gemini".to_owned(),
                 "opencode".to_owned(),
             ]),
+            env_paths: BTreeMap::new(),
         }
     }
 }
@@ -208,6 +210,7 @@ fn source_format(format: &str) -> SourceFormat {
         "opencode-sqlite" => SourceFormat::OpenCodeSqlite,
         "gemini-transcript" => SourceFormat::GeminiTranscript,
         "cursor-cache-json" => SourceFormat::CursorCacheJson,
+        "cline-json" => SourceFormat::ClineJson,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -304,11 +307,12 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 30),
+            ("codex-cli".to_owned(), 29),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
+            ("cline-json".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])

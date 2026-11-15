@@ -244,6 +244,7 @@ pub enum InputAdapterStatus {
     OrdinaryJsonl,
     GeminiTranscript,
     CursorCacheJson,
+    ClineJson,
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
@@ -292,10 +293,12 @@ pub struct GeminiInput {
     kind: GeminiInputKind,
 }
 
-pub struct CursorInput {
+pub struct DocumentInput {
     path: PathBuf,
     cursor: DocumentCursor,
 }
+
+pub type CursorInput = DocumentInput;
 
 enum GeminiInputKind {
     Jsonl(JsonlCursor),
@@ -340,6 +343,7 @@ pub enum SourceInput {
     OrdinaryJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
     Cursor(CursorInput),
+    Cline(DocumentInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
@@ -362,6 +366,7 @@ impl SourceInput {
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
+            SourceFormat::ClineJson => Self::document(path),
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -411,11 +416,19 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn document(path: PathBuf) -> Self {
+        Self::Cline(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+        })
+    }
+
     pub fn status(&self) -> InputAdapterStatus {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
+            Self::Cline(_) => InputAdapterStatus::ClineJson,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
@@ -428,6 +441,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
             Self::Cursor(input) => input.reset(),
+            Self::Cline(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {}
         }
@@ -438,6 +452,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
             Self::Cursor(input) => input.is_current(),
+            Self::Cline(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => Ok(true),
         }
@@ -455,6 +470,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
+            | Self::Cline(_)
             | Self::CompressedJsonl(_) => Ok(None),
         }
     }
@@ -464,6 +480,7 @@ impl SourceInput {
             Self::OrdinaryJsonl(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
             Self::Cursor(input) => Some(&input.path),
+            Self::Cline(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
@@ -486,6 +503,7 @@ impl SourceInput {
             }
             Self::Gemini(input) => input.read_batch(),
             Self::Cursor(input) => input.read_batch(),
+            Self::Cline(input) => input.read_batch(),
             Self::CompressedJsonl(input) => input.read_batch(),
             Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {
                 Err(invalid("sqlite input has no JSONL batch"))
@@ -539,7 +557,7 @@ impl GeminiInput {
     }
 }
 
-impl CursorInput {
+impl DocumentInput {
     fn reset(&mut self) {
         self.cursor.stamp = None;
     }

@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -94,6 +94,7 @@ fn open_store(root: &std::path::Path) -> StoreHandle {
         legacy_shared_override: Some(root.join("legacy")),
         native_data_override: Some(root.join("native")),
         enabled_clients: BTreeSet::new(),
+        env_paths: BTreeMap::new(),
     })
     .unwrap();
     StoreHandle::open(paths.native).unwrap().0

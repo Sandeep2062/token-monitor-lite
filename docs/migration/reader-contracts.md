@@ -33,6 +33,7 @@ All arithmetic is checked. Invalid signs, non-integral or unsafe values, inconsi
 | OpenCode message | Canonical client + row session ID + row message ID | The message ID is stable across the current and legacy SQLite representations, so the same ID in two channel databases is one observation. Content-fingerprint merging of forked copies with different IDs is not implemented and stays unsupported. |
 | Gemini message | Canonical client + in-file session ID + message ID when present | Missing message IDs remain source-local. No cross-file content merge or filename-derived identity is inferred. |
 | Cursor usage event | Canonical client + `conversationId` (or account-day fallback) + `usageEventId` | Repeated snapshots of one event share `cursor-event:<id>` and collapse to the largest token total. Id-less rows may join a matching identified event by session/model/timestamp; unmatched rows stay source-local. |
+| Cline CLI message | Canonical client + session ID + message ID or assistant ordinal | Stable within one messages file. The ordinal fallback counts emitted assistant usage rows. |
 
 Opaque source IDs, never lexical paths, order provenance. Paths exist only in discovery/watch memory and are absent from SQLite, diagnostics, exports, Slint, and value-bearing `Debug` output.
 
@@ -132,6 +133,20 @@ Cursor token history is cloud-derived in the reference product: Token Monitor's 
 | Missing/invalid `usageEventsDisplay`, non-object event, negative/fractional counter, invalid timestamp, or oversized file | visible unsupported | Discard the candidate. The pinned reader skips malformed rows and clamps negatives; the native reader does not. | Prior committed generation remains active. |
 | Cursor cloud self-sync, desktop title/turn-state, cost/currency, and `TOKSCALE_CONFIG_DIR` relocation | visible unsupported / ignored | No network sync, desktop DB read, pricing, or environment relocation is guessed. | Prior source generation retained. |
 
+## Cline CLI message matrix
+
+The supported source is Cline CLI/Desktop's shared `~/.cline/data/sessions/<session>/<session>.messages.json`. The VS Code extension's `tasks/` logs use the separate Roo/Kilo text-payload format and are not admitted by this reader.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant message with `modelInfo` (or a previously resolved model) and `metrics` | supported | `inputTokens` is gross: cache read + cache write are subtracted once; `outputTokens` is retained; reasoning is zero; cost is unavailable. `modelInfo.id/provider` and file `agent` become model/provider/agent hints. | `sessionId` or the source file-stem fallback. Message `id`, else a stable assistant ordinal. |
+| Message with zero input/output and no cost | ignored non-usage | No row. | No ownership change. |
+| Non-assistant message, or assistant without `metrics` | ignored non-usage | No row. | No ownership change. |
+| Cache read + cache write greater than `inputTokens` | visible unsupported | Discard the candidate. The pinned reader saturating-subtracts and can under-count; the native reader refuses that shape. | Prior committed generation remains active. |
+| Assistant with metrics but no resolvable model | visible unsupported | No fabricated `unknown` model. | Prior committed generation remains active. |
+| Invalid JSON, missing `messages`, non-object message/metrics, negative/fractional counter, or invalid timestamp | visible unsupported | Discard the candidate. | Prior source generation retained. |
+| VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | visible unsupported / ignored | Not discovered or not parsed; no format guessing. | No source slot. |
+
 ## Input and source matrix
 
 | Source/input shape | Status | Exact contract |
@@ -144,6 +159,7 @@ Cursor token history is cloud-derived in the reference product: Token Monitor's 
 | OpenCode `opencode.db` or `opencode-<channel>.db` main/WAL/SHM logical source under the XDG data root | supported | Structural `session_v2`/`session_message` (current) or `session`/`message`/`part` (legacy) detection; read-only fenced snapshot; many sessions per source. Exact filename roles below. |
 | Gemini session JSON (`session-*.json`, `tmp/<id>/chats/*.json`) and JSONL under `~/.gemini/tmp` | supported | Whole-document framing for JSON and bounded JSONL framing for `.jsonl`; many sessions per file. Exact role filter below. |
 | Cursor `usage.json`/`usage.<account>.json` in the tokscale cache | supported | Whole-document framing, non-recursive exact roles; many conversations per file. The cache must already exist. |
+| Cline CLI `<session>.messages.json` in the shared data tree | supported | Whole-document framing, recursive `.messages.json` role; many sessions per file. |
 | Other SQLite database, unsupported schema/version, missing/inconsistent sidecar, busy/locked/denied/replaced/changing database, or source requiring a write/checkpoint to read | visible unsupported | Open read-only with `query_only=ON`; never migrate, checkpoint, create a sidecar, chmod, vacuum, rename, or delete. |
 | Recognized non-usage side file (`-shm`, `-wal`, journals, indexes) encountered independently | ignored non-usage | It can trigger coalesced reconciliation of its admitted logical main source but is never parsed or counted independently. |
 
@@ -197,6 +213,10 @@ Discovery walks `<home>/.gemini/tmp` recursively. `.jsonl` files are admitted an
 
 Discovery reads only `usage.json` and `usage.<account>.json` directly under `<home>/.config/tokscale/cursor-cache`. It is non-recursive, so `archive/` is not re-added. `usage.csv` is not discovered. The generated cache is never watched; a manual/periodic scan reads it read-only. `TOKSCALE_CONFIG_DIR` relocation is not implemented.
 
+### Cline CLI input roles
+
+The Cline root follows the reference precedence exactly, each winning outright: `CLINE_SESSION_DATA_DIR`, else `CLINE_DATA_DIR` + `sessions`, else `CLINE_DIR` + `data/sessions`, else `<home>/.cline/data/sessions`. Blank environment values are unset. Only recursive `.messages.json` files are admitted; VS Code `tasks/` logs are not.
+
 ## Native safety bounds
 
 These are acceptance limits, not truncation targets:
@@ -215,7 +235,7 @@ SQLite is read in deterministic pages no larger than the framing row limit. Rele
 
 ## Current implementation delta at freeze
 
-The existing native readers implement bounded ordinary JSONL, bounded streaming Codex `.jsonl.zst`, read-only Codex local-usage normalization/discovery, ordinary Claude assistant assembly, Claude advisor iterations, explicit Claude tool-result input accounting, bounded headless/result streams, sidechain parent attribution with agent provenance, cc-mirror client ownership, anthropic-prefix model normalization, file-mtime timestamp fallback, Gemini session-document/JSONL usage, and read-only Cursor usage-cache events. The OpenCode SQLite reader implements current `session_message` assistant/compaction usage, legacy-only `message` assistant usage, stable row-message identity, strict cache/model/time/counter validation, and active detection of restorable migrated summary/subtask usage. Schema-v1 archive retained periods are discovered, fenced, persisted separately in schema v7, and exposed through canonical retained-period rollups without being folded into request rows. Codex now settles pending `token_usage_record` rows against token_count/compaction/turn boundaries, suppresses replayed fork/subagent history until the child's own turn, buffers model-less usage until a later model, attributes subagent/guardian/headless agent provenance, and ignores supplemental local-usage rows for threads already represented by a native rollout. The readers still intentionally reject arbitrary model-alias tables, Claude Desktop IndexedDB, OpenClaw ownership, non-rollout headless documents, unverifiable fork/record ownership, OpenCode legacy JSON stores, OpenCode content-fingerprint fork merging, migrated OpenCode summary/subtask restoration, `GEMINI_CLI_HOME` relocation, cross-file Gemini merges, Cursor cloud sync/CSV/desktop state, and `TOKSCALE_CONFIG_DIR` relocation.
+The existing native readers implement bounded ordinary JSONL, bounded streaming Codex `.jsonl.zst`, read-only Codex local-usage normalization/discovery, ordinary Claude assistant assembly, Claude advisor iterations, explicit Claude tool-result input accounting, bounded headless/result streams, sidechain parent attribution with agent provenance, cc-mirror client ownership, anthropic-prefix model normalization, file-mtime timestamp fallback, Gemini session-document/JSONL usage, read-only Cursor usage-cache events, and Cline CLI session-message usage. The OpenCode SQLite reader implements current `session_message` assistant/compaction usage, legacy-only `message` assistant usage, stable row-message identity, strict cache/model/time/counter validation, and active detection of restorable migrated summary/subtask usage. Schema-v1 archive retained periods are discovered, fenced, persisted separately in schema v8, and exposed through canonical retained-period rollups without being folded into request rows. Codex now settles pending `token_usage_record` rows against token_count/compaction/turn boundaries, suppresses replayed fork/subagent history until the child's own turn, buffers model-less usage until a later model, attributes subagent/guardian/headless agent provenance, and ignores supplemental local-usage rows for threads already represented by a native rollout. The readers still intentionally reject arbitrary model-alias tables, Claude Desktop IndexedDB, OpenClaw ownership, non-rollout headless documents, unverifiable fork/record ownership, OpenCode legacy JSON stores, OpenCode content-fingerprint fork merging, migrated OpenCode summary/subtask restoration, `GEMINI_CLI_HOME` relocation, cross-file Gemini merges, Cursor cloud sync/CSV/desktop state, `TOKSCALE_CONFIG_DIR` relocation, and Cline VS Code task logs.
 
 ## Runtime and persistence boundary (Gate 2A Tasks 9–11)
 
@@ -223,8 +243,8 @@ The existing native readers implement bounded ordinary JSONL, bounded streaming 
 - Settings/day/timezone replacements use a settings snapshot commit so the application never accepts a snapshot under the wrong generation. A commit prepared under a replaced generation is never published.
 - Fixed health states are `Pending`, `Healthy`, `Retained`, `ReadFailed`, `DecodingFailed`, `SourceBusy`, `Unsupported`, `CapacityExceeded`, `CanonicalizationFailed`, and `PersistenceDelayed`. Paths, raw errors, SQL, rows, and source identities never cross the UI boundary.
 - Restart rehydrates committed source/canonical state before source I/O. Unavailable sources stay retained/stale rather than zero; a later successful read returns to healthy without duplicate observations. Unchanged parsed contents reuse the committed source generation, so ordinary restarts and single-source updates avoid full re-commits.
-- Schema v7 persists runtime sources, request observations, SQLite retained periods/models/provenance, settings generations, imports, and credentials. Before migration it creates a verified backup. Missing/corrupt active databases restore the newest verified compatible backup; without one, startup reports recovery required and does not create an empty database.
+- Schema v8 persists runtime sources, request observations, SQLite retained periods/models/provenance, settings generations, imports, and credentials. Before migration it creates a verified backup. Missing/corrupt active databases restore the newest verified compatible backup; without one, startup reports recovery required and does not create an empty database.
 - Source files are read-only throughout: ordinary/compressed JSONL is streamed (16 MiB record, 256 KiB/1,024-record steps, 256 MiB physical, 1 GiB decoded, 64 MiB zstd window); SQLite main/WAL/SHM is copied into a private `0700` snapshot without opening the original. Archive retained data and request observations remain separate.
-- The mixed release fixture carries exactly 100 discovered sources and 1,000 canonical sessions (33 Claude JSONL, 30 Codex JSONL, 32 zstd Codex, one OpenCode SQLite, one Gemini session JSON, one Cursor usage cache, one archive SQLite/WAL, one Codex local-usage SQLite/WAL), 2,786 parsed / 2,784 canonical observations, and 120 retained periods. Production ingestion, reopen without sources, restoration without duplicates, mutation/failure scenarios, backup/corruption recovery, and native-file sentinel scans pass remotely.
+- The mixed release fixture carries exactly 100 discovered sources and 1,000 canonical sessions (33 Claude JSONL, 29 Codex JSONL, 32 zstd Codex, one OpenCode SQLite, one Gemini session JSON, one Cursor usage cache, one Cline messages file, one archive SQLite/WAL, one Codex local-usage SQLite/WAL), 2,786 parsed / 2,784 canonical observations, and 120 retained periods. Production ingestion, reopen without sources, restoration without duplicates, mutation/failure scenarios, backup/corruption recovery, and native-file sentinel scans pass remotely.
 
 The pinned differentials cover the complete supported Codex prefix, including `token_usage_record` settlement and compaction, plus transport equivalence between ordinary JSONL and streaming zstd. No fixture result is a full-reader, live-account, platform, pricing, GUI, or packaging claim.

@@ -766,7 +766,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 }
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
-    ["claude", "codex", "cursor", "gemini", "opencode"]
+    ["claude", "cline", "codex", "cursor", "gemini", "opencode"]
         .into_iter()
         .map(|client| SettingsClientRow {
             id: client.to_owned(),
@@ -818,20 +818,21 @@ fn safe_source(source: &SourceChoice) -> bool {
 fn is_selectable_source_client(client: &str) -> bool {
     matches!(
         client,
-        "claude" | "codex" | "cursor" | "gemini" | "opencode" | "mixed"
+        "claude" | "cline" | "codex" | "cursor" | "gemini" | "opencode" | "mixed"
     )
 }
 
 fn is_supported_client(client: &str) -> bool {
     matches!(
         client,
-        "claude" | "codex" | "cursor" | "gemini" | "opencode"
+        "claude" | "cline" | "codex" | "cursor" | "gemini" | "opencode"
     )
 }
 
 fn client_label(client: &str) -> &'static str {
     match client {
         "claude" => "Claude CLI",
+        "cline" => "Cline",
         "codex" => "Codex CLI",
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
@@ -1236,6 +1237,7 @@ fn format_timestamp(timestamp_ms: i64) -> String {
 fn source_format(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "Claude CLI",
+        SourceFormat::ClineJson => "Cline",
         SourceFormat::CodexCli => "Codex CLI",
         SourceFormat::CursorCacheJson => "Cursor",
         SourceFormat::GeminiTranscript => "Gemini CLI",

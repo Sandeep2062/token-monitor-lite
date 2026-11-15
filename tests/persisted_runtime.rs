@@ -45,6 +45,7 @@ impl NativeTree {
             legacy_shared_override: Some(self.0.join("legacy")),
             native_data_override: Some(self.0.join("native")),
             enabled_clients: Default::default(),
+            env_paths: Default::default(),
         })
         .unwrap()
         .native
@@ -422,7 +423,7 @@ fn commit_for(
 fn fresh_schema_has_nine_strict_path_and_secret_free_runtime_roles() {
     let tree = NativeTree::new();
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 7);
+    assert_eq!(snapshot.schema_version, 8);
     let runtime = store.runtime_snapshot().unwrap();
     assert_eq!(runtime.generation, 0);
     assert!(!runtime.initialized);
@@ -527,7 +528,7 @@ fn v2_upgrade_preserves_existing_bytes_and_starts_uninitialized_runtime() {
     drop(connection);
 
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 7);
+    assert_eq!(snapshot.schema_version, 8);
     assert_eq!(snapshot.settings.unwrap().json_bytes(), settings);
     assert!(!store.runtime_snapshot().unwrap().initialized);
     store.shutdown().unwrap();

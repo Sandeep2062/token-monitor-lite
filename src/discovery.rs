@@ -10,7 +10,7 @@ use crate::source_inputs::{
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -44,6 +44,7 @@ pub struct HostPaths {
     pub legacy_shared_override: Option<PathBuf>,
     pub native_data_override: Option<PathBuf>,
     pub enabled_clients: BTreeSet<String>,
+    pub env_paths: BTreeMap<String, PathBuf>,
 }
 
 impl HostPaths {
@@ -78,6 +79,21 @@ impl HostPaths {
                     .collect::<Vec<_>>()
             })
             .collect();
+        let env_paths = [
+            "CLINE_DIR",
+            "CLINE_DATA_DIR",
+            "CLINE_SESSION_DATA_DIR",
+            "GEMINI_CLI_HOME",
+            "GOOSE_PATH_ROOT",
+            "TOKSCALE_CONFIG_DIR",
+        ]
+        .into_iter()
+        .filter_map(|name| {
+            env::var_os(name)
+                .filter(|value| !value.to_string_lossy().trim().is_empty())
+                .map(|value| (name.to_owned(), PathBuf::from(value)))
+        })
+        .collect();
 
         Ok(Self {
             platform,
@@ -90,6 +106,7 @@ impl HostPaths {
             legacy_shared_override: path("TOKEN_MONITOR_SHARED_DIR"),
             native_data_override: path("TOKEN_MONITOR_LITE_DATA_DIR"),
             enabled_clients,
+            env_paths,
         })
     }
 }
@@ -834,6 +851,77 @@ fn is_cursor_cache_filename(name: &str) -> bool {
             && name.len() > "usage..json".len())
 }
 
+fn cline_cli_sessions_root(inputs: &HostPaths) -> Result<PathBuf, DiscoveryError> {
+    if let Some(root) = inputs.env_paths.get("CLINE_SESSION_DATA_DIR") {
+        return checked_root(inputs.platform, root, false);
+    }
+    if let Some(root) = inputs.env_paths.get("CLINE_DATA_DIR") {
+        let root = checked_root(inputs.platform, root, false)?;
+        return Ok(join(inputs.platform, &root, "sessions"));
+    }
+    if let Some(root) = inputs.env_paths.get("CLINE_DIR") {
+        let root = checked_root(inputs.platform, root, false)?;
+        return Ok(join_many(inputs.platform, &root, &["data", "sessions"]));
+    }
+    Ok(join_many(
+        inputs.platform,
+        &inputs.home,
+        &[".cline", "data", "sessions"],
+    ))
+}
+
+fn collect_cline_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_cline_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".messages.json"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn collect_gemini_candidates(
     root: &Path,
     directory: &Path,
@@ -1102,6 +1190,61 @@ fn discover_sources_with_id(
                     }
                     Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
                         client: "cursor",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
+        if client == "cline" {
+            let root = cline_cli_sessions_root(inputs)?;
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_cline_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+                continue;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "cline",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "cline",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match validate_source(&path, SourceFormat::ClineJson, metadata.len()) {
+                    Ok(session) => {
+                        let source_id = source_id_for(SourceFormat::ClineJson, &path);
+                        if !admitted_ids.insert(source_id) {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::ClineJson,
+                            session,
+                            path,
+                        });
+                    }
+                    Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "cline",
                         ordinal,
                     }),
                 }
@@ -1382,6 +1525,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .get("sessionId")
                     .or_else(|| value.get("session_id"))
                     .and_then(Value::as_str),
+                SourceFormat::ClineJson => value.get("sessionId").and_then(Value::as_str),
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -1397,6 +1541,15 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
     }
     if format == SourceFormat::CursorCacheJson {
         return Ok("cursor".to_owned());
+    }
+    if format == SourceFormat::ClineJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.strip_suffix(".messages").unwrap_or(stem))
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
     }
     if format == SourceFormat::GeminiTranscript {
         return path
@@ -1440,6 +1593,7 @@ mod tests {
             legacy_shared_override: None,
             native_data_override: None,
             enabled_clients: BTreeSet::new(),
+            env_paths: BTreeMap::new(),
         }
     }
 
@@ -1507,6 +1661,7 @@ mod tests {
             legacy_shared_override: Some(root.join("legacy")),
             native_data_override: Some(root.join("native")),
             enabled_clients: BTreeSet::from(["claude".to_owned()]),
+            env_paths: BTreeMap::new(),
         };
         let forced = SourceId::from_bytes([9; 16]);
         let mut notices = Vec::new();

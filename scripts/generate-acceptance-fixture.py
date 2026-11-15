@@ -11,10 +11,10 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 30 Codex JSONL
-and 32 zstd Codex sources plus one OpenCode, one Gemini and one Cursor source
-supply 65 canonical sessions, 33 Claude sources supply 33, and the single
-local-usage ledger supplies the remaining 902 after one suppressed
+sessions. The distribution below preserves the required totals: 29 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor and one
+Cline source supply 65 canonical sessions, 33 Claude sources supply 33, and the
+single local-usage ledger supplies the remaining 902 after one suppressed
 native-duplicate thread. The archive source contributes retained history
 without fabricating request rows.
 
@@ -48,11 +48,12 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 30
+CODEX_SOURCES = 29
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
 CURSOR_SOURCES = 1
+CLINE_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
@@ -62,6 +63,7 @@ SOURCE_COUNT = (
     + OPENCODE_SOURCES
     + GEMINI_SOURCES
     + CURSOR_SOURCES
+    + CLINE_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -329,6 +331,42 @@ def _cursor_source() -> tuple[str, bytes, dict[str, int], int]:
         separators=(",", ":"),
     ).encode("utf-8")
     return session, data, totals, len(events)
+
+
+def _cline_source() -> tuple[str, bytes, dict[str, int], int]:
+    session = "cline-fixture-000"
+    totals = _counts()
+    messages = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        raw_input = 300 + observation
+        counts = {
+            "input": raw_input - 15,
+            "output": 40 + observation,
+            "cacheRead": 10,
+            "cacheWrite": 5,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        messages.append(
+            {
+                "id": f"cline-message-{observation:02d}",
+                "role": "assistant",
+                "ts": 1_763_000_000_000 + observation * 1_000,
+                "modelInfo": {"id": "claude-sonnet-4-5", "provider": "anthropic"},
+                "metrics": {
+                    "inputTokens": raw_input,
+                    "outputTokens": counts["output"],
+                    "cacheReadTokens": counts["cacheRead"],
+                    "cacheWriteTokens": counts["cacheWrite"],
+                },
+            }
+        )
+    data = json.dumps(
+        {"sessionId": session, "agent": "main", "messages": messages},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return session, data, totals, len(messages)
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -934,6 +972,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, cursor_totals)
     physical_bytes += len(cursor_data)
     decoded_bytes += len(cursor_data)
+
+    cline_session, cline_data, cline_totals, cline_rows = _cline_source()
+    cline_entry = _source_entry(
+        root,
+        f"home/.cline/data/sessions/{cline_session}/{cline_session}.messages.json",
+        cline_data,
+        format_name="cline-json",
+        session=cline_session,
+        observations=cline_rows,
+        canonical_sessions=1,
+        expected_totals=cline_totals,
+        physical_bytes=len(cline_data),
+    )
+    sources.append(cline_entry)
+    _add_counts(aggregate, cline_totals)
+    _add_counts(canonical_aggregate, cline_totals)
+    physical_bytes += len(cline_data)
+    decoded_bytes += len(cline_data)
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

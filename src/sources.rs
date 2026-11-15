@@ -5,8 +5,8 @@
 
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
-    ReaderError, ResponseUsage, claude::ClaudeReader, codex::CodexReader, cursor::CursorReader,
-    gemini::GeminiReader,
+    ReaderError, ResponseUsage, claude::ClaudeReader, cline::ClineReader, codex::CodexReader,
+    cursor::CursorReader, gemini::GeminiReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -24,6 +24,7 @@ pub enum SourceFormat {
     CodexCli,
     GeminiTranscript,
     CursorCacheJson,
+    ClineJson,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -36,6 +37,7 @@ impl SourceFormat {
             Self::CodexCli | Self::CodexLocalUsageSqlite => "codex",
             Self::GeminiTranscript => "gemini",
             Self::CursorCacheJson => "cursor",
+            Self::ClineJson => "cline",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
         }
@@ -47,6 +49,7 @@ impl SourceFormat {
             Self::CodexCli => "codex-jsonl",
             Self::GeminiTranscript => "gemini-transcript",
             Self::CursorCacheJson => "cursor-cache-json",
+            Self::ClineJson => "cline-json",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -59,6 +62,7 @@ impl SourceFormat {
             "codex-jsonl" => Some(Self::CodexCli),
             "gemini-transcript" => Some(Self::GeminiTranscript),
             "cursor-cache-json" => Some(Self::CursorCacheJson),
+            "cline-json" => Some(Self::ClineJson),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -253,6 +257,7 @@ enum ResponseReader {
     Codex(Box<CodexReader>),
     Gemini(Box<GeminiReader>),
     Cursor(Box<CursorReader>),
+    Cline(Box<ClineReader>),
 }
 
 impl ResponseReader {
@@ -262,6 +267,7 @@ impl ResponseReader {
             Self::Codex(reader) => reader.ingest(record),
             Self::Gemini(reader) => reader.ingest(record),
             Self::Cursor(reader) => reader.ingest(record),
+            Self::Cline(reader) => reader.ingest(record),
         }
     }
 
@@ -271,6 +277,7 @@ impl ResponseReader {
             Self::Codex(reader) => reader.snapshot(),
             Self::Gemini(reader) => reader.snapshot(),
             Self::Cursor(reader) => reader.snapshot(),
+            Self::Cline(reader) => reader.snapshot(),
         }
     }
 
@@ -278,7 +285,7 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => Ok(()),
             Self::Codex(reader) => reader.finish(),
-            Self::Gemini(_) | Self::Cursor(_) => Ok(()),
+            Self::Gemini(_) | Self::Cursor(_) | Self::Cline(_) => Ok(()),
         }
     }
 
@@ -288,6 +295,7 @@ impl ResponseReader {
             Self::Codex(reader) => reader.has_supported_usage(),
             Self::Gemini(reader) => reader.has_supported_usage(),
             Self::Cursor(reader) => reader.has_supported_usage(),
+            Self::Cline(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -567,6 +575,12 @@ impl SourceReader {
                     .map(cursor_account_from_path)
                     .unwrap_or_else(|| "unknown".to_owned());
                 ResponseReader::Cursor(Box::new(CursorReader::new(account)))
+            }
+            SourceFormat::ClineJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Cline(Box::new(
+                    ClineReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
             }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite

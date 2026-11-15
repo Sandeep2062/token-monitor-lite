@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +47,7 @@ impl Tree {
             legacy_shared_override: Some(self.0.join("legacy-shared")),
             native_data_override: Some(self.0.join("native-private")),
             enabled_clients: BTreeSet::new(),
+            env_paths: BTreeMap::new(),
         }
     }
 }

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use ruzstd::encoding::{CompressionLevel, compress_to_vec};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -66,6 +66,7 @@ fn host(platform: HostPlatform, home: &str) -> HostPaths {
         legacy_shared_override: None,
         native_data_override: None,
         enabled_clients: BTreeSet::new(),
+        env_paths: BTreeMap::new(),
     }
 }
 
@@ -163,6 +164,26 @@ fn cursor_cache_bytes(session: &str) -> Vec<u8> {
             "timestamp": 1_794_564_000_000_i64,
             "model": "claude-sonnet-4-5",
             "tokenUsage": {"inputTokens": 10, "outputTokens": 4}
+        }]
+    }))
+    .unwrap()
+}
+
+fn cline_messages_bytes(session: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "sessionId": session,
+        "agent": "main",
+        "messages": [{
+            "id": format!("{session}-message"),
+            "role": "assistant",
+            "ts": 1_794_564_000_000_i64,
+            "modelInfo": {"id": "claude-sonnet-4-5", "provider": "anthropic"},
+            "metrics": {
+                "inputTokens": 100,
+                "outputTokens": 20,
+                "cacheReadTokens": 10,
+                "cacheWriteTokens": 5
+            }
         }]
     }))
     .unwrap()
@@ -729,6 +750,42 @@ fn cursor_cache_is_discovered_only_at_exact_json_roles() {
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn cline_cli_messages_use_the_documented_root_precedence() {
+    let tree = Tree::new();
+    tree.file(
+        ".cline/data/sessions/default-session/default-session.messages.json",
+        &cline_messages_bytes("default-session"),
+    );
+    tree.file(
+        ".config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/task-a/ui_messages.json",
+        b"[]",
+    );
+    let mut paths = tree.paths(&["cline"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::ClineJson);
+    assert_eq!(report.sources[0].session, "default-session");
+
+    let override_root = tree.directory("session-override");
+    tree.file(
+        "session-override/override-session/override-session.messages.json",
+        &cline_messages_bytes("override-session"),
+    );
+    paths
+        .env_paths
+        .insert("CLINE_SESSION_DATA_DIR".to_owned(), override_root.clone());
+    paths
+        .env_paths
+        .insert("CLINE_DATA_DIR".to_owned(), tree.0.join("data-override"));
+    paths
+        .env_paths
+        .insert("CLINE_DIR".to_owned(), tree.0.join("dir-override"));
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].session, "override-session");
 }
 
 #[test]
