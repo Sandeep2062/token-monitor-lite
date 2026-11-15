@@ -767,9 +767,27 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
     [
-        "amp", "antigravity", "claude", "cline", "codebuddy", "codex", "copilot", "cursor",
-        "gemini", "goose", "kilo", "mcode", "muse", "omp", "opencode", "pi", "qwen", "reasonix",
-        "senpi", "workbuddy", "zed",
+        "amp",
+        "antigravity",
+        "claude",
+        "cline",
+        "codebuddy",
+        "codex",
+        "copilot",
+        "cursor",
+        "gemini",
+        "goose",
+        "kilo",
+        "mcode",
+        "muse",
+        "omp",
+        "opencode",
+        "pi",
+        "qwen",
+        "reasonix",
+        "senpi",
+        "workbuddy",
+        "zed",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
