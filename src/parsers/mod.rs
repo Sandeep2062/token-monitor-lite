@@ -1,5 +1,6 @@
 //! Bounded source reading. Client-specific parsers are separate modules/tasks.
 
+pub mod amp;
 pub mod claude;
 pub mod cline;
 pub mod codex;

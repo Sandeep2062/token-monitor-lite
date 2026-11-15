@@ -23,7 +23,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
-const SUPPORTED_CLIENTS: &[&str] = &["claude", "cline", "codex", "cursor", "gemini", "opencode"];
+const SUPPORTED_CLIENTS: &[&str] = &[
+    "amp", "claude", "cline", "codex", "cursor", "gemini", "opencode",
+];
 const COMMAND_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1131,6 +1133,7 @@ fn push_issue(issues: &mut Vec<SettingsIssue>, field: SettingsField, reason: Set
 fn source_client(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "claude",
+        SourceFormat::AmpJson => "amp",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
         SourceFormat::ClineJson => "cline",
         SourceFormat::CursorCacheJson => "cursor",

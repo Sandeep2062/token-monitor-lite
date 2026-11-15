@@ -189,6 +189,19 @@ fn cline_messages_bytes(session: &str) -> Vec<u8> {
     .unwrap()
 }
 
+fn amp_thread_bytes(session: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "id": session,
+        "created": 1_794_564_000_000_i64,
+        "usageLedger": {"events": [{
+            "model": "claude-sonnet-4-5",
+            "timestamp": "2026-11-13T10:00:00Z",
+            "tokens": {"input": 10, "output": 4, "cacheReadInputTokens": 2}
+        }]}
+    }))
+    .unwrap()
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -786,6 +799,33 @@ fn cline_cli_messages_use_the_documented_root_precedence() {
     let report = discover(&paths).unwrap();
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].session, "override-session");
+}
+
+#[test]
+fn amp_threads_are_discovered_from_both_thread_roots() {
+    let tree = Tree::new();
+    tree.file(
+        ".local/share/amp/threads/thread-a.json",
+        &amp_thread_bytes("thread-a"),
+    );
+    tree.file(
+        ".config/tokscale/amp-cache/threads/thread-b.json",
+        &amp_thread_bytes("thread-b"),
+    );
+    tree.file(".local/share/amp/threads/ignored.txt", b"ignored");
+
+    let mut paths = tree.paths(&["amp"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| { source.format == SourceFormat::AmpJson && !source.session.is_empty() })
+    );
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
 }
 
 #[test]

@@ -922,6 +922,73 @@ fn collect_cline_candidates(
     Ok(())
 }
 
+fn amp_thread_roots(inputs: &HostPaths) -> Result<Vec<PathBuf>, DiscoveryError> {
+    let data_base = match inputs.xdg_data_home.as_deref() {
+        Some(root) if !root.as_os_str().is_empty() => checked_root(inputs.platform, root, false)?,
+        _ => join_many(inputs.platform, &inputs.home, &[".local", "share"]),
+    };
+    let config_base = match inputs.env_paths.get("TOKSCALE_CONFIG_DIR") {
+        Some(root) => checked_root(inputs.platform, root, false)?,
+        None => join_many(inputs.platform, &inputs.home, &[".config", "tokscale"]),
+    };
+    Ok(vec![
+        join_many(inputs.platform, &data_base, &["amp", "threads"]),
+        join_many(inputs.platform, &config_base, &["amp-cache", "threads"]),
+    ])
+}
+
+fn collect_amp_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_amp_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn collect_gemini_candidates(
     root: &Path,
     directory: &Path,
@@ -1251,6 +1318,66 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "amp" {
+            let roots = amp_thread_roots(inputs)?;
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for root in roots {
+                collect_amp_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+                if overflow {
+                    break;
+                }
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+                continue;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "amp",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "amp",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match validate_source(&path, SourceFormat::AmpJson, metadata.len()) {
+                    Ok(session) => {
+                        let source_id = source_id_for(SourceFormat::AmpJson, &path);
+                        if !admitted_ids.insert(source_id) {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                            continue;
+                        }
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::AmpJson,
+                            session,
+                            path,
+                        });
+                    }
+                    Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "amp",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
                 "claude",
@@ -1526,6 +1653,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .or_else(|| value.get("session_id"))
                     .and_then(Value::as_str),
                 SourceFormat::ClineJson => value.get("sessionId").and_then(Value::as_str),
+                SourceFormat::AmpJson => value.get("id").and_then(Value::as_str),
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -1547,6 +1675,14 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .map(|stem| stem.strip_suffix(".messages").unwrap_or(stem))
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    if format == SourceFormat::AmpJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
             .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or(());

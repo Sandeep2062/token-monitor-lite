@@ -11,12 +11,12 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 29 Codex JSONL
-and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor and one
-Cline source supply 65 canonical sessions, 33 Claude sources supply 33, and the
-single local-usage ledger supplies the remaining 902 after one suppressed
-native-duplicate thread. The archive source contributes retained history
-without fabricating request rows.
+sessions. The distribution below preserves the required totals: 28 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor, one Cline
+and one Amp source supply 65 canonical sessions, 33 Claude sources supply 33,
+and the single local-usage ledger supplies the remaining 902 after one
+suppressed native-duplicate thread. The archive source contributes retained
+history without fabricating request rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -48,12 +48,13 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 29
+CODEX_SOURCES = 28
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
 CURSOR_SOURCES = 1
 CLINE_SOURCES = 1
+AMP_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
@@ -64,6 +65,7 @@ SOURCE_COUNT = (
     + GEMINI_SOURCES
     + CURSOR_SOURCES
     + CLINE_SOURCES
+    + AMP_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -367,6 +369,39 @@ def _cline_source() -> tuple[str, bytes, dict[str, int], int]:
         separators=(",", ":"),
     ).encode("utf-8")
     return session, data, totals, len(messages)
+
+
+def _amp_source() -> tuple[str, bytes, dict[str, int], int]:
+    session = "amp-fixture-000"
+    totals = _counts()
+    events = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 400 + observation,
+            "output": 50 + observation,
+            "cacheRead": 20,
+            "cacheWrite": 5,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        events.append(
+            {
+                "model": "claude-sonnet-4-5",
+                "timestamp": f"2026-11-13T10:00:{observation:02d}Z",
+                "tokens": {
+                    "input": counts["input"],
+                    "output": counts["output"],
+                    "cacheReadInputTokens": counts["cacheRead"],
+                    "cacheCreationInputTokens": counts["cacheWrite"],
+                },
+            }
+        )
+    data = json.dumps(
+        {"id": session, "created": 1_763_000_000_000, "usageLedger": {"events": events}},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return session, data, totals, len(events)
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -990,6 +1025,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, cline_totals)
     physical_bytes += len(cline_data)
     decoded_bytes += len(cline_data)
+
+    amp_session, amp_data, amp_totals, amp_rows = _amp_source()
+    amp_entry = _source_entry(
+        root,
+        f"home/.local/share/amp/threads/{amp_session}.json",
+        amp_data,
+        format_name="amp-json",
+        session=amp_session,
+        observations=amp_rows,
+        canonical_sessions=1,
+        expected_totals=amp_totals,
+        physical_bytes=len(amp_data),
+    )
+    sources.append(amp_entry)
+    _add_counts(aggregate, amp_totals)
+    _add_counts(canonical_aggregate, amp_totals)
+    physical_bytes += len(amp_data)
+    decoded_bytes += len(amp_data)
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

@@ -155,6 +155,7 @@ impl Fixture {
             legacy_shared_override: Some(home.join(".config/Token Monitor")),
             native_data_override: Some(self.root.join("native")),
             enabled_clients: BTreeSet::from([
+                "amp".to_owned(),
                 "claude".to_owned(),
                 "cline".to_owned(),
                 "codex".to_owned(),
@@ -211,6 +212,7 @@ fn source_format(format: &str) -> SourceFormat {
         "gemini-transcript" => SourceFormat::GeminiTranscript,
         "cursor-cache-json" => SourceFormat::CursorCacheJson,
         "cline-json" => SourceFormat::ClineJson,
+        "amp-json" => SourceFormat::AmpJson,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -307,12 +309,13 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 29),
+            ("codex-cli".to_owned(), 28),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
             ("cline-json".to_owned(), 1),
+            ("amp-json".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])
