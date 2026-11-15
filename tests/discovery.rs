@@ -1171,3 +1171,21 @@ fn zed_threads_database_is_discovered_at_the_xdg_data_role() {
     assert_eq!(report.sources[0].format, SourceFormat::ZedSqlite);
     assert_eq!(report.sources[0].session, "zed");
 }
+
+#[test]
+fn codebuddy_extension_logs_are_discovered_beside_projects() {
+    let tree = Tree::new();
+    tree.file(
+        ".local/share/CodeBuddyExtension/Logs/main.log",
+        concat!(
+            "[2026/7/1 16:56:01.100] [Info] [CraftInvokableAgent] [agent-1]  Model prepared: Kimi-K2.7-Code (kimi-k2.7)\n",
+            "[2026/7/1 16:56:02.200] [Info] [AgentReporter] [agent-1]  Agent execution successful with usage: {\"inputTokens\":10,\"outputTokens\":2}\n"
+        )
+        .as_bytes(),
+    );
+
+    let report = discover(&tree.paths(&["codebuddy"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::CodeBuddyJsonl);
+    assert_eq!(report.sources[0].session, "main");
+}

@@ -1177,6 +1177,87 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn codebuddy_log_roots(inputs: &HostPaths) -> Vec<PathBuf> {
+    let local = inputs
+        .local_app_data
+        .clone()
+        .unwrap_or_else(|| inputs.home.join("AppData").join("Local"));
+    let xdg = inputs
+        .xdg_data_home
+        .clone()
+        .unwrap_or_else(|| inputs.home.join(".local").join("share"));
+    [
+        join_many(inputs.platform, &local, &["CodeBuddyExtension", "Logs"]),
+        join_many(
+            inputs.platform,
+            &inputs.home,
+            &[
+                "Library",
+                "Application Support",
+                "CodeBuddyExtension",
+                "Logs",
+            ],
+        ),
+        join_many(inputs.platform, &xdg, &["CodeBuddyExtension", "Logs"]),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect()
+}
+
+fn collect_log_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_log_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn zed_database_paths(inputs: &HostPaths) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let data_base = inputs
@@ -1271,10 +1352,54 @@ fn mcode_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
             return vec![join_many(inputs.platform, dir, &["v2", "sessions"])];
         }
     }
-    [".minimax", ".mavis"]
+    let mut roots = [".minimax", ".mavis"]
         .into_iter()
         .map(|base| join_many(inputs.platform, &inputs.home, &[base, "v2", "sessions"]))
-        .collect()
+        .collect::<Vec<_>>();
+    if let Ok(entries) = fs::read_dir(&inputs.home) {
+        let mut profiles = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+            .filter(|name| {
+                [".minimax-", ".mavis-"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len())
+            })
+            .collect::<Vec<_>>();
+        profiles.sort();
+        roots.extend(
+            profiles
+                .into_iter()
+                .map(|name| join_many(inputs.platform, &inputs.home, &[&name, "v2", "sessions"])),
+        );
+    }
+    if let Some(dir) = inputs
+        .env_paths
+        .get("TOKSCALE_HEADLESS_DIR")
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        roots.push(join_many(inputs.platform, dir, &["mcode"]));
+    } else {
+        roots.push(join_many(
+            inputs.platform,
+            &inputs.home,
+            &[".config", "tokscale", "headless", "mcode"],
+        ));
+        roots.push(join_many(
+            inputs.platform,
+            &inputs.home,
+            &[
+                "Library",
+                "Application Support",
+                "tokscale",
+                "headless",
+                "mcode",
+            ],
+        ));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn senpi_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
@@ -1861,15 +1986,15 @@ fn discover_sources_with_id(
                     ),
                 ],
             ),
-            "codebuddy" => (
-                "codebuddy",
-                SourceFormat::CodeBuddyJsonl,
-                vec![join_many(
+            "codebuddy" => ("codebuddy", SourceFormat::CodeBuddyJsonl, {
+                let mut roots = vec![join_many(
                     inputs.platform,
                     &inputs.home,
                     &[".codebuddy", "projects"],
-                )],
-            ),
+                )];
+                roots.extend(codebuddy_log_roots(inputs));
+                roots
+            }),
             "workbuddy" => (
                 "workbuddy",
                 SourceFormat::WorkBuddyJsonl,
@@ -1917,6 +2042,9 @@ fn discover_sources_with_id(
         let mut overflow = false;
         for root in roots {
             collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            if client_id == "codebuddy" {
+                collect_log_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            }
             if overflow {
                 break;
             }
@@ -2126,6 +2254,19 @@ fn validate_source(path: &Path, format: SourceFormat, bytes: u64) -> Result<Stri
 }
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
+    if format == SourceFormat::CodeBuddyJsonl
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+    {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
     let mut input = SourceInput::for_path(format, path.to_path_buf());
     let max_steps = if matches!(
         format,

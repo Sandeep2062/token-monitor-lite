@@ -5,11 +5,24 @@
 
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
-    ReaderError, ResponseUsage, amp::AmpReader, antigravity::AntigravityReader,
-    claude::ClaudeReader, cline::ClineReader, codebuddy::CodeBuddyReader, codex::CodexReader,
-    copilot::CopilotReader, cursor::CursorReader, gemini::GeminiReader, mcode::McodeReader,
-    muse::MuseReader, omp::OmpReader, pi::PiReader, qwen::QwenReader, reasonix::ReasonixReader,
-    senpi::SenpiReader, workbuddy::WorkBuddyReader,
+    ReaderError, ResponseUsage,
+    amp::AmpReader,
+    antigravity::AntigravityReader,
+    claude::ClaudeReader,
+    cline::ClineReader,
+    codebuddy::{CodeBuddyLogReader, CodeBuddyReader},
+    codex::CodexReader,
+    copilot::CopilotReader,
+    cursor::CursorReader,
+    gemini::GeminiReader,
+    mcode::McodeReader,
+    muse::MuseReader,
+    omp::OmpReader,
+    pi::PiReader,
+    qwen::QwenReader,
+    reasonix::ReasonixReader,
+    senpi::SenpiReader,
+    workbuddy::WorkBuddyReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -329,6 +342,7 @@ enum ResponseReader {
     Amp(Box<AmpReader>),
     Copilot(Box<CopilotReader>),
     CodeBuddy(Box<CodeBuddyReader>),
+    CodeBuddyLog(Box<CodeBuddyLogReader>),
     WorkBuddy(Box<WorkBuddyReader>),
     Pi(Box<PiReader>),
     Omp(Box<OmpReader>),
@@ -351,6 +365,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.ingest(record),
             Self::Copilot(reader) => reader.ingest(record),
             Self::CodeBuddy(reader) => reader.ingest(record),
+            Self::CodeBuddyLog(reader) => reader.ingest(record),
             Self::WorkBuddy(reader) => reader.ingest(record),
             Self::Pi(reader) => reader.ingest(record),
             Self::Omp(reader) => reader.ingest(record),
@@ -373,6 +388,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.snapshot(),
             Self::Copilot(reader) => reader.snapshot(),
             Self::CodeBuddy(reader) => reader.snapshot(),
+            Self::CodeBuddyLog(reader) => reader.snapshot(),
             Self::WorkBuddy(reader) => reader.snapshot(),
             Self::Pi(reader) => reader.snapshot(),
             Self::Omp(reader) => reader.snapshot(),
@@ -395,6 +411,7 @@ impl ResponseReader {
             | Self::Amp(_)
             | Self::Copilot(_)
             | Self::CodeBuddy(_)
+            | Self::CodeBuddyLog(_)
             | Self::WorkBuddy(_)
             | Self::Pi(_)
             | Self::Omp(_)
@@ -417,6 +434,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Copilot(reader) => reader.has_supported_usage(),
             Self::CodeBuddy(reader) => reader.has_supported_usage(),
+            Self::CodeBuddyLog(reader) => reader.has_supported_usage(),
             Self::WorkBuddy(reader) => reader.has_supported_usage(),
             Self::Pi(reader) => reader.has_supported_usage(),
             Self::Omp(reader) => reader.has_supported_usage(),
@@ -726,10 +744,22 @@ impl SourceReader {
             }
             SourceFormat::CodeBuddyJsonl => {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
-                ResponseReader::CodeBuddy(Box::new(
-                    CodeBuddyReader::new("codebuddy", "codebuddy", &self.key.session)
-                        .with_fallback_timestamp(fallback),
-                ))
+                let log = self
+                    .input
+                    .source_path()
+                    .and_then(Path::extension)
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("log"));
+                if log {
+                    ResponseReader::CodeBuddyLog(Box::new(
+                        CodeBuddyLogReader::new("codebuddy", "codebuddy", &self.key.session)
+                            .with_fallback_timestamp(fallback),
+                    ))
+                } else {
+                    ResponseReader::CodeBuddy(Box::new(
+                        CodeBuddyReader::new("codebuddy", "codebuddy", &self.key.session)
+                            .with_fallback_timestamp(fallback),
+                    ))
+                }
             }
             SourceFormat::WorkBuddyJsonl => {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);

@@ -179,7 +179,176 @@ impl BuddyReader {
     }
 }
 
-fn normalize_usage(usage: &Map<String, Value>) -> Result<Option<TokenCounts>, ReaderError> {
+pub struct BuddyLogReader {
+    client: &'static str,
+    default_model: &'static str,
+    fallback_session: String,
+    fallback_timestamp_ms: Option<i64>,
+    rows: Vec<ResponseUsage>,
+    ordinal: usize,
+}
+
+impl BuddyLogReader {
+    pub fn new(
+        client: &'static str,
+        default_model: &'static str,
+        session: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            default_model,
+            fallback_session: session.into(),
+            fallback_timestamp_ms: None,
+            rows: Vec::new(),
+            ordinal: 0,
+        }
+    }
+
+    pub fn with_fallback_timestamp(mut self, timestamp_ms: Option<i64>) -> Self {
+        self.fallback_timestamp_ms = timestamp_ms.filter(|value| *value >= 0);
+        self
+    }
+
+    pub fn ingest(&mut self, record: &[u8]) -> Result<(), ReaderError> {
+        let text = std::str::from_utf8(record).map_err(|_| ReaderError::InvalidRecord)?;
+        let mut prepared: BTreeMap<String, String> = BTreeMap::new();
+        for line in text.lines() {
+            if line.contains("[CraftInvokableAgent]") && line.contains("Model prepared:") {
+                if let Some((agent, model)) = parse_model_prepared_line(line) {
+                    prepared.insert(agent, model);
+                }
+                continue;
+            }
+            if !line.contains("[AgentReporter]")
+                || !line.contains("Agent execution successful with usage:")
+            {
+                continue;
+            }
+            let Some(agent) = bracket_value_after(line, "[AgentReporter]") else {
+                continue;
+            };
+            let Some(usage_text) = line.split("Agent execution successful with usage:").nth(1)
+            else {
+                continue;
+            };
+            let usage_text = usage_text.trim();
+            let Some(end) = usage_text.rfind('}') else {
+                continue;
+            };
+            let usage: Value = match serde_json::from_str(&usage_text[..=end]) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(usage) = usage.as_object() else {
+                continue;
+            };
+            let Some(tokens) = normalize_usage(usage)? else {
+                continue;
+            };
+            let settled_at = parse_log_timestamp_ms(line)
+                .or(self.fallback_timestamp_ms)
+                .ok_or(ReaderError::InvalidTimestamp)?;
+            let model = prepared
+                .get(&agent)
+                .map(String::as_str)
+                .unwrap_or(self.default_model);
+            if !valid_identity(&agent) || !valid_identity(model) {
+                return Err(ReaderError::InvalidRecord);
+            }
+            if self.rows.len() == MAX_RESPONSES {
+                return Err(ReaderError::Capacity("Tencent Buddy log responses"));
+            }
+            let dedup_second = settled_at.div_euclid(1000);
+            let identity = format!(
+                "{}:extension-log:{agent}:{dedup_second}:{}:{}:{}:{}:{}",
+                self.client,
+                tokens.input,
+                tokens.output,
+                tokens.cache_read,
+                tokens.cache_write,
+                tokens.reasoning
+            );
+            self.ordinal += 1;
+            self.rows.push(ResponseUsage {
+                key: SessionKey::new(self.client, agent.as_str()),
+                model: model.to_owned(),
+                tokens,
+                cache_write_1h: 0,
+                timestamp_ms: settled_at,
+                dedup_key: Some(identity),
+                billing_provider_hint: None,
+                service_tier: None,
+                agent: Some(agent),
+                cost: CostStatus::Unavailable,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn snapshot(&self) -> Vec<ResponseUsage> {
+        self.rows.clone()
+    }
+
+    pub fn has_supported_usage(&self) -> bool {
+        !self.rows.is_empty()
+    }
+}
+
+fn parse_model_prepared_line(line: &str) -> Option<(String, String)> {
+    let agent = bracket_value_after(line, "[CraftInvokableAgent]")?;
+    let after = line.split("Model prepared:").nth(1)?.trim();
+    let model = after
+        .rsplit_once('(')
+        .and_then(|(_, tail)| tail.split_once(')').map(|(model, _)| model.trim()))
+        .filter(|model| !model.is_empty())
+        .unwrap_or(after)
+        .to_owned();
+    (!model.is_empty()).then_some((agent, model))
+}
+
+fn bracket_value_after(line: &str, marker: &str) -> Option<String> {
+    let after = line.split(marker).nth(1)?;
+    let start = after.find('[')?;
+    let rest = &after[start + 1..];
+    let end = rest.find(']')?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn parse_log_timestamp_ms(line: &str) -> Option<i64> {
+    use chrono::{Local, TimeZone};
+    let raw = if let Some(rest) = line.strip_prefix('[') {
+        rest.split_once(']')?.0.trim()
+    } else {
+        line.split_once(" [")
+            .map(|(timestamp, _)| timestamp.trim())
+            .unwrap_or(line.trim())
+    };
+    let (date, time) = raw.split_once(' ')?;
+    let separator = if date.contains('/') { '/' } else { '-' };
+    let parts = date
+        .split(separator)
+        .filter_map(|part| part.parse::<u32>().ok())
+        .collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return super::timestamps::parse_timestamp_str(raw);
+    }
+    let normalized = format!("{:04}-{:02}-{:02} {}", parts[0], parts[1], parts[2], time);
+    for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, format) {
+            return match Local.from_local_datetime(&naive) {
+                chrono::LocalResult::Single(value) => Some(value.timestamp_millis()),
+                chrono::LocalResult::Ambiguous(earlier, _) => Some(earlier.timestamp_millis()),
+                chrono::LocalResult::None => None,
+            };
+        }
+    }
+    super::timestamps::parse_timestamp_str(&normalized)
+}
+
+pub(crate) fn normalize_usage(
+    usage: &Map<String, Value>,
+) -> Result<Option<TokenCounts>, ReaderError> {
     let cache_read = first_positive(
         usage,
         &[

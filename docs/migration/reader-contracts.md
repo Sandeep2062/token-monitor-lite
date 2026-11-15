@@ -210,7 +210,7 @@ The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Eac
 
 ## CodeBuddy and WorkBuddy transcript matrix
 
-Both clients share one JSONL record shape under their own project roots. CodeBuddy reads `<home>/.codebuddy/projects/**/*.jsonl`; WorkBuddy reads `<home>/.workbuddy/projects/**/*.jsonl` and `<home>/.workbuddy-ai/projects/**/*.jsonl`. Extension log sinks and WorkBuddy's aggregate `workbuddy.db` are not read.
+Both clients share one JSONL record shape under their own project roots. CodeBuddy reads `<home>/.codebuddy/projects/**/*.jsonl` plus `CodeBuddyExtension/Logs/**/*.log`; WorkBuddy reads `<home>/.workbuddy/projects/**/*.jsonl` and `<home>/.workbuddy-ai/projects/**/*.jsonl`. WorkBuddy's aggregate `workbuddy.db` is not read.
 
 | Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
 |---|---|---|---|
@@ -220,7 +220,8 @@ Both clients share one JSONL record shape under their own project roots. CodeBud
 | Non-completed status, user/turn-metrics/control row, unrelated row, or zero usage | ignored non-usage | No row. | No ownership change. |
 | Repeated message identity | supported | The larger token total replaces the earlier row; equal totals keep the first. | Within one source only. |
 | Negative/fractional counter, malformed JSON, invalid identity, or absent timestamp and file-mtime fallback | visible unsupported | Discard the candidate. The pinned reader clamps and skips; the native reader does neither. | Prior committed generation remains active. |
-| Extension log sinks, WorkBuddy `workbuddy.db`, workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No text-log parser, SQLite fallback, workspace projection, timing or pricing. | No additional source slot. |
+| CodeBuddy extension log settlement | supported | `Model prepared:` anchors the model by agent; `AgentReporter … usage:` supplies the usage object. Identity uses agent, settlement second and token components so mirrored sinks collapse. | Agent id is the session; a log with no settlement produces no rows. |
+| WorkBuddy `workbuddy.db`, workspace labels, turn-duration performance, provider inference, and cost | visible unsupported / ignored | No SQLite fallback, workspace projection, timing or pricing. | No additional source slot. |
 
 ## Pi-format matrix (Pi, Oh My Pi, OmO Native)
 
@@ -246,7 +247,7 @@ Pi, OMP and Senpi share one JSONL record layout under distinct roots: `<home>/.p
 | Qwen | `<home>/.qwen/projects/<project>/chats/*.jsonl` assistant rows with `usageMetadata` | Prompt is cache-inclusive; cached content splits once. Thoughts split from candidates only when an explicit total proves they are inclusive; otherwise they stay additive. Session ID falls back to the file stem; identity is the session and emitted ordinal. | Workspace attribution, provider inference, cache writes, cost. |
 | Reasonix | `<REASONIX_HOME or state home>/stats/YYYY-MM-DD.jsonl` request stats | A non-zero `cache_miss` is the uncached input; otherwise `prompt - cache_hit`. Reasoning is clamped to completion and split once. `provider/model` refs split at the first slash. | Session transcripts, turn markers, cost, workspace. |
 | Muse | `<XDG data>/muse/sessions/**/session.jsonl` `runtime.session` `model_completed` events | Cached input and reasoning split once; `stream.id` supplies the session, `sequence` the stable ordinal. | Metadata provider overrides, workflow child aggregates, titles, duration, workspace, cost. |
-| MiniMax Code | Captured `mcode exec --output-format stream-json` JSONL under the mcode session roots | Assistant usage is buffered by turn and emitted only with a model-bearing `exec.result`; `exec.completed.result` supplies its own usage. Envelope identity is `session:turn:index:tokens`. | A capture with no model-bearing final result, local configuration guessing, desktop store inference, cost. |
+| MiniMax Code | Captured `mcode exec --output-format stream-json` JSONL under `.minimax`/`.minimax-*`/`.mavis`/`.mavis-*`, `MINIMAX_DATA_DIR`/`MAVIS_DATA_DIR`, and the tokscale headless `mcode` roots | Assistant usage is buffered by turn and emitted only with a model-bearing `exec.result`; `exec.completed.result` supplies its own usage. Envelope identity is `session:turn:index:tokens`. | A capture with no model-bearing final result, local configuration guessing, desktop store inference, cost. |
 
 All five readers reject negative or non-integral counters, malformed required fields, missing explicit timestamps where the pinned reader requires one, and zero-token rows are ignored. File-mtime fallback applies only to Qwen, Muse and MiniMax Code, matching the pinned readers.
 

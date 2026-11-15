@@ -4,7 +4,7 @@
 use serde_json::json;
 use token_monitor_lite::accounting::TokenCounts;
 use token_monitor_lite::parsers::ReaderError;
-use token_monitor_lite::parsers::codebuddy::CodeBuddyReader;
+use token_monitor_lite::parsers::codebuddy::{CodeBuddyLogReader, CodeBuddyReader};
 
 fn ingest(reader: &mut CodeBuddyReader, value: serde_json::Value) {
     reader.ingest(&serde_json::to_vec(&value).unwrap()).unwrap();
@@ -131,4 +131,25 @@ fn duplicate_message_identity_keeps_the_largest_total() {
     let rows = reader.snapshot();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].tokens.input, 9);
+}
+
+#[test]
+fn extension_log_settlement_uses_the_prepared_model() {
+    let mut reader = CodeBuddyLogReader::new("codebuddy", "codebuddy", "log");
+    let log = concat!(
+        "[2026/7/1 16:56:01.100] [Info] [CraftInvokableAgent] [agent-1]  Model prepared: Kimi-K2.7-Code (kimi-k2.7)
+",
+        "[2026/7/1 16:56:02.200] [Info] [AgentReporter] [agent-1]  Agent execution successful with usage: {\"inputTokens\":140732,\"outputTokens\":635,\"totalTokens\":141367,\"cacheTokens\":76032,\"cachedWriteTokens\":0,\"cachedMissTokens\":64700}
+"
+    );
+    reader.ingest(log.as_bytes()).unwrap();
+    let rows = reader.snapshot();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key.client, "codebuddy");
+    assert_eq!(rows[0].key.session, "agent-1");
+    assert_eq!(rows[0].model, "kimi-k2.7");
+    assert_eq!(rows[0].tokens.input, 64700);
+    assert_eq!(rows[0].tokens.output, 635);
+    assert_eq!(rows[0].tokens.cache_read, 76032);
+    assert_eq!(rows[0].agent.as_deref(), Some("agent-1"));
 }

@@ -308,6 +308,7 @@ pub enum InputAdapterStatus {
     ClineJson,
     AmpJson,
     CopilotJsonl,
+    CodeBuddyLog,
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
@@ -415,6 +416,7 @@ pub enum SourceInput {
     Cline(DocumentInput),
     Amp(DocumentInput),
     Copilot(OrdinaryJsonlInput),
+    CodeBuddyLog(DocumentInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
@@ -446,6 +448,14 @@ impl SourceInput {
             SourceFormat::ClineJson => Self::document(path),
             SourceFormat::AmpJson => Self::amp(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
+            SourceFormat::CodeBuddyJsonl
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("log")) =>
+            {
+                Self::codebuddy_log(path)
+            }
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -509,6 +519,13 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn codebuddy_log(path: PathBuf) -> Self {
+        Self::CodeBuddyLog(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+        })
+    }
+
     pub(crate) fn copilot(path: PathBuf) -> Self {
         Self::Copilot(OrdinaryJsonlInput {
             path,
@@ -524,6 +541,7 @@ impl SourceInput {
             Self::Cline(_) => InputAdapterStatus::ClineJson,
             Self::Amp(_) => InputAdapterStatus::AmpJson,
             Self::Copilot(_) => InputAdapterStatus::CopilotJsonl,
+            Self::CodeBuddyLog(_) => InputAdapterStatus::CodeBuddyLog,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
@@ -542,6 +560,7 @@ impl SourceInput {
             Self::Cline(input) => input.reset(),
             Self::Amp(input) => input.reset(),
             Self::Copilot(input) => input.cursor.reset(),
+            Self::CodeBuddyLog(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
@@ -560,6 +579,7 @@ impl SourceInput {
             Self::Cline(input) => input.is_current(),
             Self::Amp(input) => input.is_current(),
             Self::Copilot(input) => input.cursor.is_current(&input.path),
+            Self::CodeBuddyLog(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
@@ -588,6 +608,7 @@ impl SourceInput {
             | Self::Cline(_)
             | Self::Amp(_)
             | Self::Copilot(_)
+            | Self::CodeBuddyLog(_)
             | Self::CompressedJsonl(_) => Ok(None),
         }
     }
@@ -600,6 +621,7 @@ impl SourceInput {
             Self::Cline(input) => Some(&input.path),
             Self::Amp(input) => Some(&input.path),
             Self::Copilot(input) => Some(&input.path),
+            Self::CodeBuddyLog(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
@@ -627,6 +649,7 @@ impl SourceInput {
             Self::Cursor(input) => input.read_batch(),
             Self::Cline(input) => input.read_batch(),
             Self::Amp(input) => input.read_batch(),
+            Self::CodeBuddyLog(input) => input.read_batch(),
             Self::Copilot(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
