@@ -17,6 +17,7 @@ use crate::parsers::openclaw::OpenClawReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
+use crate::parsers::qodercn;
 use crate::parsers::workbuddy::sqlite_row_to_usage;
 use crate::parsers::zcode;
 use crate::parsers::zed::ZedReader;
@@ -295,6 +296,24 @@ impl MimoAdapter {
     }
 }
 
+pub struct QodercnAdapter {
+    path: PathBuf,
+}
+
+impl QodercnAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_qodercn(&self.path)
+    }
+}
+
 pub struct ZcodeAdapter {
     path: PathBuf,
 }
@@ -466,6 +485,8 @@ pub enum InputAdapterStatus {
     MimoSqlite,
     ZcodeJsonl,
     ZcodeSqlite,
+    QodercnJsonl,
+    QodercnSqlite,
     CatpawSqlite,
     GooseSqlite,
     HermesSqlite,
@@ -482,6 +503,7 @@ pub(crate) enum SqliteInputData {
     Kilo(Arc<[ResponseUsage]>),
     Mimo(Arc<[ResponseUsage]>),
     Zcode(Arc<[ResponseUsage]>),
+    Qodercn(Arc<[ResponseUsage]>),
     Catpaw(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
@@ -579,6 +601,7 @@ pub enum SourceInput {
     CommandCode(OrdinaryJsonlInput),
     Grok(OrdinaryJsonlInput),
     ZcodeJsonl(OrdinaryJsonlInput),
+    QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
     Cursor(CursorInput),
@@ -595,6 +618,7 @@ pub enum SourceInput {
     Kilo(KiloAdapter),
     Mimo(MimoAdapter),
     Zcode(ZcodeAdapter),
+    Qodercn(QodercnAdapter),
     Catpaw(CatpawAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
@@ -621,6 +645,7 @@ impl SourceInput {
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::MimoSqlite => Self::Mimo(MimoAdapter::new(path)),
             SourceFormat::ZcodeSqlite => Self::Zcode(ZcodeAdapter::new(path)),
+            SourceFormat::QodercnSqlite => Self::Qodercn(QodercnAdapter::new(path)),
             SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
@@ -652,6 +677,10 @@ impl SourceInput {
                 cursor: JsonlCursor::default(),
             }),
             SourceFormat::ZcodeJsonl => Self::ZcodeJsonl(OrdinaryJsonlInput {
+                path,
+                cursor: JsonlCursor::default(),
+            }),
+            SourceFormat::QodercnJsonl => Self::QodercnJsonl(OrdinaryJsonlInput {
                 path,
                 cursor: JsonlCursor::default(),
             }),
@@ -779,6 +808,7 @@ impl SourceInput {
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
             Self::ZcodeJsonl(_) => InputAdapterStatus::ZcodeJsonl,
+            Self::QodercnJsonl(_) => InputAdapterStatus::QodercnJsonl,
             Self::Gemini(_) => InputAdapterStatus::GeminiTranscript,
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::Cline(_) => InputAdapterStatus::ClineJson,
@@ -795,6 +825,7 @@ impl SourceInput {
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Mimo(_) => InputAdapterStatus::MimoSqlite,
             Self::Zcode(_) => InputAdapterStatus::ZcodeSqlite,
+            Self::Qodercn(_) => InputAdapterStatus::QodercnSqlite,
             Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
@@ -811,6 +842,7 @@ impl SourceInput {
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
+            Self::QodercnJsonl(input) => input.cursor.reset(),
             Self::PromaJsonl(input) => input.cursor.reset(),
             Self::Kimi(input) => input.cursor.reset(),
             Self::Gemini(input) => input.reset(),
@@ -828,6 +860,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
@@ -844,6 +877,7 @@ impl SourceInput {
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
+            Self::QodercnJsonl(input) => input.cursor.is_current(&input.path),
             Self::PromaJsonl(input) => input.cursor.is_current(&input.path),
             Self::Kimi(input) => input.cursor.is_current(&input.path),
             Self::Gemini(input) => input.is_current(),
@@ -861,6 +895,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
@@ -883,6 +918,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Mimo(adapter) => Ok(Some(SqliteInputData::Mimo(adapter.read()?))),
             Self::Zcode(adapter) => Ok(Some(SqliteInputData::Zcode(adapter.read()?))),
+            Self::Qodercn(adapter) => Ok(Some(SqliteInputData::Qodercn(adapter.read()?))),
             Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
@@ -899,6 +935,7 @@ impl SourceInput {
             | Self::CommandCode(_)
             | Self::Grok(_)
             | Self::ZcodeJsonl(_)
+            | Self::QodercnJsonl(_)
             | Self::PromaJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -918,6 +955,7 @@ impl SourceInput {
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
+            Self::QodercnJsonl(input) => Some(&input.path),
             Self::PromaJsonl(input) => Some(&input.path),
             Self::Kimi(input) => Some(&input.path),
             Self::Gemini(input) => Some(&input.path),
@@ -935,6 +973,7 @@ impl SourceInput {
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Mimo(adapter) => Some(adapter.path()),
             Self::Zcode(adapter) => Some(adapter.path()),
+            Self::Qodercn(adapter) => Some(adapter.path()),
             Self::Catpaw(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
@@ -970,6 +1009,17 @@ impl SourceInput {
                 })
             }
             Self::ZcodeJsonl(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
+            Self::QodercnJsonl(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
                     records: batch.records,
@@ -1038,6 +1088,7 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Mimo(_)
             | Self::Zcode(_)
+            | Self::Qodercn(_)
             | Self::Catpaw(_)
             | Self::Goose(_)
             | Self::Hermes(_)
@@ -2682,6 +2733,148 @@ fn read_zcode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(responses))
+}
+
+fn read_qodercn(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "chat_message",
+        &["id", "session_id", "token_info"],
+    )?;
+    // `chat_session.project_name` is optional in older builds, so it is probed
+    // rather than required: the query falls back to a NULL project column.
+    let with_project = transaction
+        .query_row(
+            "SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'chat_session'
+               AND EXISTS (SELECT 1 FROM pragma_table_info('chat_session')
+                           WHERE name = 'project_name')
+             LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    let source = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.rsplit_once('.').map(|(stem, _)| stem))
+        .unwrap_or("local");
+    let project_column = if with_project {
+        "(SELECT cs.project_name FROM chat_session cs
+           WHERE cs.session_id = chat_message.session_id LIMIT 1)"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT rowid, id, session_id, request_id, token_info, model_info, gmt_create,
+                {project_column}
+         FROM chat_message
+         WHERE role = 'assistant'
+           AND token_info IS NOT NULL
+           AND trim(token_info) NOT IN ('', '{{}}')
+         ORDER BY gmt_create, rowid LIMIT ?1 OFFSET ?2"
+    );
+    let candidates: i64 = connection_query_count(
+        &transaction,
+        "SELECT COUNT(*) FROM chat_message
+         WHERE role = 'assistant'
+           AND token_info IS NOT NULL
+           AND trim(token_info) NOT IN ('', '{}')",
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > qodercn::MAX_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let mut reader = qodercn::QodercnReader::new(source);
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&sql)?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let row_id: i64 = row.get(0)?;
+            let id: Option<String> = row.get(1)?;
+            let session: Option<String> = row.get(2)?;
+            let request: Option<String> = row.get(3)?;
+            let token_info: Option<String> = row.get(4)?;
+            let model_info: Option<String> = row.get(5)?;
+            let created_at: Option<i64> = row.get(6)?;
+            let project: Option<String> = row.get(7)?;
+            page_rows += 1;
+            // A row whose `token_info` is not a JSON object is a visible
+            // rejection, not a silent skip: the counters cannot be proven.
+            let Some(token_info) = token_info else {
+                continue;
+            };
+            let Ok(token_value) = serde_json::from_str::<serde_json::Value>(&token_info) else {
+                return Err(SqliteSourceError::Invalid);
+            };
+            let (prompt, cached, output) =
+                qodercn::database_counters(&token_value).map_err(map_qodercn_error)?;
+            let model = model_info
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                .and_then(|value| {
+                    ["model_key", "modelKey"].iter().find_map(|field| {
+                        value
+                            .get(*field)
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|text| !text.is_empty())
+                            .map(str::to_owned)
+                    })
+                });
+            let session_id = session
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .or(request.as_deref().filter(|value| !value.is_empty()))
+                .or(id.as_deref().filter(|value| !value.is_empty()))
+                .map(str::to_owned)
+                .unwrap_or_else(|| row_id.to_string());
+            let message_id = id
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .or(request.as_deref().filter(|value| !value.is_empty()))
+                .map(str::to_owned)
+                .unwrap_or_else(|| row_id.to_string());
+            reader
+                .ingest(qodercn::QodercnRow {
+                    lane: qodercn::Lane::Database,
+                    source,
+                    session_id: Some(&session_id),
+                    message_id: Some(&message_id),
+                    prompt,
+                    cached,
+                    output,
+                    model: model.as_deref(),
+                    workspace: project.as_deref(),
+                    created_at_ms: created_at.unwrap_or(0),
+                })
+                .map_err(map_qodercn_error)?;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn map_qodercn_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        ReaderError::Overflow => SqliteSourceError::Capacity,
+        ReaderError::InvalidRecord
+        | ReaderError::InvalidTimestamp
+        | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
 }
 
 fn map_zcode_error(error: ReaderError) -> SqliteSourceError {

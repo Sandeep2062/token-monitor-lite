@@ -26,6 +26,7 @@ use crate::parsers::{
     openclaw::OpenClawReader,
     pi::PiReader,
     proma::PromaReader,
+    qodercn::QodercnReader,
     qwen::QwenReader,
     reasonix::ReasonixReader,
     senpi::SenpiReader,
@@ -69,6 +70,8 @@ pub enum SourceFormat {
     ZcodeJsonl,
     ZcodeSqlite,
     CatpawSqlite,
+    QodercnJsonl,
+    QodercnSqlite,
     CommandCodeJsonl,
     GrokJsonl,
     OpenClawJsonl,
@@ -113,6 +116,7 @@ impl SourceFormat {
             Self::MimoSqlite => "mimo",
             Self::ZcodeJsonl | Self::ZcodeSqlite => "zcode",
             Self::CatpawSqlite => "catpaw",
+            Self::QodercnJsonl | Self::QodercnSqlite => "qodercn",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -154,6 +158,8 @@ impl SourceFormat {
             Self::ZcodeJsonl => "zcode-jsonl",
             Self::ZcodeSqlite => "zcode-sqlite",
             Self::CatpawSqlite => "catpaw-sqlite",
+            Self::QodercnJsonl => "qodercn-jsonl",
+            Self::QodercnSqlite => "qodercn-sqlite",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -197,6 +203,8 @@ impl SourceFormat {
             "zcode-jsonl" => Some(Self::ZcodeJsonl),
             "zcode-sqlite" => Some(Self::ZcodeSqlite),
             "catpaw-sqlite" => Some(Self::CatpawSqlite),
+            "qodercn-jsonl" => Some(Self::QodercnJsonl),
+            "qodercn-sqlite" => Some(Self::QodercnSqlite),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -222,6 +230,7 @@ impl SourceFormat {
                 | Self::MimoSqlite
                 | Self::ZcodeSqlite
                 | Self::CatpawSqlite
+                | Self::QodercnSqlite
                 | Self::GooseSqlite
                 | Self::HermesSqlite
                 | Self::OpenClawSqlite
@@ -433,6 +442,7 @@ enum ResponseReader {
     Mcode(Box<McodeReader>),
     OpenClaw(Box<OpenClawReader>),
     Zcode(Box<ZcodeReader>),
+    Qodercn(Box<QodercnReader>),
 }
 
 impl ResponseReader {
@@ -464,6 +474,7 @@ impl ResponseReader {
             Self::Mcode(reader) => reader.ingest(record),
             Self::OpenClaw(reader) => reader.ingest(record),
             Self::Zcode(reader) => reader.ingest(record),
+            Self::Qodercn(reader) => reader.ingest_record(record),
         }
     }
 
@@ -495,6 +506,7 @@ impl ResponseReader {
             Self::Mcode(reader) => reader.snapshot(),
             Self::OpenClaw(reader) => reader.snapshot(),
             Self::Zcode(reader) => reader.snapshot(),
+            Self::Qodercn(reader) => reader.snapshot(),
         }
     }
 
@@ -525,7 +537,8 @@ impl ResponseReader {
             | Self::Muse(_)
             | Self::Mcode(_)
             | Self::OpenClaw(_)
-            | Self::Zcode(_) => Ok(()),
+            | Self::Zcode(_)
+            | Self::Qodercn(_) => Ok(()),
         }
     }
 
@@ -557,6 +570,7 @@ impl ResponseReader {
             Self::Mcode(reader) => reader.has_supported_usage(),
             Self::OpenClaw(reader) => reader.has_supported_usage(),
             Self::Zcode(reader) => reader.has_supported_usage(),
+            Self::Qodercn(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -981,6 +995,15 @@ impl SourceReader {
                     ZcodeReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
+            SourceFormat::QodercnJsonl => {
+                let source = self
+                    .input
+                    .source_path()
+                    .and_then(|path| path.file_stem())
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("unknown");
+                ResponseReader::Qodercn(Box::new(QodercnReader::new(source)))
+            }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
@@ -988,6 +1011,7 @@ impl SourceReader {
             | SourceFormat::MimoSqlite
             | SourceFormat::ZcodeSqlite
             | SourceFormat::CatpawSqlite
+            | SourceFormat::QodercnSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
             | SourceFormat::OpenClawSqlite
@@ -1011,6 +1035,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Mimo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zcode(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Qodercn(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Catpaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),

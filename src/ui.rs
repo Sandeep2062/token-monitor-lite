@@ -817,6 +817,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "kiro",
         "proma",
         "catpaw",
+        "qodercn",
         "muse",
         "omp",
         "openclaw",
@@ -901,6 +902,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "kiro"
             | "proma"
             | "catpaw"
+            | "qodercn"
             | "muse"
             | "omp"
             | "openclaw"
@@ -940,6 +942,7 @@ fn is_supported_client(client: &str) -> bool {
             | "kiro"
             | "proma"
             | "catpaw"
+            | "qodercn"
             | "muse"
             | "omp"
             | "openclaw"
@@ -977,6 +980,7 @@ fn client_label(client: &str) -> &'static str {
         "kiro" => "Kiro",
         "proma" => "Proma",
         "catpaw" => "CatPaw",
+        "qodercn" => "Qoder CN",
         "openclaw" => "OpenClaw",
         "muse" => "Muse Code",
         "omp" => "Oh My Pi",
@@ -1445,6 +1449,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::KiroJson => "Kiro",
         SourceFormat::PromaJsonl => "Proma",
         SourceFormat::CatpawSqlite => "CatPaw",
+        SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "Qoder CN",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "OpenClaw",
         SourceFormat::ZedSqlite => "Zed",
     }

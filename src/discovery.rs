@@ -6,7 +6,7 @@ use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, CatpawAdapter, CodexLocalUsageAdapter, GooseAdapter, HermesAdapter,
-    KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter,
+    KiloAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, QodercnAdapter,
     SessionArchiveAdapter, SourceInput, SqliteSourceError, WorkBuddySqliteAdapter, ZcodeAdapter,
     ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
@@ -2389,6 +2389,120 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "qodercn" {
+            // Qoder CN keeps two stores: legacy SQLite at
+            // `<data>/SharedClientCache/cache/db/local.db`, and the
+            // Claude-compatible transcripts that 2026-09+ builds write under
+            // `~/.qoder-cn/projects`. Both are scanned; each file is a source.
+            let projects = join_many(inputs.platform, &inputs.home, &[".qoder-cn", "projects"]);
+            let mut jsonl = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&projects, 0, &mut inspected, &mut jsonl, &mut overflow)?;
+            jsonl.retain(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+            });
+            jsonl.sort();
+            for (ordinal, path) in jsonl.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::QodercnJsonl,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "qodercn",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::QodercnJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::QodercnJsonl,
+                    session,
+                    path,
+                });
+            }
+            let database = {
+                // The legacy store lives under the platform app-support root,
+                // inside a `QoderCN` directory: the reference resolves macOS to
+                // `Application Support`, Windows to the roaming app-data
+                // directory, and every other host to `XDG_CONFIG_HOME` (falling
+                // back to `<home>/.config`).
+                let support = match inputs.platform {
+                    HostPlatform::MacOs => join_many(
+                        inputs.platform,
+                        &inputs.home,
+                        &["Library", "Application Support"],
+                    ),
+                    HostPlatform::Windows => {
+                        join_many(inputs.platform, &inputs.home, &["AppData", "Roaming"])
+                    }
+                    _ => match inputs.xdg_config_home.as_deref() {
+                        Some(root) if !root.as_os_str().is_empty() => {
+                            checked_root(inputs.platform, root, false)?
+                        }
+                        _ => join_many(inputs.platform, &inputs.home, &[".config"]),
+                    },
+                };
+                join_many(
+                    inputs.platform,
+                    &support,
+                    &["QoderCN", "SharedClientCache", "cache", "db", "local.db"],
+                )
+            };
+            let metadata = match fs::symlink_metadata(&database) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(metadata) = metadata {
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "qodercn",
+                        ordinal: 1,
+                    });
+                } else if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                } else if metadata.len() > MAX_SOURCE_FILE_BYTES
+                    || QodercnAdapter::new(&database).read().is_err()
+                {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "qodercn",
+                        ordinal: 1,
+                    });
+                } else {
+                    let source_id = source_id_for(SourceFormat::QodercnSqlite, &database);
+                    if admitted_ids.insert(source_id) {
+                        sources.push(DiscoveredSource {
+                            source_id,
+                            format: SourceFormat::QodercnSqlite,
+                            session: "local".to_owned(),
+                            path: database,
+                        });
+                    } else {
+                        notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    }
+                }
+            }
+            continue;
+        }
         if client == "zed" {
             for (ordinal, path) in zed_database_paths(inputs).into_iter().enumerate() {
                 let ordinal = ordinal + 1;
@@ -3293,6 +3407,10 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::PromaJsonl => None,
                 // CatPaw session ids come from the database row, not the path.
                 SourceFormat::CatpawSqlite => None,
+                // Qoder CN names its session inside the record; the caller
+                // derives one from the <slug>/<session>.jsonl path when absent.
+                SourceFormat::QodercnJsonl => None,
+                SourceFormat::QodercnSqlite => None,
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
@@ -3406,6 +3524,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::ZcodeJsonl
             | SourceFormat::KiroJson
             | SourceFormat::PromaJsonl
+            | SourceFormat::QodercnJsonl
     ) {
         return path
             .file_stem()

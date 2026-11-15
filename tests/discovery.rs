@@ -261,6 +261,36 @@ fn mimo_database(path: &Path) {
         .unwrap();
 }
 
+fn qodercn_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE chat_session (session_id TEXT, project_name TEXT);
+             CREATE TABLE chat_message (
+                 id TEXT, session_id TEXT, request_id TEXT, role TEXT,
+                 token_info TEXT, model_info TEXT, gmt_create INTEGER
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO chat_session (session_id, project_name) VALUES ('s1', 'demo')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO chat_message
+                 (id, session_id, request_id, role, token_info, model_info, gmt_create)
+             VALUES ('m1', 's1', 'req_1', 'assistant',
+                     '{\"prompt_tokens\":10,\"cached_tokens\":2,\"completion_tokens\":5}',
+                     '{\"modelKey\":\"qmodel\"}', 1782718000000)",
+            [],
+        )
+        .unwrap();
+}
+
 fn zcode_database(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = Connection::open(path).unwrap();
@@ -1166,6 +1196,49 @@ fn zcode_projects_and_the_cli_database_are_discovered() {
         .sources
         .iter()
         .find(|source| source.format == SourceFormat::ZcodeJsonl)
+        .unwrap();
+    assert_eq!(transcript.session, "session-a");
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn qodercn_projects_and_the_legacy_database_are_discovered() {
+    let tree = Tree::new();
+    // Current lane: Claude-compatible transcripts under `~/.qoder-cn/projects`.
+    tree.file(
+        ".qoder-cn/projects/demo/session-a.jsonl",
+        concat!(
+            r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-06-20T10:00:05Z","message":{"id":"m1","model":"qmodel","usage":{"input_tokens":10,"cache_read_input_tokens":2,"output_tokens":5}}}"#,
+            "\n"
+        )
+        .as_bytes(),
+    );
+    // Legacy lane: the `chat_message` store under the app-support root.
+    qodercn_database(
+        &tree
+            .0
+            .join(".config/QoderCN/SharedClientCache/cache/db/local.db"),
+    );
+    // Anything that is not project JSONL is not admitted.
+    tree.file(".qoder-cn/settings.json", b"{}");
+
+    let mut paths = tree.paths(&["qodercn"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert_eq!(
+        report
+            .sources
+            .iter()
+            .map(|source| source.format)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([SourceFormat::QodercnJsonl, SourceFormat::QodercnSqlite])
+    );
+    let transcript = report
+        .sources
+        .iter()
+        .find(|source| source.format == SourceFormat::QodercnJsonl)
         .unwrap();
     assert_eq!(transcript.session, "session-a");
 

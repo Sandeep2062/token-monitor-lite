@@ -1170,6 +1170,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::KiroJson => "kiro",
         SourceFormat::PromaJsonl => "proma",
         SourceFormat::CatpawSqlite => "catpaw",
+        SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "qodercn",
         SourceFormat::OpenClawJsonl | SourceFormat::OpenClawSqlite => "openclaw",
         SourceFormat::ZedSqlite => "zed",
         SourceFormat::WorkBuddySqlite => "workbuddy",

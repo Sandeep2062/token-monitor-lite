@@ -183,6 +183,28 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## Qoder CN matrix
+
+Qoder CN is one opt-in, fork-only client with two lanes. The legacy store is a `chat_message` table at `<app-support>/QoderCN/SharedClientCache/cache/db/local.db`, where the app-support root is `~/Library/Application Support` on macOS, the roaming app-data directory on Windows, and `XDG_CONFIG_HOME` (falling back to `<home>/.config`) elsewhere. The current lane is Claude-compatible JSONL under `~/.qoder-cn/projects`.
+
+**Both lanes report a cache-inclusive prompt count.** The same two arithmetic rules therefore apply in each: `input` is `prompt - cached` clamped at zero, and `cache_read` is `min(prompt, cached)`. Without the split the cache read would be counted twice, once inside the prompt and once as its own bucket. `cache_write` and `reasoning` are never persisted by the app and stay zero rather than being inferred.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant database row with `token_info` present, non-empty and not `{}` | supported | One observation from `prompt_tokens` minus `cached_tokens`, plus `completion_tokens`. | Session is `qodercn:db:<database file>:<session_id or request_id or id or rowid>`; identity appends `id`. |
+| Assistant transcript line with a `message.usage` object | supported | The same split over `input_tokens`, `cache_read_input_tokens` and `output_tokens`. | Session is `qodercn:jsonl:<file stem>:<sessionId or unknown>`; identity appends `message.id`, else `uuid`. |
+| `cached` larger than `prompt` | supported, clamped | `input` saturates at zero and `cache_read` takes the prompt, so the row stays internally consistent instead of going negative. | As above. |
+| Row whose prompt and output are both zero | ignored non-usage | No observation: a plan-billed first-party row records credits and a context ratio but no tokens, which is not measured zero usage. An output-only row is kept. | No ownership change. |
+| Internal model code such as `qmodel` or `gm51model` | supported, priced | The app's own display name (`Qwen3.7-Plus`, `GLM-5.2`), with the client as provider hint. A `qoder-custom-<profile>/` prefix is stripped first; the remaining model may itself be provider-qualified and is not split further. | As above. |
+| Unmapped code, or a routing tier (`auto`, `ultimate`, `performance`, `efficient`, `lite`) | supported, unpriced | The code or the tier name is kept **with no provider hint**, so catalog pricing cannot attach a price to a tier name and no cheaper model is substituted. | As above. |
+| Missing model | supported | `qoder-agent`, the pinned reader's documented fallback. | As above. |
+| Bare `project_name`, or a `cwd` path | supported | The bare name becomes the workspace label. A path never becomes `workspace_key`: the store rejects absolute-path text in identity columns, so only the final component survives, as a label. | As above. |
+| Project name exactly `.` | ignored | The app's "no project" sentinel is not a label. | As above. |
+| Negative, non-numeric or missing required counter; non-object `token_info`/`usage`; control character in an identity | visible unsupported | Discard the whole candidate. A fractional counter truncates, matching the pinned `Number(value)` adapter, because the value is a real reading rather than a malformed one. | Prior committed generation remains active. |
+| `gmt_create`, or the transcript `timestamp` | supported | Stored as recorded; an unparseable transcript timestamp falls back to the epoch, which falls outside any window. | As above. |
+| Missing `chat_session` table or `project_name` column | supported | The project subquery is replaced by `NULL`; the probe decides, rather than inferring from a failed prepare. | As above. |
+| Per-source last-complete-snapshot cache with db/WAL fingerprints, the `unpriced:qodercn` marker, cross-format dedup, and the `TOKEN_MONITOR_QODER_CN_*` overrides | visible unsupported / ignored | Not guessed. A failed read is a visible failure that keeps the prior committed generation, which the runtime already guarantees; no second copy is maintained. | No source slot. |
+
 ## CatPaw matrix
 
 CatPaw is one opt-in, fork-only client covering two editions — domestic `catpaw-moon` and overseas `catpaw-overseas` — whose account databases sit directly under the platform app-data root (`~/Library/Application Support` on macOS, the native roaming app-data directory on Windows). **Linux reads no CatPaw source**, because no product root has been verified there and a WSL scan would recount a Windows host's usage. The edition is derived from the containing directory name, never inferred from a model id, because the same numeric id names different models per edition.

@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 23
+CLAUDE_SOURCES = 22
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -70,6 +70,7 @@ MIMO_SOURCES = 1
 ZCODE_SOURCES = 1
 KIRO_SOURCES = 1
 PROMA_SOURCES = 1
+QODERCN_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -106,6 +107,7 @@ SOURCE_COUNT = (
     + ZCODE_SOURCES
     + KIRO_SOURCES
     + PROMA_SOURCES
+    + QODERCN_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1196,6 +1198,45 @@ def _proma_source() -> tuple[str, bytes, dict[str, int], int]:
                         "output_tokens": counts["output"],
                         "cache_read_input_tokens": counts["cacheRead"],
                         "cache_creation_input_tokens": counts["cacheWrite"],
+                    },
+                },
+            }
+        )
+    data = b"".join(_json_line(entry) for entry in lines)
+    return f"{session}.jsonl", data, totals, len(lines)
+
+
+def _qodercn_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Qoder CN transcript: one assistant line per observation.
+
+    Qoder CN reports a cache-inclusive prompt count, so the recorded
+    `input_tokens` is the net input plus the cache read, and the native reader
+    subtracts the overlap back out.
+    """
+    session = "qodercn-fixture-000"
+    totals = _counts()
+    lines = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 180 + observation,
+            "output": 36 + observation,
+            "cacheRead": 11,
+            "cacheWrite": 0,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        lines.append(
+            {
+                "type": "assistant",
+                "sessionId": session,
+                "timestamp": f"2026-06-20T10:00:{observation:02d}.000Z",
+                "message": {
+                    "id": f"msg-{observation:03d}",
+                    "model": "qmodel",
+                    "usage": {
+                        "input_tokens": counts["input"] + counts["cacheRead"],
+                        "cache_read_input_tokens": counts["cacheRead"],
+                        "output_tokens": counts["output"],
                     },
                 },
             }
@@ -2354,6 +2395,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, proma_totals)
     physical_bytes += len(proma_data)
     decoded_bytes += len(proma_data)
+
+    qodercn_path, qodercn_data, qodercn_totals, qodercn_rows = _qodercn_source()
+    qodercn_entry = _source_entry(
+        root,
+        f"home/.qoder-cn/projects/demo/{qodercn_path}",
+        qodercn_data,
+        format_name="qodercn-jsonl",
+        session="qodercn-fixture-000",
+        observations=qodercn_rows,
+        canonical_sessions=1,
+        expected_totals=qodercn_totals,
+        physical_bytes=len(qodercn_data),
+    )
+    sources.append(qodercn_entry)
+    _add_counts(aggregate, qodercn_totals)
+    _add_counts(canonical_aggregate, qodercn_totals)
+    physical_bytes += len(qodercn_data)
+    decoded_bytes += len(qodercn_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

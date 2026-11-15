@@ -173,6 +173,7 @@ impl Fixture {
                 "zcode".to_owned(),
                 "kiro".to_owned(),
                 "proma".to_owned(),
+                "qodercn".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
                 "codebuddy".to_owned(),
@@ -249,6 +250,8 @@ fn source_format(format: &str) -> SourceFormat {
         "zcode-sqlite" => SourceFormat::ZcodeSqlite,
         "kiro-json" => SourceFormat::KiroJson,
         "proma-jsonl" => SourceFormat::PromaJsonl,
+        "qodercn-jsonl" => SourceFormat::QodercnJsonl,
+        "qodercn-sqlite" => SourceFormat::QodercnSqlite,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
         "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
         "workbuddy-jsonl" => SourceFormat::WorkBuddyJsonl,
@@ -356,7 +359,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
     assert_eq!(
         manifest.coverage.source_formats,
         BTreeMap::from([
-            ("claude-cli".to_owned(), 23),
+            ("claude-cli".to_owned(), 22),
             ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
@@ -367,6 +370,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("zcode-sqlite".to_owned(), 1),
             ("kiro-json".to_owned(), 1),
             ("proma-jsonl".to_owned(), 1),
+            ("qodercn-jsonl".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
             ("cline-json".to_owned(), 1),
