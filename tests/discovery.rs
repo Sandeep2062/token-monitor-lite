@@ -202,6 +202,38 @@ fn amp_thread_bytes(session: &str) -> Vec<u8> {
     .unwrap()
 }
 
+fn kilo_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                data TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('m1', 's1', ?1)",
+            [serde_json::json!({
+                "role": "assistant",
+                "modelID": "minimax/m2.5",
+                "providerID": "kilo",
+                "tokens": {
+                    "input": 10,
+                    "output": 4,
+                    "reasoning": 1,
+                    "cache": {"read": 2, "write": 1}
+                },
+                "time": {"created": 1_794_564_000_000_i64}
+            })
+            .to_string()],
+        )
+        .unwrap();
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -823,6 +855,21 @@ fn amp_threads_are_discovered_from_both_thread_roots() {
             .iter()
             .all(|source| { source.format == SourceFormat::AmpJson && !source.session.is_empty() })
     );
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn kilo_database_is_discovered_at_the_xdg_data_role() {
+    let tree = Tree::new();
+    kilo_database(&tree.0.join(".local/share/kilo/kilo.db"));
+
+    let mut paths = tree.paths(&["kilo"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::KiloSqlite);
+    assert_eq!(report.sources[0].session, "kilo");
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

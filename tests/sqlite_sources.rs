@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use token_monitor_lite::source_inputs::{
-    ArchivePeriod, CodexLocalUsageAdapter, MAX_ARCHIVE_ENTRY_BYTES, OpenCodeAdapter,
+    ArchivePeriod, CodexLocalUsageAdapter, KiloAdapter, MAX_ARCHIVE_ENTRY_BYTES, OpenCodeAdapter,
     SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole, classify_sqlite_source,
 };
 use token_monitor_lite::sources::{SourceFormat, SourceProgress, SourceReader};
@@ -530,6 +530,80 @@ fn opencode_rejects_schema_drift_and_invalid_usage() {
     );
 }
 
+fn create_kilo(root: &Root, name: &str) -> (PathBuf, Connection) {
+    let path = root.path(name);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                data TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+    let payload = json!({
+        "role": "assistant",
+        "modelID": "minimax/m2.5",
+        "providerID": "kilo",
+        "tokens": {
+            "input": 1000,
+            "output": 200,
+            "reasoning": 40,
+            "cache": {"read": 75, "write": 25}
+        },
+        "time": {"created": 1_794_564_000_000_i64}
+    })
+    .to_string();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('kilo-1', 'kilo-session', ?1)",
+            [payload.clone()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('kilo-user', 'kilo-session', ?1)",
+            [r#"{"role":"user"}"#],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message (id, session_id, data) VALUES ('kilo-stub', 'ses_migrated_x', ?1)",
+            [r#"{"role":"assistant","modelID":"legacy","providerID":"legacy","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1794564000000}}"#],
+        )
+        .unwrap();
+    (path, connection)
+}
+
+#[test]
+fn kilo_sqlite_rows_are_normalized_without_source_mutation() {
+    let root = Root::new();
+    let (path, _writer) = create_kilo(&root, "kilo.db");
+    let before = fingerprint(&path);
+    let rows = KiloAdapter::new(&path).read().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key.client, "kilo");
+    assert_eq!(rows[0].key.session, "kilo-session");
+    assert_eq!(rows[0].model, "minimax/m2.5");
+    assert_eq!(rows[0].billing_provider_hint.as_deref(), Some("kilo"));
+    assert_eq!(
+        rows[0].dedup_key.as_deref(),
+        Some("kilo:kilo-session:kilo-1")
+    );
+    assert_eq!(
+        rows[0].tokens,
+        token_monitor_lite::accounting::TokenCounts {
+            input: 1000,
+            output: 160,
+            cache_read: 75,
+            cache_write: 25,
+            reasoning: 40,
+        }
+    );
+    assert_eq!(fingerprint(&path), before);
+}
+
 #[test]
 fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
@@ -547,6 +621,10 @@ fn sqlite_roles_are_classified_only_by_exact_main_names() {
     assert_eq!(
         classify_sqlite_source(Path::new("/data/opencode-stable.db")),
         Some(SqliteSourceRole::OpenCode)
+    );
+    assert_eq!(
+        classify_sqlite_source(Path::new("/data/kilo.db")),
+        Some(SqliteSourceRole::Kilo)
     );
     assert_eq!(
         classify_sqlite_source(Path::new("/data/opencode.db-wal")),

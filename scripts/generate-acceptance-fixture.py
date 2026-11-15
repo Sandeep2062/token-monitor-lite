@@ -11,12 +11,12 @@ The upstream acceptance plan's illustrative distribution assumed one archive
 SQLite source per group of sessions. The production contract admits exactly one
 ``session-usage-archive.sqlite`` and one ``codex-local-usage.sqlite`` per legacy
 shared-data root, and retained archive periods do not create canonical request
-sessions. The distribution below preserves the required totals: 28 Codex JSONL
-and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor, one Cline
-and one Amp source supply 65 canonical sessions, 33 Claude sources supply 33,
-and the single local-usage ledger supplies the remaining 902 after one
-suppressed native-duplicate thread. The archive source contributes retained
-history without fabricating request rows.
+sessions. The distribution below preserves the required totals: 27 Codex JSONL
+and 32 zstd Codex sources plus one OpenCode, one Gemini, one Cursor, one Cline,
+one Amp and one Kilo source supply 65 canonical sessions, 33 Claude sources
+supply 33, and the single local-usage ledger supplies the remaining 902 after
+one suppressed native-duplicate thread. The archive source contributes
+retained history without fabricating request rows.
 
 Only synthetic values are emitted. No credential, prompt, title, cwd, real user
 path, or copied user data is written. Compressed payloads are produced by the
@@ -48,13 +48,14 @@ SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.1"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 28
+CODEX_SOURCES = 27
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
 CURSOR_SOURCES = 1
 CLINE_SOURCES = 1
 AMP_SOURCES = 1
+KILO_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 SOURCE_COUNT = (
@@ -66,6 +67,7 @@ SOURCE_COUNT = (
     + CURSOR_SOURCES
     + CLINE_SOURCES
     + AMP_SOURCES
+    + KILO_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -402,6 +404,50 @@ def _amp_source() -> tuple[str, bytes, dict[str, int], int]:
         separators=(",", ":"),
     ).encode("utf-8")
     return session, data, totals, len(events)
+
+
+def _kilo_database(path: Path) -> tuple[str, dict[str, int], int]:
+    session = "kilo-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL) STRICT;"
+        )
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 500 + observation,
+                "output": 55 + observation,
+                "cacheRead": 15,
+                "cacheWrite": 5,
+                "reasoning": 5,
+            }
+            _add_counts(totals, counts)
+            data = {
+                "role": "assistant",
+                "modelID": "minimax/m2.5",
+                "providerID": "kilo",
+                "tokens": {
+                    "input": counts["input"],
+                    "output": counts["output"] + counts["reasoning"],
+                    "reasoning": counts["reasoning"],
+                    "cache": {"read": counts["cacheRead"], "write": counts["cacheWrite"]},
+                },
+                "time": {"created": 1_763_000_000_000 + observation * 1_000},
+            }
+            connection.execute(
+                "INSERT INTO message (id, session_id, data) VALUES (?, ?, ?)",
+                (
+                    f"kilo-message-{observation:02d}",
+                    session,
+                    json.dumps(data, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
 
 
 def _local_usage_row(thread_ordinal: int, checkpoint: int) -> tuple[int, int, int, int, int]:
@@ -1043,6 +1089,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, amp_totals)
     physical_bytes += len(amp_data)
     decoded_bytes += len(amp_data)
+
+    kilo_target = root / "home" / ".local" / "share" / "kilo" / "kilo.db"
+    kilo_session, kilo_totals, kilo_rows = _kilo_database(kilo_target)
+    kilo_entry = dict(
+        _existing_entry(root, "home/.local/share/kilo/kilo.db", kilo_target),
+        format="kilo-sqlite",
+        session=kilo_session,
+        observations=kilo_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=kilo_target.stat().st_size,
+        physicalBytes=kilo_target.stat().st_size,
+        expectedTotals=kilo_totals,
+        retainedPeriods=0,
+    )
+    sources.append(kilo_entry)
+    _add_counts(aggregate, kilo_totals)
+    _add_counts(canonical_aggregate, kilo_totals)
+    physical_bytes += kilo_target.stat().st_size
+    decoded_bytes += kilo_target.stat().st_size
 
     shared = root / "home" / ".config" / "Token Monitor"
     shared.mkdir(parents=True, exist_ok=True)

@@ -7,6 +7,7 @@ pub mod codex;
 pub mod cursor;
 pub mod gemini;
 pub mod jsonl;
+pub mod kilo;
 pub mod opencode;
 
 use crate::accounting::{SessionKey, TokenCounts};

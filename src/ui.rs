@@ -767,7 +767,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
     [
-        "amp", "claude", "cline", "codex", "cursor", "gemini", "opencode",
+        "amp", "claude", "cline", "codex", "cursor", "gemini", "kilo", "opencode",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
@@ -820,14 +820,14 @@ fn safe_source(source: &SourceChoice) -> bool {
 fn is_selectable_source_client(client: &str) -> bool {
     matches!(
         client,
-        "amp" | "claude" | "cline" | "codex" | "cursor" | "gemini" | "opencode" | "mixed"
+        "amp" | "claude" | "cline" | "codex" | "cursor" | "gemini" | "kilo" | "opencode" | "mixed"
     )
 }
 
 fn is_supported_client(client: &str) -> bool {
     matches!(
         client,
-        "amp" | "claude" | "cline" | "codex" | "cursor" | "gemini" | "opencode"
+        "amp" | "claude" | "cline" | "codex" | "cursor" | "gemini" | "kilo" | "opencode"
     )
 }
 
@@ -839,6 +839,7 @@ fn client_label(client: &str) -> &'static str {
         "codex" => "Codex CLI",
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
+        "kilo" => "Kilo",
         "opencode" => "OpenCode",
         "mixed" => "Session archive",
         _ => "Unavailable client",
@@ -1245,6 +1246,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::CodexCli => "Codex CLI",
         SourceFormat::CursorCacheJson => "Cursor",
         SourceFormat::GeminiTranscript => "Gemini CLI",
+        SourceFormat::KiloSqlite => "Kilo",
         SourceFormat::SessionArchiveSqlite => "Session archive",
         SourceFormat::CodexLocalUsageSqlite => "Codex local usage",
         SourceFormat::OpenCodeSqlite => "OpenCode",

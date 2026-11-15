@@ -5,8 +5,8 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    CodexLocalUsageAdapter, MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter, SourceInput,
-    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    CodexLocalUsageAdapter, KiloAdapter, MAX_DECODED_BYTES, OpenCodeAdapter, SessionArchiveAdapter,
+    SourceInput, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -1378,6 +1378,49 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "kilo" {
+            let data_base = match inputs.xdg_data_home.as_deref() {
+                Some(root) if !root.as_os_str().is_empty() => {
+                    checked_root(inputs.platform, root, false)?
+                }
+                _ => join_many(inputs.platform, &inputs.home, &[".local", "share"]),
+            };
+            let path = join_many(inputs.platform, &data_base, &["kilo", "kilo.db"]);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    if metadata.len() <= MAX_SOURCE_FILE_BYTES
+                        && KiloAdapter::new(&path).read().is_ok()
+                        && sources.len() < MAX_SOURCES
+                    {
+                        let source_id = source_id_for(SourceFormat::KiloSqlite, &path);
+                        if admitted_ids.insert(source_id) {
+                            sources.push(DiscoveredSource {
+                                source_id,
+                                format: SourceFormat::KiloSqlite,
+                                session: "kilo".to_owned(),
+                                path,
+                            });
+                        } else {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        }
+                    } else if sources.len() >= MAX_SOURCES {
+                        notices.push(DiscoveryNotice::SourceLimitReached);
+                    } else {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "kilo",
+                            ordinal: 1,
+                        });
+                    }
+                }
+                Ok(_) => notices.push(DiscoveryNotice::SourceNotRegular {
+                    client: "kilo",
+                    ordinal: 1,
+                }),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            continue;
+        }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
                 "claude",
@@ -1657,6 +1700,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
+                | SourceFormat::KiloSqlite
                 | SourceFormat::CursorCacheJson => None,
             };
             if let Some(session) = session.filter(|session| !session.is_empty()) {

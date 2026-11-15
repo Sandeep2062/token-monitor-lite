@@ -7,6 +7,7 @@ use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
+use crate::parsers::kilo::KiloReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
@@ -25,7 +26,7 @@ use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub const MAX_COMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: u64 = 1024 * 1024 * 1024;
@@ -43,6 +44,7 @@ pub enum SqliteSourceRole {
     SessionArchive,
     CodexLocalUsage,
     OpenCode,
+    Kilo,
 }
 
 pub fn classify_sqlite_source(path: &Path) -> Option<SqliteSourceRole> {
@@ -50,6 +52,7 @@ pub fn classify_sqlite_source(path: &Path) -> Option<SqliteSourceRole> {
     match name {
         "session-usage-archive.sqlite" => Some(SqliteSourceRole::SessionArchive),
         "codex-local-usage.sqlite" => Some(SqliteSourceRole::CodexLocalUsage),
+        "kilo.db" => Some(SqliteSourceRole::Kilo),
         _ if is_opencode_db_filename(name) => Some(SqliteSourceRole::OpenCode),
         _ => None,
     }
@@ -235,6 +238,24 @@ impl OpenCodeAdapter {
     }
 }
 
+pub struct KiloAdapter {
+    path: PathBuf,
+}
+
+impl KiloAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_kilo(&self.path)
+    }
+}
+
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const ZSTD_SKIPPABLE_MIN: u32 = 0x184D_2A50;
 const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
@@ -250,12 +271,14 @@ pub enum InputAdapterStatus {
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
+    KiloSqlite,
 }
 
 pub(crate) enum SqliteInputData {
     SessionArchive(SessionArchiveSnapshot),
     CodexLocalUsage(Arc<[ResponseUsage]>),
     OpenCode(Arc<[ResponseUsage]>),
+    Kilo(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -350,6 +373,7 @@ pub enum SourceInput {
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
     OpenCode(OpenCodeAdapter),
+    Kilo(KiloAdapter),
 }
 
 impl SourceInput {
@@ -366,6 +390,7 @@ impl SourceInput {
                 Self::CodexLocalUsage(CodexLocalUsageAdapter::new(path))
             }
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
+            SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::ClineJson => Self::document(path),
@@ -444,6 +469,7 @@ impl SourceInput {
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
+            Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
         }
     }
 
@@ -455,7 +481,10 @@ impl SourceInput {
             Self::Cline(input) => input.reset(),
             Self::Amp(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {}
+            Self::SessionArchive(_)
+            | Self::CodexLocalUsage(_)
+            | Self::OpenCode(_)
+            | Self::Kilo(_) => {}
         }
     }
 
@@ -467,7 +496,10 @@ impl SourceInput {
             Self::Cline(input) => input.is_current(),
             Self::Amp(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => Ok(true),
+            Self::SessionArchive(_)
+            | Self::CodexLocalUsage(_)
+            | Self::OpenCode(_)
+            | Self::Kilo(_) => Ok(true),
         }
     }
 
@@ -480,6 +512,7 @@ impl SourceInput {
                 Ok(Some(SqliteInputData::CodexLocalUsage(adapter.read()?)))
             }
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
+            Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -500,6 +533,7 @@ impl SourceInput {
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
             Self::OpenCode(adapter) => Some(adapter.path()),
+            Self::Kilo(adapter) => Some(adapter.path()),
         }
     }
 
@@ -521,9 +555,10 @@ impl SourceInput {
             Self::Cline(input) => input.read_batch(),
             Self::Amp(input) => input.read_batch(),
             Self::CompressedJsonl(input) => input.read_batch(),
-            Self::SessionArchive(_) | Self::CodexLocalUsage(_) | Self::OpenCode(_) => {
-                Err(invalid("sqlite input has no JSONL batch"))
-            }
+            Self::SessionArchive(_)
+            | Self::CodexLocalUsage(_)
+            | Self::OpenCode(_)
+            | Self::Kilo(_) => Err(invalid("sqlite input has no JSONL batch")),
         }
     }
 }
@@ -1270,6 +1305,73 @@ fn read_codex_local_usage(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSou
     drop(transaction);
     snapshot.verify(path)?;
     Ok(usage_rows.into())
+}
+
+fn read_kilo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(&transaction, "message", &["id", "session_id", "data"])?;
+    let candidates: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM message
+         WHERE json_valid(data)
+           AND json_extract(data, '$.role') = 'assistant'
+           AND json_extract(data, '$.tokens') IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    let candidates: usize = candidates
+        .try_into()
+        .map_err(|_| SqliteSourceError::Capacity)?;
+    if candidates > MAX_OPENCODE_RESPONSES {
+        return Err(SqliteSourceError::Capacity);
+    }
+    let mut reader = KiloReader::new().with_fallback_timestamp(source_modified_ms(path));
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(
+            "SELECT id, session_id, data FROM message
+             WHERE json_valid(data)
+               AND json_extract(data, '$.role') = 'assistant'
+               AND json_extract(data, '$.tokens') IS NOT NULL
+             ORDER BY session_id, id LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let session_id: String = row.get(1)?;
+            let data = row
+                .get_ref(2)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            if data.len() > MAX_RECORD_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            reader
+                .ingest(&id, &session_id, data)
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn source_modified_ms(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
 }
 
 fn read_opencode(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

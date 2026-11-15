@@ -24,7 +24,7 @@ use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
 const SUPPORTED_CLIENTS: &[&str] = &[
-    "amp", "claude", "cline", "codex", "cursor", "gemini", "opencode",
+    "amp", "claude", "cline", "codex", "cursor", "gemini", "kilo", "opencode",
 ];
 const COMMAND_CAPACITY: usize = 8;
 
@@ -1138,6 +1138,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::ClineJson => "cline",
         SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
+        SourceFormat::KiloSqlite => "kilo",
         SourceFormat::SessionArchiveSqlite => "mixed",
         SourceFormat::OpenCodeSqlite => "opencode",
     }
