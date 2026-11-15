@@ -6,7 +6,7 @@
 use crate::accounting::{SessionKey, TokenCounts, TokenDelta};
 use crate::parsers::{
     ReaderError, ResponseUsage, amp::AmpReader, claude::ClaudeReader, cline::ClineReader,
-    codex::CodexReader, cursor::CursorReader, gemini::GeminiReader,
+    codex::CodexReader, copilot::CopilotReader, cursor::CursorReader, gemini::GeminiReader,
 };
 use crate::source_inputs::{ArchivePeriod, ArchiveSession, SourceInput, SqliteSourceError};
 use std::fmt;
@@ -26,6 +26,7 @@ pub enum SourceFormat {
     CursorCacheJson,
     ClineJson,
     AmpJson,
+    CopilotJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -42,6 +43,7 @@ impl SourceFormat {
             Self::CursorCacheJson => "cursor",
             Self::ClineJson => "cline",
             Self::AmpJson => "amp",
+            Self::CopilotJsonl => "copilot",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
@@ -57,6 +59,7 @@ impl SourceFormat {
             Self::CursorCacheJson => "cursor-cache-json",
             Self::ClineJson => "cline-json",
             Self::AmpJson => "amp-json",
+            Self::CopilotJsonl => "copilot-jsonl",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -73,6 +76,7 @@ impl SourceFormat {
             "cursor-cache-json" => Some(Self::CursorCacheJson),
             "cline-json" => Some(Self::ClineJson),
             "amp-json" => Some(Self::AmpJson),
+            "copilot-jsonl" => Some(Self::CopilotJsonl),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -275,6 +279,7 @@ enum ResponseReader {
     Cursor(Box<CursorReader>),
     Cline(Box<ClineReader>),
     Amp(Box<AmpReader>),
+    Copilot(Box<CopilotReader>),
 }
 
 impl ResponseReader {
@@ -286,6 +291,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.ingest(record),
             Self::Cline(reader) => reader.ingest(record),
             Self::Amp(reader) => reader.ingest(record),
+            Self::Copilot(reader) => reader.ingest(record),
         }
     }
 
@@ -297,6 +303,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.snapshot(),
             Self::Cline(reader) => reader.snapshot(),
             Self::Amp(reader) => reader.snapshot(),
+            Self::Copilot(reader) => reader.snapshot(),
         }
     }
 
@@ -304,7 +311,11 @@ impl ResponseReader {
         match self {
             Self::Claude(_) => Ok(()),
             Self::Codex(reader) => reader.finish(),
-            Self::Gemini(_) | Self::Cursor(_) | Self::Cline(_) | Self::Amp(_) => Ok(()),
+            Self::Gemini(_)
+            | Self::Cursor(_)
+            | Self::Cline(_)
+            | Self::Amp(_)
+            | Self::Copilot(_) => Ok(()),
         }
     }
 
@@ -316,6 +327,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.has_supported_usage(),
             Self::Cline(reader) => reader.has_supported_usage(),
             Self::Amp(reader) => reader.has_supported_usage(),
+            Self::Copilot(reader) => reader.has_supported_usage(),
         }
     }
 }
@@ -606,6 +618,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Amp(Box::new(
                     AmpReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::CopilotJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Copilot(Box::new(
+                    CopilotReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::SessionArchiveSqlite

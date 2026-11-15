@@ -264,6 +264,27 @@ fn goose_database(path: &Path) {
         .unwrap();
 }
 
+fn copilot_otel_bytes(session: &str) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&serde_json::json!({
+        "type": "span",
+        "traceId": "trace-1",
+        "spanId": "span-1",
+        "name": "chat gpt-5",
+        "startTime": "2026-11-13T10:00:00Z",
+        "attributes": {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.response.model": "gpt-5",
+            "gen_ai.conversation.id": session,
+            "gen_ai.response.id": "resp-1",
+            "gen_ai.usage.input_tokens": 10,
+            "gen_ai.usage.output_tokens": 4
+        }
+    }))
+    .unwrap();
+    bytes.push(b'\n');
+    bytes
+}
+
 fn codex_rollout(session: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in [
@@ -923,6 +944,25 @@ fn goose_database_uses_the_first_existing_or_authoritative_override() {
     let report = discover(&paths).unwrap();
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.sources[0].format, SourceFormat::GooseSqlite);
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn copilot_otel_jsonl_is_discovered_under_the_otel_role() {
+    let tree = Tree::new();
+    tree.file(
+        ".copilot/otel/copilot-otel.jsonl",
+        &copilot_otel_bytes("copilot-session"),
+    );
+    tree.file(".copilot/otel/ignored.json", b"{}");
+
+    let mut paths = tree.paths(&["copilot"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::CopilotJsonl);
+    assert_eq!(report.sources[0].session, "copilot-session");
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());

@@ -767,7 +767,8 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
     [
-        "amp", "claude", "cline", "codex", "cursor", "gemini", "goose", "kilo", "opencode",
+        "amp", "claude", "cline", "codex", "copilot", "cursor", "gemini", "goose", "kilo",
+        "opencode",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
@@ -824,6 +825,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "claude"
             | "cline"
             | "codex"
+            | "copilot"
             | "cursor"
             | "gemini"
             | "goose"
@@ -836,7 +838,16 @@ fn is_selectable_source_client(client: &str) -> bool {
 fn is_supported_client(client: &str) -> bool {
     matches!(
         client,
-        "amp" | "claude" | "cline" | "codex" | "cursor" | "gemini" | "goose" | "kilo" | "opencode"
+        "amp"
+            | "claude"
+            | "cline"
+            | "codex"
+            | "copilot"
+            | "cursor"
+            | "gemini"
+            | "goose"
+            | "kilo"
+            | "opencode"
     )
 }
 
@@ -846,6 +857,7 @@ fn client_label(client: &str) -> &'static str {
         "claude" => "Claude CLI",
         "cline" => "Cline",
         "codex" => "Codex CLI",
+        "copilot" => "GitHub Copilot",
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
         "goose" => "Goose",
@@ -1253,6 +1265,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::ClaudeCli => "Claude CLI",
         SourceFormat::AmpJson => "Amp",
         SourceFormat::ClineJson => "Cline",
+        SourceFormat::CopilotJsonl => "GitHub Copilot",
         SourceFormat::CodexCli => "Codex CLI",
         SourceFormat::CursorCacheJson => "Cursor",
         SourceFormat::GeminiTranscript => "Gemini CLI",

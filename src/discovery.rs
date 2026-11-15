@@ -1076,6 +1076,58 @@ fn goose_database_path(inputs: &HostPaths) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
+fn collect_copilot_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_copilot_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn collect_gemini_candidates(
     root: &Path,
     directory: &Path,
@@ -1551,6 +1603,61 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "copilot" {
+            let root = join_many(inputs.platform, &inputs.home, &[".copilot", "otel"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_copilot_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+                continue;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (index, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    return Ok(sources);
+                }
+                let ordinal = index + 1;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "copilot",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "copilot",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match validate_source(&path, SourceFormat::CopilotJsonl, metadata.len()) {
+                    Ok(session) => {
+                        let source_id = source_id_for(SourceFormat::CopilotJsonl, &path);
+                        if admitted_ids.insert(source_id) {
+                            sources.push(DiscoveredSource {
+                                source_id,
+                                format: SourceFormat::CopilotJsonl,
+                                session,
+                                path,
+                            });
+                        } else {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        }
+                    }
+                    Err(()) => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "copilot",
+                        ordinal,
+                    }),
+                }
+            }
+            continue;
+        }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
                 "claude",
@@ -1827,6 +1934,21 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .and_then(Value::as_str),
                 SourceFormat::ClineJson => value.get("sessionId").and_then(Value::as_str),
                 SourceFormat::AmpJson => value.get("id").and_then(Value::as_str),
+                SourceFormat::CopilotJsonl => value
+                    .get("attributes")
+                    .and_then(Value::as_object)
+                    .and_then(|attributes| {
+                        [
+                            "gen_ai.conversation.id",
+                            "copilot_chat.session_id",
+                            "copilot_chat.chat_session_id",
+                            "session.id",
+                            "github.copilot.interaction_id",
+                        ]
+                        .iter()
+                        .find_map(|key| attributes.get(*key).and_then(Value::as_str))
+                    })
+                    .or_else(|| value.get("traceId").and_then(Value::as_str)),
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -1855,6 +1977,14 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .ok_or(());
     }
     if format == SourceFormat::AmpJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    if format == SourceFormat::CopilotJsonl {
         return path
             .file_stem()
             .and_then(|stem| stem.to_str())

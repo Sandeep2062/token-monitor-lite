@@ -288,6 +288,7 @@ pub enum InputAdapterStatus {
     CursorCacheJson,
     ClineJson,
     AmpJson,
+    CopilotJsonl,
     CompressedCodexJsonl,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
@@ -392,6 +393,7 @@ pub enum SourceInput {
     Cursor(CursorInput),
     Cline(DocumentInput),
     Amp(DocumentInput),
+    Copilot(OrdinaryJsonlInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
     SessionArchive(SessionArchiveAdapter),
     CodexLocalUsage(CodexLocalUsageAdapter),
@@ -420,6 +422,7 @@ impl SourceInput {
             SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::ClineJson => Self::document(path),
             SourceFormat::AmpJson => Self::amp(path),
+            SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodexCli if is_compressed_source_path(&path) => {
                 Self::compressed_jsonl(path)
             }
@@ -483,6 +486,13 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn copilot(path: PathBuf) -> Self {
+        Self::Copilot(OrdinaryJsonlInput {
+            path,
+            cursor: JsonlCursor::default(),
+        })
+    }
+
     pub fn status(&self) -> InputAdapterStatus {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
@@ -490,6 +500,7 @@ impl SourceInput {
             Self::Cursor(_) => InputAdapterStatus::CursorCacheJson,
             Self::Cline(_) => InputAdapterStatus::ClineJson,
             Self::Amp(_) => InputAdapterStatus::AmpJson,
+            Self::Copilot(_) => InputAdapterStatus::CopilotJsonl,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
             Self::SessionArchive(_) => InputAdapterStatus::SessionArchiveSqlite,
             Self::CodexLocalUsage(_) => InputAdapterStatus::CodexLocalUsageSqlite,
@@ -506,6 +517,7 @@ impl SourceInput {
             Self::Cursor(input) => input.reset(),
             Self::Cline(input) => input.reset(),
             Self::Amp(input) => input.reset(),
+            Self::Copilot(input) => input.cursor.reset(),
             Self::CompressedJsonl(input) => input.reset(),
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
@@ -522,6 +534,7 @@ impl SourceInput {
             Self::Cursor(input) => input.is_current(),
             Self::Cline(input) => input.is_current(),
             Self::Amp(input) => input.is_current(),
+            Self::Copilot(input) => input.cursor.is_current(&input.path),
             Self::CompressedJsonl(input) => input.is_current(),
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)
@@ -547,6 +560,7 @@ impl SourceInput {
             | Self::Cursor(_)
             | Self::Cline(_)
             | Self::Amp(_)
+            | Self::Copilot(_)
             | Self::CompressedJsonl(_) => Ok(None),
         }
     }
@@ -558,6 +572,7 @@ impl SourceInput {
             Self::Cursor(input) => Some(&input.path),
             Self::Cline(input) => Some(&input.path),
             Self::Amp(input) => Some(&input.path),
+            Self::Copilot(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
             Self::SessionArchive(adapter) => Some(adapter.path()),
             Self::CodexLocalUsage(adapter) => Some(adapter.path()),
@@ -584,6 +599,17 @@ impl SourceInput {
             Self::Cursor(input) => input.read_batch(),
             Self::Cline(input) => input.read_batch(),
             Self::Amp(input) => input.read_batch(),
+            Self::Copilot(input) => {
+                let batch = input.cursor.read_batch(&input.path)?;
+                Ok(InputBatch {
+                    records: batch.records,
+                    physical_bytes_read: batch.bytes_read,
+                    decoded_bytes_read: batch.bytes_read,
+                    reset: batch.reset,
+                    incomplete_tail: batch.incomplete_tail,
+                    more_available: batch.more_available,
+                })
+            }
             Self::CompressedJsonl(input) => input.read_batch(),
             Self::SessionArchive(_)
             | Self::CodexLocalUsage(_)

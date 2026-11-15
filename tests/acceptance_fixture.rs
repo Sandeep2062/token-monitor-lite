@@ -159,6 +159,7 @@ impl Fixture {
                 "claude".to_owned(),
                 "cline".to_owned(),
                 "codex".to_owned(),
+                "copilot".to_owned(),
                 "cursor".to_owned(),
                 "gemini".to_owned(),
                 "goose".to_owned(),
@@ -217,6 +218,7 @@ fn source_format(format: &str) -> SourceFormat {
         "amp-json" => SourceFormat::AmpJson,
         "kilo-sqlite" => SourceFormat::KiloSqlite,
         "goose-sqlite" => SourceFormat::GooseSqlite,
+        "copilot-jsonl" => SourceFormat::CopilotJsonl,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -313,7 +315,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 26),
+            ("codex-cli".to_owned(), 25),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
@@ -322,6 +324,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("amp-json".to_owned(), 1),
             ("kilo-sqlite".to_owned(), 1),
             ("goose-sqlite".to_owned(), 1),
+            ("copilot-jsonl".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])
