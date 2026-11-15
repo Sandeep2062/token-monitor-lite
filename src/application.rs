@@ -1148,6 +1148,7 @@ fn source_client(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "claude",
         SourceFormat::AmpJson => "amp",
+        SourceFormat::DroidJson => "droid",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
         SourceFormat::ClineJson => "cline",
         SourceFormat::CopilotJsonl => "copilot",

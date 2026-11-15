@@ -224,6 +224,19 @@ OpenClaw keeps transcripts in two stores that share one event shape (`{"type":"m
 | `event_zstd` payload above the 4 MiB declared length, or a decoded length that disagrees with `event_utf8_bytes` | visible unsupported | Refused before allocating. |
 | `session_windows` provider/model fallback, the Codex rollout lane and mirror replacement, `/fork` copy collapse, `.zst` transcript archives, WAL-active stores | visible unsupported / ignored | The native reader requires each event to name its own model rather than borrowing a session's current route, and does not read agent-owned Codex rollouts. |
 
+## Droid matrix
+
+Droid writes one `<uuid>.settings.json` per session under `~/.factory/sessions/`, carrying the session's cumulative `tokenUsage`. Its `.jsonl` transcript beside that file records when replies happened but never how many tokens each cost.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `*.settings.json` with a `tokenUsage` block, a model, and non-zero counters | supported | **One** observation carrying the session's cumulative totals: `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens` and `thinkingTokens` map to input, output, cache read, cache write and reasoning. Cost is unavailable. | Session is the file stem before `.settings`; identity `droid:<session>`. |
+| Model spelled Droid-style (`custom:Claude-Opus-4.5-Thinking-[Anthropic]-0`) | supported | Normalized exactly as the pinned reader does: `custom:` dropped, `[...]` removed, trailing hyphens trimmed, lowercased, dots to hyphens, hyphen runs collapsed. `providerLock` names the provider; otherwise the model family does (`claude`/`opus`/`sonnet`/`haiku` → anthropic, `gpt`/`o1`/`o3` → openai, `gemini` → google), else `unknown`. |
+| Missing or all-zero `tokenUsage` | ignored non-usage | No row. |
+| Negative counter | visible unsupported | Discard the candidate rather than clamp. |
+| Missing model, or no usable timestamp | visible unsupported | Discard the candidate. The file mtime anchors the record, floored by `providerLockTimestamp` (usage cannot predate provider selection, and a rewound mtime must not place it earlier). |
+| Per-reply apportioning across `.jsonl` replies, `effectiveFactoryRouterModel` for `auto`, JSONL model extraction, cost | visible unsupported | The pinned reader splits the cumulative total across replies by context/output byte weight. The native reader reports the **identical total** as one record — the pinned reader's own fallback when no transcript is readable — and therefore loses only per-reply date resolution, never token magnitude. |
+
 ## Copilot OTel matrix
 
 The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Each line must carry its own `attributes`; cross-line trace enrichment and VS Code session-state stores are not implemented. A file that mixes chat spans, inference logs, agent-turn logs and agent summary spans uses only the highest-priority source present, preventing one turn from being counted twice.

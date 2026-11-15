@@ -14,6 +14,7 @@ use crate::parsers::{
     codex::CodexReader,
     copilot::CopilotReader,
     cursor::CursorReader,
+    droid::DroidReader,
     gemini::GeminiReader,
     mcode::McodeReader,
     muse::MuseReader,
@@ -43,6 +44,7 @@ pub enum SourceFormat {
     CursorCacheJson,
     ClineJson,
     AmpJson,
+    DroidJson,
     CopilotJsonl,
     CodeBuddyJsonl,
     WorkBuddyJsonl,
@@ -76,6 +78,7 @@ impl SourceFormat {
             Self::CursorCacheJson => "cursor",
             Self::ClineJson => "cline",
             Self::AmpJson => "amp",
+            Self::DroidJson => "droid",
             Self::CopilotJsonl => "copilot",
             Self::CodeBuddyJsonl => "codebuddy",
             Self::WorkBuddyJsonl => "workbuddy",
@@ -107,6 +110,7 @@ impl SourceFormat {
             Self::CursorCacheJson => "cursor-cache-json",
             Self::ClineJson => "cline-json",
             Self::AmpJson => "amp-json",
+            Self::DroidJson => "droid-json",
             Self::CopilotJsonl => "copilot-jsonl",
             Self::CodeBuddyJsonl => "codebuddy-jsonl",
             Self::WorkBuddyJsonl => "workbuddy-jsonl",
@@ -140,6 +144,7 @@ impl SourceFormat {
             "cursor-cache-json" => Some(Self::CursorCacheJson),
             "cline-json" => Some(Self::ClineJson),
             "amp-json" => Some(Self::AmpJson),
+            "droid-json" => Some(Self::DroidJson),
             "copilot-jsonl" => Some(Self::CopilotJsonl),
             "codebuddy-jsonl" => Some(Self::CodeBuddyJsonl),
             "workbuddy-jsonl" => Some(Self::WorkBuddyJsonl),
@@ -364,6 +369,7 @@ enum ResponseReader {
     Cursor(Box<CursorReader>),
     Cline(Box<ClineReader>),
     Amp(Box<AmpReader>),
+    Droid(Box<DroidReader>),
     Copilot(Box<CopilotReader>),
     CodeBuddy(Box<CodeBuddyReader>),
     CodeBuddyLog(Box<CodeBuddyLogReader>),
@@ -388,6 +394,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.ingest(record),
             Self::Cline(reader) => reader.ingest(record),
             Self::Amp(reader) => reader.ingest(record),
+            Self::Droid(reader) => reader.ingest(record),
             Self::Copilot(reader) => reader.ingest(record),
             Self::CodeBuddy(reader) => reader.ingest(record),
             Self::CodeBuddyLog(reader) => reader.ingest(record),
@@ -412,6 +419,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.snapshot(),
             Self::Cline(reader) => reader.snapshot(),
             Self::Amp(reader) => reader.snapshot(),
+            Self::Droid(reader) => reader.snapshot(),
             Self::Copilot(reader) => reader.snapshot(),
             Self::CodeBuddy(reader) => reader.snapshot(),
             Self::CodeBuddyLog(reader) => reader.snapshot(),
@@ -436,6 +444,7 @@ impl ResponseReader {
             | Self::Cursor(_)
             | Self::Cline(_)
             | Self::Amp(_)
+            | Self::Droid(_)
             | Self::Copilot(_)
             | Self::CodeBuddy(_)
             | Self::CodeBuddyLog(_)
@@ -460,6 +469,7 @@ impl ResponseReader {
             Self::Cursor(reader) => reader.has_supported_usage(),
             Self::Cline(reader) => reader.has_supported_usage(),
             Self::Amp(reader) => reader.has_supported_usage(),
+            Self::Droid(reader) => reader.has_supported_usage(),
             Self::Copilot(reader) => reader.has_supported_usage(),
             Self::CodeBuddy(reader) => reader.has_supported_usage(),
             Self::CodeBuddyLog(reader) => reader.has_supported_usage(),
@@ -763,6 +773,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Amp(Box::new(
                     AmpReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::DroidJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Droid(Box::new(
+                    DroidReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::CopilotJsonl => {

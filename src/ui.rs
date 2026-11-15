@@ -802,6 +802,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "codebuddy",
         "codex",
         "copilot",
+        "droid",
         "cursor",
         "gemini",
         "goose",
@@ -878,6 +879,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "codex"
             | "copilot"
             | "cursor"
+            | "droid"
             | "gemini"
             | "goose"
             | "hermes"
@@ -908,6 +910,7 @@ fn is_supported_client(client: &str) -> bool {
             | "codex"
             | "copilot"
             | "cursor"
+            | "droid"
             | "gemini"
             | "goose"
             | "hermes"
@@ -935,6 +938,7 @@ fn client_label(client: &str) -> &'static str {
         "codebuddy" => "CodeBuddy",
         "codex" => "Codex CLI",
         "copilot" => "GitHub Copilot",
+        "droid" => "Droid",
         "cursor" => "Cursor",
         "gemini" => "Gemini CLI",
         "goose" => "Goose",
@@ -1379,6 +1383,7 @@ fn source_format(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "Claude CLI",
         SourceFormat::AmpJson => "Amp",
+        SourceFormat::DroidJson => "Droid",
         SourceFormat::ClineJson => "Cline",
         SourceFormat::CopilotJsonl => "GitHub Copilot",
         SourceFormat::CodexCli => "Codex CLI",

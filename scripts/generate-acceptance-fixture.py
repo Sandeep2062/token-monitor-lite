@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 31
+CLAUDE_SOURCES = 30
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -62,6 +62,7 @@ KILO_SOURCES = 1
 GOOSE_SOURCES = 1
 HERMES_SOURCES = 1
 OPENCLAW_SOURCES = 1
+DROID_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -76,7 +77,7 @@ MCODE_SOURCES = 1
 ZED_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
-EXTRA_CLAUDE_OBSERVATIONS = 18
+EXTRA_CLAUDE_OBSERVATIONS = 27
 SOURCE_COUNT = (
     CLAUDE_SOURCES
     + CODEX_SOURCES
@@ -90,6 +91,7 @@ SOURCE_COUNT = (
     + GOOSE_SOURCES
     + HERMES_SOURCES
     + OPENCLAW_SOURCES
+    + DROID_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -990,6 +992,36 @@ def _openclaw_database(path: Path) -> tuple[str, dict[str, int], int]:
     return session, totals, len(rows)
 
 
+def _droid_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Droid `*.settings.json` document: a single cumulative usage block."""
+    session = "droid-fixture-000"
+    totals = _counts()
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 300,
+            "output": 60,
+            "cacheRead": 15,
+            "cacheWrite": 5,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+
+    document = {
+        "model": "claude-sonnet-4-5",
+        "providerLock": "anthropic",
+        "tokenUsage": {
+            "inputTokens": totals["input"],
+            "outputTokens": totals["output"],
+            "cacheCreationTokens": totals["cacheWrite"],
+            "cacheReadTokens": totals["cacheRead"],
+            "thinkingTokens": totals["reasoning"],
+        },
+    }
+    data = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    # One document is one observation, however many replies it stands for.
+    return session, data, totals, 1
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -1820,6 +1852,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, openclaw_totals)
     physical_bytes += openclaw_target.stat().st_size
     decoded_bytes += openclaw_target.stat().st_size
+
+    droid_session, droid_data, droid_totals, droid_rows = _droid_source()
+    droid_entry = _source_entry(
+        root,
+        f"home/.factory/sessions/{droid_session}.settings.json",
+        droid_data,
+        format_name="droid-json",
+        session=droid_session,
+        observations=droid_rows,
+        canonical_sessions=1,
+        expected_totals=droid_totals,
+        physical_bytes=len(droid_data),
+    )
+    sources.append(droid_entry)
+    _add_counts(aggregate, droid_totals)
+    _add_counts(canonical_aggregate, droid_totals)
+    physical_bytes += len(droid_data)
+    decoded_bytes += len(droid_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

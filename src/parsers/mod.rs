@@ -8,6 +8,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;
+pub mod droid;
 pub mod gemini;
 pub mod goose;
 pub mod hermes;

@@ -2441,6 +2441,15 @@ fn discover_sources_with_id(
                 SourceFormat::McodeJsonl,
                 mcode_session_roots(inputs),
             ),
+            "droid" => (
+                "droid",
+                SourceFormat::DroidJson,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".factory", "sessions"],
+                )],
+            ),
             _ => {
                 notices.push(DiscoveryNotice::UnsupportedClient {
                     client: redacted_client_id(client),
@@ -2746,6 +2755,7 @@ fn collect_source_candidates(
                 || extension
                     .to_str()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("zst"))
+                || extension == "json"
         }) {
             candidates.push(child);
         }
@@ -2876,6 +2886,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // OpenClaw's session is the transcript's file stem, which the
                 // caller already knows; the event stream carries no session id.
                 SourceFormat::OpenClawJsonl => None,
+                // Droid's session is the `<uuid>` stem of
+                // `<uuid>.settings.json`; the settings document names none.
+                SourceFormat::DroidJson => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -2922,6 +2935,17 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    // `<uuid>.settings.json` holds the session's cumulative usage, so the
+    // session id keeps the stem before `.settings`.
+    if format == SourceFormat::DroidJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.strip_suffix(".settings"))
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or(());
     }
