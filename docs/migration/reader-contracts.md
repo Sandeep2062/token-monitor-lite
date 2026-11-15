@@ -300,6 +300,32 @@ A snapshot carries both a per-model breakdown and top-level session aggregates. 
 | Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 | Sibling `session.json`, shared `index.json`, and the global `usage.jsonl` | visible unsupported | Not read. The first two are cross-file reads a per-source byte reader cannot perform, so the timestamp falls back to the usage file's mtime and no workspace or title is reported; the global stream carries no session id or workspace, exactly as the pinned reader declines it. | No source slot. |
 
+## Mistral Vibe matrix
+
+Mistral Vibe (Mistral AI's terminal coding agent) stores session logs under `~/.vibe/logs/session/` (or `$VIBE_HOME/logs/session/`): a `session_YYYYMMDD_HHMMSS_<id>/meta.json` for Vibe 2.x, or a flat `session_*.json` for 1.x whose record sits under a `metadata` key. The tracked client id is `mistral`; the pinned reader calls the format `vibe`.
+
+A Vibe transcript carries no per-message model, timestamp or token counts, so **one observation per session is the finest row the format supports**. That is a property of the file, not a limitation of this reader.
+
+`session_cached_tokens` is a **subset** of `session_prompt_tokens`, not an addition: upstream types the field that way and its own cost function subtracts the cached count before charging the input rate. So the split is `input = prompt - cached`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `meta.json` `stats` (Vibe 2.x) | supported | One observation: `input = prompt - cached`, `output = completion`, `cache_read = cached`. `cache_write` and `reasoning` are never recorded and stay zero. | Session is the record's `session_id`, else the caller's directory-derived one. |
+| Flat `session_*.json` with a top-level `metadata` object (Vibe 1.x) | supported | Same accounting; the record is read from inside `metadata`. | As above. |
+| Cached count larger than the prompt | clamped | `input` floors at zero and `cache_read` keeps its value, so the two still reflect what was recorded. | As above. |
+| A document with no `stats` | ignored non-usage | Nothing to attribute. | No source slot. |
+| All-zero statistics | ignored non-usage | No observation. | No source slot. |
+| `config.active_model` set | supported | Used verbatim. | As above. |
+| `config.active_model` blank | supported, falls through | Upstream's explicit "unpinned" sentinel meaning "follow the configured default". Accepting it would leave the model blank and price the session at zero. | As above. |
+| `config.models` with one entry | supported | Uses the record's `alias`, or its map key when the alias is blank. | As above. |
+| `config.models` with several entries and nothing pinned | supported | Deterministic: the published `mistral-medium-latest` default if present, else the first alias in sorted order — never map iteration order. | As above. |
+| Nothing pinned and no `config.models` | supported | The published `mistral-medium-latest` default alias. | As above. |
+| `end_time` / `start_time` | supported | `end_time` wins, then `start_time`, then the file mtime. | As above. |
+| `origin_directory`, or `environment.working_directory` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
+| `title` | supported | Presentation metadata only; never persisted. | As above. |
+| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| `message_count`, provider inference | not implemented | This codebase's observation has no message-count field, and no provider hint is emitted rather than attributing the session to `mistral`. | No source slot. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

@@ -93,7 +93,7 @@ fn import(run_id: &str) -> ValidatedImport {
 fn schema_v6_enables_foreign_keys_and_has_no_secret_or_source_path_columns() {
     let tree = NativeTree::new();
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 33);
+    assert_eq!(snapshot.schema_version, 34);
     assert!(snapshot.foreign_keys_enabled);
     store.shutdown().unwrap();
 
@@ -187,7 +187,7 @@ fn schema_v1_upgrades_directly_to_v3_without_losing_committed_operations() {
     drop(connection);
 
     let (store, snapshot) = StoreHandle::open(tree.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 33);
+    assert_eq!(snapshot.schema_version, 34);
     assert!(snapshot.pending_credential_imports.is_empty());
     assert_eq!(snapshot.credential_operations.len(), 1);
     assert_eq!(
@@ -464,7 +464,7 @@ fn version_zero_migrates_after_backup_and_future_schema_is_untouched() {
         .close()
         .unwrap();
     let (store, snapshot) = StoreHandle::open(version_zero.paths()).unwrap();
-    assert_eq!(snapshot.schema_version, 33);
+    assert_eq!(snapshot.schema_version, 34);
     store.shutdown().unwrap();
     assert!(
         fs::read_dir(version_zero.native_root().join(BACKUP_DIRECTORY_NAME))
@@ -498,7 +498,7 @@ fn backup_is_verified_and_a_pre_rename_failure_keeps_active_data_usable() {
         .save_settings(0, settings(br#"{"unknown":"retained"}"#))
         .unwrap();
     let backup = store.create_backup().unwrap();
-    assert_eq!(backup.schema_version, 33);
+    assert_eq!(backup.schema_version, 34);
     assert_eq!(backup.settings_revision, 1);
     let backup_path = tree
         .native_root()

@@ -24,6 +24,7 @@ use crate::parsers::{
     kiro::KiroReader,
     lmstudio::LmstudioReader,
     mcode::McodeReader,
+    mistral::VibeReader,
     muse::MuseReader,
     omp::OmpReader,
     openclaw::OpenClawReader,
@@ -82,6 +83,7 @@ pub enum SourceFormat {
     UnslothSqlite,
     DevinSqlite,
     FxUsageJson,
+    VibeJson,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -132,6 +134,7 @@ impl SourceFormat {
             Self::UnslothSqlite => "unsloth",
             Self::DevinSqlite => "devin",
             Self::FxUsageJson => "fx",
+            Self::VibeJson => "mistral",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
             Self::AntigravitySqlite => "antigravity",
@@ -181,6 +184,7 @@ impl SourceFormat {
             Self::UnslothSqlite => "unsloth-sqlite",
             Self::DevinSqlite => "devin-sqlite",
             Self::FxUsageJson => "fx-usage-json",
+            Self::VibeJson => "vibe-json",
             Self::OpenClawJsonl => "openclaw-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
@@ -232,6 +236,7 @@ impl SourceFormat {
             "unsloth-sqlite" => Some(Self::UnslothSqlite),
             "devin-sqlite" => Some(Self::DevinSqlite),
             "fx-usage-json" => Some(Self::FxUsageJson),
+            "vibe-json" => Some(Self::VibeJson),
             "openclaw-jsonl" => Some(Self::OpenClawJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
@@ -456,6 +461,7 @@ enum ResponseReader {
     Kiro(Box<KiroReader>),
     Lmstudio(Box<LmstudioReader>),
     Fx(Box<FxReader>),
+    Vibe(Box<VibeReader>),
     Proma(Box<PromaReader>),
     Kimi(Box<KimiReader>),
     CommandCode(Box<CommandCodeReader>),
@@ -491,6 +497,7 @@ impl ResponseReader {
             Self::Kiro(reader) => reader.ingest(record),
             Self::Lmstudio(reader) => reader.ingest(record),
             Self::Fx(reader) => reader.ingest(record),
+            Self::Vibe(reader) => reader.ingest(record),
             Self::Proma(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
             Self::CommandCode(reader) => reader.ingest(record),
@@ -526,6 +533,7 @@ impl ResponseReader {
             Self::Kiro(reader) => reader.snapshot(),
             Self::Lmstudio(reader) => reader.snapshot(),
             Self::Fx(reader) => reader.snapshot(),
+            Self::Vibe(reader) => reader.snapshot(),
             Self::Proma(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
             Self::CommandCode(reader) => reader.snapshot(),
@@ -580,7 +588,8 @@ impl ResponseReader {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Lmstudio(_)
-            | Self::Fx(_) => Ok(()),
+            | Self::Fx(_)
+            | Self::Vibe(_) => Ok(()),
         }
     }
 
@@ -596,6 +605,7 @@ impl ResponseReader {
             Self::Kiro(reader) => reader.has_supported_usage(),
             Self::Lmstudio(reader) => reader.has_supported_usage(),
             Self::Fx(reader) => reader.has_supported_usage(),
+            Self::Vibe(reader) => reader.has_supported_usage(),
             Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
@@ -930,6 +940,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Fx(Box::new(
                     FxReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::VibeJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Vibe(Box::new(
+                    VibeReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::PromaJsonl => {

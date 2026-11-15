@@ -2713,6 +2713,77 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "mistral" {
+            // Mistral Vibe stores session logs under `~/.vibe/logs/session/`
+            // (or `$VIBE_HOME/logs/session/`): a `session_*/` directory with a
+            // `meta.json` for Vibe 2.x, or a flat `session_*.json` for 1.x.
+            let root = match inputs.env_paths.get("VIBE_HOME") {
+                Some(home) if !home.as_os_str().is_empty() => {
+                    join_many(inputs.platform, home, &["logs", "session"])
+                }
+                _ => join_many(inputs.platform, &inputs.home, &[".vibe", "logs", "session"]),
+            };
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            let mut meta_files = Vec::new();
+            let mut flat_files = Vec::new();
+            for path in candidates {
+                let name = path.file_name().and_then(|name| name.to_str());
+                if name == Some("meta.json") {
+                    meta_files.push(path);
+                } else if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+                    && name
+                        .is_some_and(|name| name.starts_with("session_") && name.ends_with(".json"))
+                {
+                    flat_files.push(path);
+                }
+            }
+            meta_files.sort();
+            flat_files.sort();
+            for (ordinal, path) in meta_files.into_iter().chain(flat_files).enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::VibeJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "mistral",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::VibeJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::VibeJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "dsh" {
             // DSH writes one transcript per session under
             // `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl`
@@ -3749,6 +3820,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::DevinSqlite => None,
                 // fx names its session in the snapshot, else the directory.
                 SourceFormat::FxUsageJson => None,
+                // Vibe names its session inside the metadata document.
+                SourceFormat::VibeJson => None,
                 // Qoder CN names its session inside the record; the caller
                 // derives one from the <slug>/<session>.jsonl path when absent.
                 SourceFormat::QodercnJsonl => None,
@@ -3836,6 +3909,24 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
             .map(str::to_owned)
+            .ok_or(());
+    }
+    // `~/.vibe/logs/session/session_*/meta.json`: the session is the containing
+    // directory. A flat legacy `session_*.json` names it by stem instead.
+    if format == SourceFormat::VibeJson {
+        return path
+            .parent()
+            .filter(|parent| parent.file_name().and_then(|name| name.to_str()) != Some("session"))
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .or_else(|| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+                    .map(str::to_owned)
+            })
             .ok_or(());
     }
     // `~/.fx/sessions/<session-id>/usage-v2.json`: the session is the containing

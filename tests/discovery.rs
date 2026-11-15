@@ -292,6 +292,43 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn mistral_vibe_sessions_are_discovered_from_both_layouts() {
+    let tree = Tree::new();
+    // Vibe 2.x: a `session_*/` directory with a `meta.json`.
+    tree.file(
+        ".vibe/logs/session/session_20260709_110000_abc/meta.json",
+        br#"{"session_id":"vibe-2","stats":{"session_prompt_tokens":100,"session_completion_tokens":20}}"#,
+    );
+    // `messages.jsonl` beside it is not a source.
+    tree.file(
+        ".vibe/logs/session/session_20260709_110000_abc/messages.jsonl",
+        b"{\"role\":\"user\"}\n",
+    );
+    // Vibe 1.x: the flat `session_*.json`.
+    tree.file(
+        ".vibe/logs/session/session_20260708_090000_def.json",
+        br#"{"metadata":{"session_id":"vibe-1","stats":{"session_prompt_tokens":50,"session_completion_tokens":10}}}"#,
+    );
+
+    let report = discover(&tree.paths(&["mistral"])).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::VibeJson)
+    );
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::VibeJson)
+    );
+}
+
+#[test]
 fn fx_session_snapshots_are_discovered_under_the_sessions_role() {
     let tree = Tree::new();
     tree.file(

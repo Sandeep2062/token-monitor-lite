@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 16
+CLAUDE_SOURCES = 15
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -77,6 +77,7 @@ LMSTUDIO_SOURCES = 1
 UNSLOTH_SOURCES = 1
 DEVIN_SOURCES = 1
 FX_SOURCES = 1
+MISTRAL_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -91,7 +92,7 @@ MCODE_SOURCES = 1
 ZED_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
-EXTRA_CLAUDE_OBSERVATIONS = 27
+EXTRA_CLAUDE_OBSERVATIONS = 36
 SOURCE_COUNT = (
     CLAUDE_SOURCES
     + CODEX_SOURCES
@@ -120,6 +121,7 @@ SOURCE_COUNT = (
     + UNSLOTH_SOURCES
     + DEVIN_SOURCES
     + FX_SOURCES
+    + MISTRAL_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1340,7 +1342,43 @@ def _lmstudio_source() -> tuple[str, bytes, dict[str, int], int]:
     return session, "".join(blocks).encode(), totals, OBSERVATIONS_PER_JSONL
 
 
+def _mistral_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Vibe 2.x session: session-granular usage from `meta.json`.
+
+    Vibe records cumulative session statistics rather than per-message counts,
+    so one `meta.json` yields exactly one observation — that is the finest row
+    the format supports, not a fixture shortcut. The recorded prompt count
+    includes the cached subset, and the reader subtracts it back out.
+    """
+    counts = {
+        "input": 140,
+        "output": 28,
+        "cacheRead": 12,
+        "cacheWrite": 0,
+        "reasoning": 0,
+    }
+    totals = _counts()
+    _add_counts(totals, counts)
+    document = {
+        "session_id": "mistral-fixture-000",
+        "config": {"active_model": "mistral-medium-latest"},
+        "stats": {
+            "session_prompt_tokens": counts["input"] + counts["cacheRead"],
+            "session_completion_tokens": counts["output"],
+            "session_cached_tokens": counts["cacheRead"],
+        },
+    }
+    return (
+        "session_20260709_110000_fixture",
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode(),
+        totals,
+        1,
+    )
+
+
 def _fx_source() -> tuple[str, bytes, dict[str, int], int]:
+
+
     """One fx session snapshot: one per-model entry per observation.
 
     fx aggregates per-request usage into a session snapshot, so each model entry
@@ -2896,6 +2934,24 @@ def generate(raw_root: str) -> Path:
     physical_bytes += len(fx_data)
     decoded_bytes += len(fx_data)
 
+    mistral_path, mistral_data, mistral_totals, mistral_rows = _mistral_source()
+    mistral_entry = _source_entry(
+        root,
+        f"home/.vibe/logs/session/{mistral_path}/meta.json",
+        mistral_data,
+        format_name="vibe-json",
+        session=mistral_path,
+        observations=mistral_rows,
+        canonical_sessions=1,
+        expected_totals=mistral_totals,
+        physical_bytes=len(mistral_data),
+    )
+    sources.append(mistral_entry)
+    _add_counts(aggregate, mistral_totals)
+    _add_counts(canonical_aggregate, mistral_totals)
+    physical_bytes += len(mistral_data)
+    decoded_bytes += len(mistral_data)
+
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(
         root,
@@ -3009,7 +3065,14 @@ def generate(raw_root: str) -> Path:
         or observations - overlap_observations != CANONICAL_OBSERVATIONS
         or retained_periods != ARCHIVE_SESSIONS * 3
     ):
-        raise ValueError("generated fixture does not match its declared counts")
+        raise ValueError(
+            "generated fixture does not match its declared counts: "
+            f"sources={len(sources)}/{SOURCE_COUNT} "
+            f"sessions={canonical_sessions}/{CANONICAL_SESSIONS} "
+            f"observations={observations}-{overlap_observations}="
+            f"{observations - overlap_observations}/{CANONICAL_OBSERVATIONS} "
+            f"retained={retained_periods}/{ARCHIVE_SESSIONS * 3}"
+        )
 
     manifest = {
         "schema": SCHEMA,

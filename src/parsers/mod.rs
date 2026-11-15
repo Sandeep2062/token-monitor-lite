@@ -26,6 +26,7 @@ pub mod kiro;
 pub mod lmstudio;
 pub mod mcode;
 pub mod mimo;
+pub mod mistral;
 pub mod muse;
 pub mod omp;
 pub mod openclaw;

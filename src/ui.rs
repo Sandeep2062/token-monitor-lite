@@ -821,6 +821,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "unsloth",
         "devin",
         "fx",
+        "mistral",
         "qodercn",
         "dsh",
         "lmstudio",
@@ -912,6 +913,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "unsloth"
             | "devin"
             | "fx"
+            | "mistral"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -958,6 +960,7 @@ fn is_supported_client(client: &str) -> bool {
             | "unsloth"
             | "devin"
             | "fx"
+            | "mistral"
             | "qodercn"
             | "dsh"
             | "lmstudio"
@@ -1002,6 +1005,7 @@ fn client_label(client: &str) -> &'static str {
         "unsloth" => "Unsloth",
         "devin" => "Devin",
         "fx" => "fx",
+        "mistral" => "Mistral Vibe",
         "qodercn" => "Qoder CN",
         "dsh" => "DeepSeek Harness",
         "lmstudio" => "LM Studio",
@@ -1477,6 +1481,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::UnslothSqlite => "Unsloth",
         SourceFormat::DevinSqlite => "Devin",
         SourceFormat::FxUsageJson => "fx",
+        SourceFormat::VibeJson => "Mistral Vibe",
         SourceFormat::QodercnJsonl | SourceFormat::QodercnSqlite => "Qoder CN",
         SourceFormat::DshJsonl => "DeepSeek Harness",
         SourceFormat::LmstudioLog => "LM Studio",
