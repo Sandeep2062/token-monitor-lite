@@ -12,6 +12,7 @@ use crate::parsers::{
     cline::ClineReader,
     codebuddy::{CodeBuddyLogReader, CodeBuddyReader},
     codex::CodexReader,
+    commandcode::CommandCodeReader,
     copilot::CopilotReader,
     cursor::CursorReader,
     droid::DroidReader,
@@ -59,6 +60,7 @@ pub enum SourceFormat {
     ReasonixJsonl,
     MuseJsonl,
     McodeJsonl,
+    CommandCodeJsonl,
     GrokJsonl,
     OpenClawJsonl,
     ZedSqlite,
@@ -84,6 +86,7 @@ impl SourceFormat {
             Self::AmpJson => "amp",
             Self::DroidJson => "droid",
             Self::KimiJsonl => "kimi",
+            Self::CommandCodeJsonl => "commandcode",
             Self::GrokJsonl => "grok",
             Self::CopilotJsonl => "copilot",
             Self::CodeBuddyJsonl => "codebuddy",
@@ -118,6 +121,7 @@ impl SourceFormat {
             Self::AmpJson => "amp-json",
             Self::DroidJson => "droid-json",
             Self::KimiJsonl => "kimi-jsonl",
+            Self::CommandCodeJsonl => "commandcode-jsonl",
             Self::GrokJsonl => "grok-jsonl",
             Self::CopilotJsonl => "copilot-jsonl",
             Self::CodeBuddyJsonl => "codebuddy-jsonl",
@@ -154,6 +158,7 @@ impl SourceFormat {
             "amp-json" => Some(Self::AmpJson),
             "droid-json" => Some(Self::DroidJson),
             "kimi-jsonl" => Some(Self::KimiJsonl),
+            "commandcode-jsonl" => Some(Self::CommandCodeJsonl),
             "grok-jsonl" => Some(Self::GrokJsonl),
             "copilot-jsonl" => Some(Self::CopilotJsonl),
             "codebuddy-jsonl" => Some(Self::CodeBuddyJsonl),
@@ -381,6 +386,7 @@ enum ResponseReader {
     Amp(Box<AmpReader>),
     Droid(Box<DroidReader>),
     Kimi(Box<KimiReader>),
+    CommandCode(Box<CommandCodeReader>),
     Grok(Box<GrokReader>),
     Copilot(Box<CopilotReader>),
     CodeBuddy(Box<CodeBuddyReader>),
@@ -408,6 +414,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.ingest(record),
             Self::Droid(reader) => reader.ingest(record),
             Self::Kimi(reader) => reader.ingest(record),
+            Self::CommandCode(reader) => reader.ingest(record),
             Self::Grok(reader) => reader.ingest(record),
             Self::Copilot(reader) => reader.ingest(record),
             Self::CodeBuddy(reader) => reader.ingest(record),
@@ -435,6 +442,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.snapshot(),
             Self::Droid(reader) => reader.snapshot(),
             Self::Kimi(reader) => reader.snapshot(),
+            Self::CommandCode(reader) => reader.snapshot(),
             Self::Grok(reader) => reader.snapshot(),
             Self::Copilot(reader) => reader.snapshot(),
             Self::CodeBuddy(reader) => reader.snapshot(),
@@ -462,6 +470,7 @@ impl ResponseReader {
             | Self::Amp(_)
             | Self::Droid(_)
             | Self::Kimi(_)
+            | Self::CommandCode(_)
             | Self::Grok(_)
             | Self::Copilot(_)
             | Self::CodeBuddy(_)
@@ -489,6 +498,7 @@ impl ResponseReader {
             Self::Amp(reader) => reader.has_supported_usage(),
             Self::Droid(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
+            Self::CommandCode(reader) => reader.has_supported_usage(),
             Self::Grok(reader) => reader.has_supported_usage(),
             Self::Copilot(reader) => reader.has_supported_usage(),
             Self::CodeBuddy(reader) => reader.has_supported_usage(),
@@ -890,6 +900,19 @@ impl SourceReader {
                     GrokReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
+            SourceFormat::CommandCodeJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                let path = self.input.source_path();
+                ResponseReader::CommandCode(Box::new(
+                    CommandCodeReader::new(&self.key.session)
+                        .with_fallback_timestamp(fallback)
+                        .with_workspace(
+                            path.and_then(commandcode_workspace_key),
+                            path.and_then(commandcode_workspace_label),
+                        )
+                        .with_config_model(path.and_then(commandcode_config_model)),
+                ))
+            }
             SourceFormat::KimiJsonl => {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Kimi(Box::new(
@@ -1040,6 +1063,50 @@ fn file_mtime_ms(path: &Path) -> Option<i64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+/// Command Code transcripts live at
+/// `<root>/.commandcode/projects/<slug>/<session>.jsonl`, so the project slug
+/// names the workspace.
+fn commandcode_workspace_key(path: &Path) -> Option<String> {
+    let parts = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let projects = parts.iter().position(|part| *part == "projects")?;
+    let slug = parts.get(projects + 1)?;
+    if slug.is_empty() || slug.chars().any(char::is_control) {
+        return None;
+    }
+    Some((*slug).to_owned())
+}
+
+/// The last path segment of the workspace key, which is the readable project
+/// name rather than the full encoded path.
+fn commandcode_workspace_label(path: &Path) -> Option<String> {
+    let key = commandcode_workspace_key(path)?;
+    let label = key.rsplit('/').find(|segment| !segment.is_empty())?;
+    Some(label.to_owned())
+}
+
+/// Read the configured agent model from `<root>/config.json`.
+///
+/// The transcript can sit at any depth under `projects`, so counting parents
+/// would land on a different `config.json` for nested paths. The `projects`
+/// directory is the anchor instead: the Command Code root is its parent.
+fn commandcode_config_model(path: &Path) -> Option<String> {
+    let root = path
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().and_then(|name| name.to_str()) == Some("projects"))?
+        .parent()?;
+    let bytes = fs::read(root.join("config.json")).ok()?;
+    let config: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    config
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned)
 }
 
 fn retained_periods(session: &ArchiveSession) -> Vec<RetainedPeriodUsage> {

@@ -251,6 +251,26 @@ Kimi CLI writes `wire.jsonl` per session under `~/.kimi/sessions/<GROUP>/<SESSIO
 | Missing or unusable wire timestamp | supported | Falls back to the file mtime; with neither, the candidate is visible unsupported. |
 | `kimi-code` `usage.record` shape, the sibling `config.json` model, response duration, cost | visible unsupported | Not read; the default model stands rather than a guessed one. |
 
+## Command Code matrix
+
+Command Code writes one version-3 JSONL transcript per session under `~/.commandcode/projects/<slug>/<session>.jsonl`. Assistant lines carry authoritative per-request usage and cost.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `type: "session"` header | supported | Names the session. A message record's `id` is a per-message UUID and is never used as a session id. | The header wins over the path stem; with no header the stem stands. |
+| `type: "message"`, `role: "assistant"`, with a `usage` block naming any bucket | supported | One observation. `inputTokens`, `outputTokens`, `cacheReadTokens` and `cacheWriteTokens` are **disjoint** — `inputTokens` is cache-exclusive and the cache buckets are billed on top — so nothing is subtracted. The buckets reproduce the vendor's own recorded `costUsd` arithmetic exactly; subtracting cache from input does not. | Session from the header; identity `commandcode:<entry-id>:<timestamp>`. |
+| `costUsd` present, finite, in `0..=1e6` | supported | Recorded as a provider-reported nano-USD cost. An explicit `0` is a reported cost (free-promo models bill nothing) and is never repriced. | Out-of-range or negative rejects the candidate. |
+| `usage` block present with every bucket `0` and no positive cost | ignored non-usage | No row. Command Code seeds its accumulator with zeroes and writes `?? 0` per field, so all-zero is "the provider reported nothing"; adding zero is a no-op in the vendor's accounting too. | A **positive** `costUsd` beside zero buckets is the exception and is kept as a zero-token reported-cost row. |
+| `usage` block with **no** bucket field at all | ignored non-usage | No row. The pinned reader estimates ~4 chars/token from message text here; the native reader refuses to fabricate counts. |
+| `type: "model_change"` | ignored non-usage | Updates the model in effect; emits nothing. A message's own `model` wins over an earlier change. |
+| Message with no model anywhere | supported | Falls back to `<root>/config.json`'s configured agent model, then `unknown`. |
+| `type: "message"` with any non-assistant role, including `tool_result` under `role: "user"` | ignored non-usage | No row. |
+| Negative, fractional or above-ceiling counter | visible unsupported | Discard the candidate rather than clamp. |
+| An assistant entry not on the active branch (`/rewind` abandoned it) | supported | Dropped, matching the vendor's `getBranch()` iteration. |
+| A branch chain naming an ancestor missing from the file | supported | **Every** message is kept. Truncating at the hole would silently discard already-billed usage; this deliberately diverges from the vendor's cosmetic `buildSessionPath`. |
+| `<session>.checkpoints.jsonl` | ignored non-usage | Not collected as a source; it is a snapshot stream, not a transcript. |
+| Missing timestamp | supported | Falls back to the file mtime. |
+
 ## Grok matrix
 
 Grok Build writes `updates.jsonl` per session under `~/.grok/sessions/<workspace>/<session-id>/`. Two lanes carry usage; the authoritative breakdown wins where present.

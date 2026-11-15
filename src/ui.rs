@@ -801,6 +801,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "cline",
         "codebuddy",
         "codex",
+        "commandcode",
         "copilot",
         "droid",
         "cursor",
@@ -879,6 +880,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "cline"
             | "codebuddy"
             | "codex"
+            | "commandcode"
             | "copilot"
             | "cursor"
             | "droid"
@@ -912,6 +914,7 @@ fn is_supported_client(client: &str) -> bool {
             | "cline"
             | "codebuddy"
             | "codex"
+            | "commandcode"
             | "copilot"
             | "cursor"
             | "droid"
@@ -952,6 +955,7 @@ fn client_label(client: &str) -> &'static str {
         "kilo" => "Kilo",
         "kimi" => "Kimi CLI",
         "grok" => "Grok Build",
+        "commandcode" => "Command Code",
         "mcode" => "MiniMax Code",
         "openclaw" => "OpenClaw",
         "muse" => "Muse Code",
@@ -1393,6 +1397,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::AmpJson => "Amp",
         SourceFormat::DroidJson => "Droid",
         SourceFormat::KimiJsonl => "Kimi CLI",
+        SourceFormat::CommandCodeJsonl => "Command Code",
         SourceFormat::GrokJsonl => "Grok Build",
         SourceFormat::ClineJson => "Cline",
         SourceFormat::CopilotJsonl => "GitHub Copilot",

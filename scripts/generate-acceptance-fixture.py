@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 28
+CLAUDE_SOURCES = 27
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -65,6 +65,7 @@ OPENCLAW_SOURCES = 1
 DROID_SOURCES = 1
 KIMI_SOURCES = 1
 GROK_SOURCES = 1
+COMMANDCODE_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -96,6 +97,7 @@ SOURCE_COUNT = (
     + DROID_SOURCES
     + KIMI_SOURCES
     + GROK_SOURCES
+    + COMMANDCODE_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1108,6 +1110,56 @@ def _grok_source() -> tuple[str, bytes, dict[str, int], int]:
     return f"{workspace}/{session}", data, totals, OBSERVATIONS_PER_JSONL
 
 
+def _commandcode_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Command Code v3 transcript: one assistant line per observation."""
+    slug = "-home-fixture-repo"
+    session = "commandcode-fixture-000"
+    records: list[bytes] = [
+        _json_line({"type": "session", "version": 3, "id": session})
+    ]
+    totals = _counts()
+    parent = ""
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 180 + observation,
+            "output": 45 + observation,
+            "cacheRead": 20,
+            "cacheWrite": 4,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        entry_id = f"entry-{observation:03d}"
+        # Command Code's buckets are disjoint: `inputTokens` is cache-exclusive
+        # and the cache buckets are billed on top, so the wire values are the
+        # recorded counts unchanged.
+        records.append(
+            _json_line(
+                {
+                    "type": "message",
+                    "id": entry_id,
+                    "parentId": parent,
+                    "timestamp": f"2026-02-13T10:{30 + observation // 60:02d}:"
+                    f"{observation % 60:02d}.420Z",
+                    "model": "deepseek/deepseek-v4-flash",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                    },
+                    "usage": {
+                        "inputTokens": counts["input"],
+                        "outputTokens": counts["output"],
+                        "cacheReadTokens": counts["cacheRead"],
+                        "cacheWriteTokens": counts["cacheWrite"],
+                        "costUsd": 0.000123,
+                    },
+                }
+            )
+        )
+        parent = entry_id
+    data = b"".join(records)
+    return f"{slug}/{session}", data, totals, OBSERVATIONS_PER_JSONL
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -1992,6 +2044,26 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, grok_totals)
     physical_bytes += len(grok_data)
     decoded_bytes += len(grok_data)
+
+    commandcode_path, commandcode_data, commandcode_totals, commandcode_rows = (
+        _commandcode_source()
+    )
+    commandcode_entry = _source_entry(
+        root,
+        f"home/.commandcode/projects/{commandcode_path}.jsonl",
+        commandcode_data,
+        format_name="commandcode-jsonl",
+        session=commandcode_path.rsplit("/", 1)[-1],
+        observations=commandcode_rows,
+        canonical_sessions=1,
+        expected_totals=commandcode_totals,
+        physical_bytes=len(commandcode_data),
+    )
+    sources.append(commandcode_entry)
+    _add_counts(aggregate, commandcode_totals)
+    _add_counts(canonical_aggregate, commandcode_totals)
+    physical_bytes += len(commandcode_data)
+    decoded_bytes += len(commandcode_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

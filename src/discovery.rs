@@ -2450,6 +2450,15 @@ fn discover_sources_with_id(
                     &[".factory", "sessions"],
                 )],
             ),
+            "commandcode" => (
+                "commandcode",
+                SourceFormat::CommandCodeJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".commandcode", "projects"],
+                )],
+            ),
             "grok" => (
                 "grok",
                 SourceFormat::GrokJsonl,
@@ -2482,6 +2491,16 @@ fn discover_sources_with_id(
             collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
             if client_id == "codebuddy" {
                 collect_log_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            }
+            if client_id == "commandcode" {
+                // `<session>.checkpoints.jsonl` is a snapshot stream beside the
+                // transcript, not a transcript; only the session JSONL is usage.
+                candidates.retain(|path| {
+                    !path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".checkpoints.jsonl"))
+                });
             }
             if client_id == "grok" {
                 // Only the per-session update stream is usage; signals.json is
@@ -2892,7 +2911,10 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::CodeBuddyJsonl | SourceFormat::WorkBuddyJsonl => {
                     value.get("sessionId").and_then(Value::as_str)
                 }
-                SourceFormat::PiJsonl | SourceFormat::OmpJsonl | SourceFormat::SenpiJsonl => {
+                SourceFormat::PiJsonl
+                | SourceFormat::OmpJsonl
+                | SourceFormat::SenpiJsonl
+                | SourceFormat::CommandCodeJsonl => {
                     if value.get("type").and_then(Value::as_str) == Some("session") {
                         value.get("id").and_then(Value::as_str)
                     } else {
@@ -3025,6 +3047,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::ReasonixJsonl
             | SourceFormat::McodeJsonl
             | SourceFormat::OpenClawJsonl
+            | SourceFormat::CommandCodeJsonl
     ) {
         return path
             .file_stem()

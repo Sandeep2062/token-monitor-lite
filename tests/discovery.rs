@@ -1182,6 +1182,47 @@ fn droid_settings_documents_are_discovered_without_the_settings_suffix() {
 }
 
 #[test]
+fn commandcode_transcripts_are_discovered_by_project_slug() {
+    let tree = Tree::new();
+    tree.file(
+        ".commandcode/projects/-home-user-repo/session-a.jsonl",
+        br#"{"type":"session","version":3,"id":"session-a"}
+{"type":"message","id":"a1","parentId":"","timestamp":"2026-02-13T10:30:26.420Z","model":"openai/gpt-5","message":{"role":"assistant","content":[]},"usage":{"inputTokens":10}}
+"#,
+    );
+    // The per-session checkpoint log sits beside the transcript but is a
+    // snapshot stream, not a transcript.
+    tree.file(
+        ".commandcode/projects/-home-user-repo/session-a.checkpoints.jsonl",
+        br#"{"type":"checkpoint","id":"c1"}
+"#,
+    );
+    tree.file(
+        ".commandcode/projects/-home-user-other/session-b.jsonl",
+        br#"{"type":"session","version":3,"id":"session-b"}
+{"type":"message","id":"a1","parentId":"","timestamp":"2026-02-13T10:31:26.420Z","model":"openai/gpt-5","message":{"role":"assistant","content":[]},"usage":{"inputTokens":1}}
+"#,
+    );
+
+    let paths = tree.paths(&["commandcode"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::CommandCodeJsonl)
+    );
+    // The `session` header names the session, so the file stem is not used.
+    let sessions = report
+        .sources
+        .iter()
+        .map(|source| source.session.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(sessions, BTreeSet::from(["session-a", "session-b"]));
+}
+
+#[test]
 fn copilot_otel_jsonl_is_discovered_under_the_otel_role() {
     let tree = Tree::new();
     tree.file(
