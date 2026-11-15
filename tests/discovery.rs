@@ -716,7 +716,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
     tree.file(".claude/projects/project/zz-broken.jsonl", b"not json\n");
     tree.file("random.jsonl", b"not a conventional source\n");
 
-    let report = discover(&tree.paths(&["codex", "claude", "kimi"])).unwrap();
+    let report = discover(&tree.paths(&["codex", "claude", "probe-unsupported-client"])).unwrap();
     assert_eq!(report.sources.len(), 2);
     assert_eq!(report.sources[0].format, SourceFormat::ClaudeCli);
     assert_eq!(report.sources[0].session, "claude-a");
@@ -736,7 +736,7 @@ fn source_discovery_admits_only_selected_regular_files_validated_by_current_read
         report
             .notices
             .contains(&DiscoveryNotice::UnsupportedClient {
-                client: "kimi".to_owned(),
+                client: "probe-unsupported-client".to_owned(),
             })
     );
     assert!(report.notices.contains(&DiscoveryNotice::SourceInvalid {
@@ -1084,6 +1084,65 @@ fn hermes_state_database_is_discovered_at_the_home_and_profile_roles() {
 
     paths.enabled_clients = BTreeSet::new();
     assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
+fn kimi_wire_streams_are_discovered_per_session_directory() {
+    let tree = Tree::new();
+    tree.file(
+        ".kimi/sessions/group-a/session-a/wire.jsonl",
+        br#"{"type":"metadata","protocol_version":"1.3"}
+{"timestamp":1770983426.0,"message":{"type":"StatusUpdate","payload":{"token_usage":{"input_other":10,"output":5},"message_id":"m1"}}}
+"#,
+    );
+    // Sibling files in the session directory are not the usage stream.
+    tree.file(".kimi/sessions/group-a/session-a/context.jsonl", b"{}\n");
+    tree.file(".kimi/sessions/group-a/session-a/config.json", b"{}");
+    tree.file(
+        ".kimi/sessions/group-a/session-b/wire.jsonl",
+        br#"{"timestamp":1770983427.0,"message":{"type":"StatusUpdate","payload":{"token_usage":{"input_other":1,"output":2},"message_id":"m2"}}}
+"#,
+    );
+
+    let paths = tree.paths(&["kimi"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::KimiJsonl)
+    );
+    let sessions = report
+        .sources
+        .iter()
+        .map(|source| source.session.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(sessions, BTreeSet::from(["session-a", "session-b"]));
+}
+
+#[test]
+fn droid_settings_documents_are_discovered_without_the_settings_suffix() {
+    let tree = Tree::new();
+    tree.file(
+        ".factory/sessions/aaaaaaaa-0000-0000-0000-000000000001.settings.json",
+        br#"{"model":"claude-sonnet-4-5","providerLock":"anthropic","tokenUsage":{"inputTokens":10,"outputTokens":5}}
+"#,
+    );
+    // A transcript beside the settings document is not a cumulative usage file.
+    tree.file(
+        ".factory/sessions/aaaaaaaa-0000-0000-0000-000000000001.jsonl",
+        b"{}\n",
+    );
+
+    let paths = tree.paths(&["droid"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::DroidJson);
+    assert_eq!(
+        report.sources[0].session,
+        "aaaaaaaa-0000-0000-0000-000000000001"
+    );
 }
 
 #[test]

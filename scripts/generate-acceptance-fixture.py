@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 30
+CLAUDE_SOURCES = 29
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -63,6 +63,7 @@ GOOSE_SOURCES = 1
 HERMES_SOURCES = 1
 OPENCLAW_SOURCES = 1
 DROID_SOURCES = 1
+KIMI_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -92,6 +93,7 @@ SOURCE_COUNT = (
     + HERMES_SOURCES
     + OPENCLAW_SOURCES
     + DROID_SOURCES
+    + KIMI_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1022,6 +1024,47 @@ def _droid_source() -> tuple[str, bytes, dict[str, int], int]:
     return session, data, totals, 1
 
 
+def _kimi_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Kimi `wire.jsonl`: a single session reporting usage per turn."""
+    group = "kimi-fixture-group"
+    session = "kimi-fixture-000"
+    records: list[bytes] = []
+    totals = _counts()
+    records.append(
+        _json_line({"type": "metadata", "protocol_version": "1.3"})
+    )
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 320 + observation,
+            "output": 40 + observation,
+            "cacheRead": 12,
+            "cacheWrite": 3,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        records.append(
+            _json_line(
+                {
+                    "timestamp": 1770983426.0 + observation,
+                    "message": {
+                        "type": "StatusUpdate",
+                        "payload": {
+                            "token_usage": {
+                                "input_other": counts["input"],
+                                "output": counts["output"],
+                                "input_cache_read": counts["cacheRead"],
+                                "input_cache_creation": counts["cacheWrite"],
+                            },
+                            "message_id": f"chatcmpl-{observation:03d}",
+                        },
+                    },
+                }
+            )
+        )
+    data = b"".join(records)
+    return f"{group}/{session}", data, totals, OBSERVATIONS_PER_JSONL
+
+
 def _copilot_source() -> tuple[str, bytes, dict[str, int], int]:
     session = "copilot-fixture-000"
     totals = _counts()
@@ -1870,6 +1913,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, droid_totals)
     physical_bytes += len(droid_data)
     decoded_bytes += len(droid_data)
+
+    kimi_path, kimi_data, kimi_totals, kimi_rows = _kimi_source()
+    kimi_entry = _source_entry(
+        root,
+        f"home/.kimi/sessions/{kimi_path}/wire.jsonl",
+        kimi_data,
+        format_name="kimi-jsonl",
+        session=kimi_path.rsplit("/", 1)[-1],
+        observations=kimi_rows,
+        canonical_sessions=1,
+        expected_totals=kimi_totals,
+        physical_bytes=len(kimi_data),
+    )
+    sources.append(kimi_entry)
+    _add_counts(aggregate, kimi_totals)
+    _add_counts(canonical_aggregate, kimi_totals)
+    physical_bytes += len(kimi_data)
+    decoded_bytes += len(kimi_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(

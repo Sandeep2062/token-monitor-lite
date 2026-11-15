@@ -237,6 +237,20 @@ Droid writes one `<uuid>.settings.json` per session under `~/.factory/sessions/`
 | Missing model, or no usable timestamp | visible unsupported | Discard the candidate. The file mtime anchors the record, floored by `providerLockTimestamp` (usage cannot predate provider selection, and a rewound mtime must not place it earlier). |
 | Per-reply apportioning across `.jsonl` replies, `effectiveFactoryRouterModel` for `auto`, JSONL model extraction, cost | visible unsupported | The pinned reader splits the cumulative total across replies by context/output byte weight. The native reader reports the **identical total** as one record — the pinned reader's own fallback when no transcript is readable — and therefore loses only per-reply date resolution, never token magnitude. |
 
+## Kimi matrix
+
+Kimi CLI writes `wire.jsonl` per session under `~/.kimi/sessions/<GROUP>/<SESSION>/`. Only `StatusUpdate` messages carry usage; the wire names no model, so the documented default stands.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `{"message":{"type":"StatusUpdate","payload":{"token_usage":{...}}}}` with non-zero counters | supported | One observation per message: `input_other`, `output`, `input_cache_read`, `input_cache_creation` → input, output, cache read, cache write. Reasoning is always zero because the wire exposes none. Model is `kimi-for-coding`, provider `moonshot`. | Session is the containing `<SESSION>` directory; identity `kimi:<message_id>` when present. |
+| camelCase aliases (`inputOther`, `inputCacheRead`, `inputCacheCreation`) | supported | Same mapping; the first present alias decides. |
+| Duplicate `message_id` | supported | The larger total wins; a later partial report never lowers a count. |
+| `metadata`, `TurnBegin`, `ToolCall`, `ContentPart` and other message types | ignored non-usage | No row. |
+| Negative or non-integer counter | visible unsupported | Discard the candidate rather than clamp. |
+| Missing or unusable wire timestamp | supported | Falls back to the file mtime; with neither, the candidate is visible unsupported. |
+| `kimi-code` `usage.record` shape, the sibling `config.json` model, response duration, cost | visible unsupported | Not read; the default model stands rather than a guessed one. |
+
 ## Copilot OTel matrix
 
 The supported source is a flat OTel JSONL file under `<home>/.copilot/otel`. Each line must carry its own `attributes`; cross-line trace enrichment and VS Code session-state stores are not implemented. A file that mixes chat spans, inference logs, agent-turn logs and agent summary spans uses only the highest-priority source present, preventing one turn from being counted twice.

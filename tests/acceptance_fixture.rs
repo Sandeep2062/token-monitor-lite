@@ -166,6 +166,7 @@ impl Fixture {
                 "hermes".to_owned(),
                 "openclaw".to_owned(),
                 "droid".to_owned(),
+                "kimi".to_owned(),
                 "kilo".to_owned(),
                 "opencode".to_owned(),
                 "codebuddy".to_owned(),
@@ -235,6 +236,7 @@ fn source_format(format: &str) -> SourceFormat {
         "hermes-sqlite" => SourceFormat::HermesSqlite,
         "openclaw-sqlite" => SourceFormat::OpenClawSqlite,
         "droid-json" => SourceFormat::DroidJson,
+        "kimi-jsonl" => SourceFormat::KimiJsonl,
         "copilot-jsonl" => SourceFormat::CopilotJsonl,
         "codebuddy-jsonl" => SourceFormat::CodeBuddyJsonl,
         "workbuddy-jsonl" => SourceFormat::WorkBuddyJsonl,
@@ -342,10 +344,11 @@ fn generated_dataset_reparses_through_every_production_reader() {
     assert_eq!(
         manifest.coverage.source_formats,
         BTreeMap::from([
-            ("claude-cli".to_owned(), 30),
+            ("claude-cli".to_owned(), 29),
             ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
+            ("kimi-jsonl".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
             ("cursor-cache-json".to_owned(), 1),
             ("cline-json".to_owned(), 1),

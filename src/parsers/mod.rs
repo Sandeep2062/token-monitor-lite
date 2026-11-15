@@ -14,6 +14,7 @@ pub mod goose;
 pub mod hermes;
 pub mod jsonl;
 pub mod kilo;
+pub mod kimi;
 pub mod mcode;
 pub mod muse;
 pub mod omp;

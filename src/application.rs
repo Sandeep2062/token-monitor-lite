@@ -1149,6 +1149,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::ClaudeCli => "claude",
         SourceFormat::AmpJson => "amp",
         SourceFormat::DroidJson => "droid",
+        SourceFormat::KimiJsonl => "kimi",
         SourceFormat::CodexCli | SourceFormat::CodexLocalUsageSqlite => "codex",
         SourceFormat::ClineJson => "cline",
         SourceFormat::CopilotJsonl => "copilot",

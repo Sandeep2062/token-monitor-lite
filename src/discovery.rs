@@ -2450,6 +2450,15 @@ fn discover_sources_with_id(
                     &[".factory", "sessions"],
                 )],
             ),
+            "kimi" => (
+                "kimi",
+                SourceFormat::KimiJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".kimi", "sessions"],
+                )],
+            ),
             _ => {
                 notices.push(DiscoveryNotice::UnsupportedClient {
                     client: redacted_client_id(client),
@@ -2464,6 +2473,13 @@ fn discover_sources_with_id(
             collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
             if client_id == "codebuddy" {
                 collect_log_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            }
+            if client_id == "kimi" {
+                // Only `wire.jsonl` is the usage stream; the session directory
+                // also holds `context.jsonl` and other non-usage records.
+                candidates.retain(|path| {
+                    path.file_name().and_then(|name| name.to_str()) == Some("wire.jsonl")
+                });
             }
             if overflow {
                 break;
@@ -2889,6 +2905,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Droid's session is the `<uuid>` stem of
                 // `<uuid>.settings.json`; the settings document names none.
                 SourceFormat::DroidJson => None,
+                // Kimi's wire stream carries no session id; the caller derives
+                // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
+                SourceFormat::KimiJsonl => None,
                 SourceFormat::SessionArchiveSqlite
                 | SourceFormat::CodexLocalUsageSqlite
                 | SourceFormat::OpenCodeSqlite
@@ -2946,6 +2965,18 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .and_then(|stem| stem.to_str())
             .and_then(|stem| stem.strip_suffix(".settings"))
             .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    // `<GROUP>/<SESSION>/wire.jsonl`: the session is the containing directory,
+    // since the wire itself names none.
+    if format == SourceFormat::KimiJsonl {
+        return path
+            .parent()
+            .filter(|parent| parent.file_name().and_then(|name| name.to_str()) != Some("sessions"))
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or(());
     }
