@@ -4,6 +4,7 @@
 //! intentionally not folded into the request-like canonical runtime yet.
 
 use crate::accounting::{SessionKey, TokenCounts};
+use crate::parsers::antigravity::AntigravityDbReader;
 use crate::parsers::goose::{GooseReader, GooseRow};
 use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
@@ -261,6 +262,24 @@ impl KiloAdapter {
     }
 }
 
+pub struct AntigravitySqliteAdapter {
+    path: PathBuf,
+}
+
+impl AntigravitySqliteAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_antigravity_sqlite(&self.path)
+    }
+}
+
 pub struct WorkBuddySqliteAdapter {
     path: PathBuf,
 }
@@ -336,6 +355,7 @@ pub enum InputAdapterStatus {
     GooseSqlite,
     ZedSqlite,
     WorkBuddySqlite,
+    AntigravitySqlite,
 }
 
 pub(crate) enum SqliteInputData {
@@ -346,6 +366,7 @@ pub(crate) enum SqliteInputData {
     Goose(Arc<[ResponseUsage]>),
     Zed(Arc<[ResponseUsage]>),
     WorkBuddySqlite(Arc<[ResponseUsage]>),
+    AntigravitySqlite(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -446,6 +467,7 @@ pub enum SourceInput {
     Goose(GooseAdapter),
     Zed(ZedAdapter),
     WorkBuddySqlite(WorkBuddySqliteAdapter),
+    AntigravitySqlite(AntigravitySqliteAdapter),
 }
 
 impl SourceInput {
@@ -467,6 +489,9 @@ impl SourceInput {
             SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
             SourceFormat::WorkBuddySqlite => {
                 Self::WorkBuddySqlite(WorkBuddySqliteAdapter::new(path))
+            }
+            SourceFormat::AntigravitySqlite => {
+                Self::AntigravitySqlite(AntigravitySqliteAdapter::new(path))
             }
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
@@ -575,6 +600,7 @@ impl SourceInput {
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Zed(_) => InputAdapterStatus::ZedSqlite,
             Self::WorkBuddySqlite(_) => InputAdapterStatus::WorkBuddySqlite,
+            Self::AntigravitySqlite(_) => InputAdapterStatus::AntigravitySqlite,
         }
     }
 
@@ -594,7 +620,8 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Zed(_)
-            | Self::WorkBuddySqlite(_) => {}
+            | Self::WorkBuddySqlite(_)
+            | Self::AntigravitySqlite(_) => {}
         }
     }
 
@@ -614,7 +641,8 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Zed(_)
-            | Self::WorkBuddySqlite(_) => Ok(true),
+            | Self::WorkBuddySqlite(_)
+            | Self::AntigravitySqlite(_) => Ok(true),
         }
     }
 
@@ -661,6 +689,7 @@ impl SourceInput {
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Zed(adapter) => Some(adapter.path()),
             Self::WorkBuddySqlite(adapter) => Some(adapter.path()),
+            Self::AntigravitySqlite(adapter) => Some(adapter.path()),
         }
     }
 
@@ -700,7 +729,8 @@ impl SourceInput {
             | Self::Kilo(_)
             | Self::Goose(_)
             | Self::Zed(_)
-            | Self::WorkBuddySqlite(_) => Err(invalid("sqlite input has no JSONL batch")),
+            | Self::WorkBuddySqlite(_)
+            | Self::AntigravitySqlite(_) => Err(invalid("sqlite input has no JSONL batch")),
         }
     }
 }
@@ -1492,6 +1522,46 @@ fn read_kilo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
             reader
                 .ingest(&id, &session_id, data)
                 .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_antigravity_sqlite(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(&transaction, "gen_metadata", &["idx", "data"])?;
+    let session = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .ok_or(SqliteSourceError::Invalid)?
+        .to_owned();
+    let mut reader = AntigravityDbReader::new(session, source_modified_ms(path));
+    let mut offset = 0_i64;
+    loop {
+        let mut statement =
+            transaction.prepare("SELECT data FROM gen_metadata ORDER BY idx LIMIT ?1 OFFSET ?2")?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let data = row
+                .get_ref(0)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            if data.len() > MAX_RECORD_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            reader.ingest_blob(data).map_err(map_opencode_error)?;
             page_rows += 1;
         }
         if page_rows == 0 {

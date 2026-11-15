@@ -1177,6 +1177,91 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn antigravity_database_roots(inputs: &HostPaths) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let gemini = inputs
+        .env_paths
+        .get("GEMINI_CLI_HOME")
+        .cloned()
+        .unwrap_or_else(|| inputs.home.join(".gemini"));
+    for base in ["antigravity", "antigravity-ide", "antigravity-backup"] {
+        roots.push(join_many(
+            inputs.platform,
+            &inputs.home,
+            &[".gemini", base, "conversations"],
+        ));
+    }
+    roots.push(join_many(
+        inputs.platform,
+        &gemini,
+        &["antigravity-cli", "conversations"],
+    ));
+    for name in ["ANTIGRAVITY_HOME", "ANTIGRAVITY_DATA_DIR"] {
+        if let Some(dir) = inputs
+            .env_paths
+            .get(name)
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            roots.push(join_many(inputs.platform, dir, &["conversations"]));
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn collect_db_candidates(
+    directory: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > MAX_SOURCE_DEPTH {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let metadata = fs::symlink_metadata(&child)?;
+        if metadata.file_type().is_dir() {
+            collect_db_candidates(&child, depth + 1, inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        } else if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+        {
+            candidates.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn workbuddy_database_paths(inputs: &HostPaths) -> Vec<PathBuf> {
     [".workbuddy", ".workbuddy-ai"]
         .into_iter()
@@ -2123,6 +2208,72 @@ fn discover_sources_with_id(
                     client: client_id,
                     ordinal,
                 }),
+            }
+        }
+    }
+    if inputs.enabled_clients.contains("antigravity") {
+        let mut candidates = Vec::new();
+        let mut inspected = 0;
+        let mut overflow = false;
+        for root in antigravity_database_roots(inputs) {
+            collect_db_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            if overflow {
+                break;
+            }
+        }
+        if overflow {
+            notices.push(DiscoveryNotice::SourceScanLimitReached);
+        } else {
+            candidates.sort();
+            candidates.dedup();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                if sources.len() == MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "antigravity",
+                        ordinal: ordinal + 1,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "antigravity",
+                        ordinal: ordinal + 1,
+                    });
+                    continue;
+                }
+                match AntigravitySqliteAdapter::new(&path).read() {
+                    Ok(rows) if !rows.is_empty() => {
+                        let source_id = source_id_for(SourceFormat::AntigravitySqlite, &path);
+                        if admitted_ids.insert(source_id) {
+                            let session = path
+                                .file_stem()
+                                .and_then(|stem| stem.to_str())
+                                .unwrap_or("antigravity")
+                                .to_owned();
+                            sources.push(DiscoveredSource {
+                                source_id,
+                                format: SourceFormat::AntigravitySqlite,
+                                session,
+                                path,
+                            });
+                        } else {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        }
+                    }
+                    _ => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "antigravity",
+                        ordinal: ordinal + 1,
+                    }),
+                }
             }
         }
     }

@@ -55,6 +55,7 @@ pub enum SourceFormat {
     McodeJsonl,
     ZedSqlite,
     WorkBuddySqlite,
+    AntigravitySqlite,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -84,6 +85,7 @@ impl SourceFormat {
             Self::McodeJsonl => "mcode",
             Self::ZedSqlite => "zed",
             Self::WorkBuddySqlite => "workbuddy",
+            Self::AntigravitySqlite => "antigravity",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
@@ -112,6 +114,7 @@ impl SourceFormat {
             Self::McodeJsonl => "mcode-jsonl",
             Self::ZedSqlite => "zed-sqlite",
             Self::WorkBuddySqlite => "workbuddy-sqlite",
+            Self::AntigravitySqlite => "antigravity-sqlite",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -141,6 +144,7 @@ impl SourceFormat {
             "mcode-jsonl" => Some(Self::McodeJsonl),
             "zed-sqlite" => Some(Self::ZedSqlite),
             "workbuddy-sqlite" => Some(Self::WorkBuddySqlite),
+            "antigravity-sqlite" => Some(Self::AntigravitySqlite),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -160,6 +164,7 @@ impl SourceFormat {
                 | Self::GooseSqlite
                 | Self::ZedSqlite
                 | Self::WorkBuddySqlite
+                | Self::AntigravitySqlite
         )
     }
 }
@@ -824,7 +829,8 @@ impl SourceReader {
             | SourceFormat::KiloSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::ZedSqlite
-            | SourceFormat::WorkBuddySqlite => {
+            | SourceFormat::WorkBuddySqlite
+            | SourceFormat::AntigravitySqlite => {
                 unreachable!("SQLite sources do not use text readers")
             }
         }

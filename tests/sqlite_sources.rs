@@ -1224,3 +1224,56 @@ fn workbuddy_sqlite_fallback_reads_session_usage() {
         Some("workbuddy:session-1:1780000000000")
     );
 }
+
+#[test]
+fn antigravity_generation_database_is_read_as_usage() {
+    let root = Root::new();
+    let path = root.path("conversation.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE gen_metadata (idx integer, data blob, size integer);")
+        .unwrap();
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                return out;
+            }
+        }
+    }
+    fn fv(field: u64, value: u64) -> Vec<u8> {
+        let mut out = varint(field << 3);
+        out.extend(varint(value));
+        out
+    }
+    fn fb(field: u64, value: &[u8]) -> Vec<u8> {
+        let mut out = varint((field << 3) | 2);
+        out.extend(varint(value.len() as u64));
+        out.extend_from_slice(value);
+        out
+    }
+    let mut usage = fv(2, 25);
+    usage.extend(fv(9, 4));
+    usage.extend(fb(11, b"resp-1"));
+    let mut chat = fb(19, b"gemini-3.5-flash-high");
+    chat.extend(fb(4, &usage));
+    let blob = fb(1, &chat);
+    connection
+        .execute("INSERT INTO gen_metadata VALUES (0, ?1, 0)", params![blob])
+        .unwrap();
+    drop(connection);
+
+    let rows = token_monitor_lite::source_inputs::AntigravitySqliteAdapter::new(&path)
+        .read()
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key.session, "conversation");
+    assert_eq!(rows[0].tokens.input, 25);
+    assert_eq!(rows[0].tokens.output, 4);
+}

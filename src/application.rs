@@ -1163,6 +1163,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::McodeJsonl => "mcode",
         SourceFormat::ZedSqlite => "zed",
         SourceFormat::WorkBuddySqlite => "workbuddy",
+        SourceFormat::AntigravitySqlite => "antigravity",
         SourceFormat::CursorCacheJson => "cursor",
         SourceFormat::GeminiTranscript => "gemini",
         SourceFormat::GooseSqlite => "goose",
