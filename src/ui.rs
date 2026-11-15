@@ -769,7 +769,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
     [
         "amp", "antigravity", "claude", "cline", "codebuddy", "codex", "copilot", "cursor",
         "gemini", "goose", "kilo", "mcode", "muse", "omp", "opencode", "pi", "qwen", "reasonix",
-        "senpi", "workbuddy",
+        "senpi", "workbuddy", "zed",
     ]
     .into_iter()
     .map(|client| SettingsClientRow {
@@ -842,6 +842,7 @@ fn is_selectable_source_client(client: &str) -> bool {
             | "reasonix"
             | "senpi"
             | "workbuddy"
+            | "zed"
             | "mixed"
     )
 }
@@ -869,6 +870,7 @@ fn is_supported_client(client: &str) -> bool {
             | "reasonix"
             | "senpi"
             | "workbuddy"
+            | "zed"
     )
 }
 
@@ -894,6 +896,7 @@ fn client_label(client: &str) -> &'static str {
         "reasonix" => "Reasonix",
         "senpi" => "OmO Native",
         "workbuddy" => "WorkBuddy",
+        "zed" => "Zed",
         "mixed" => "Session archive",
         _ => "Unavailable client",
     }

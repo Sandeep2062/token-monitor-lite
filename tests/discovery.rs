@@ -1140,3 +1140,34 @@ fn catalog_jsonl_roots_are_discovered_at_their_documented_locations() {
             .any(|(format, _)| *format == SourceFormat::ReasonixJsonl)
     );
 }
+
+#[test]
+fn zed_threads_database_is_discovered_at_the_xdg_data_role() {
+    let tree = Tree::new();
+    let path = tree.0.join(".local/share/zed/threads/threads.db");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                created_at TEXT,
+                data_type TEXT NOT NULL,
+                data BLOB NOT NULL
+            );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads VALUES ('thread-1', '2026-11-13T10:00:00Z', NULL, 'json', ?1)",
+            [br#"{"model":{"provider":"zed.dev","model":"m"},"request_token_usage":{"0":{"input_tokens":2,"output_tokens":1}}}"#.as_slice()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let report = discover(&tree.paths(&["zed"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::ZedSqlite);
+    assert_eq!(report.sources[0].session, "zed");
+}

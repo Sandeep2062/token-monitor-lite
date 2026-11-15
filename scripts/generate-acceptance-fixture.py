@@ -48,10 +48,10 @@ from typing import Any, Callable
 
 
 SCHEMA = "token-monitor-lite-acceptance-v2"
-REVISION = "mixed-2026-11-13.3"
+REVISION = "mixed-2026-11-13.4"
 SEED = 2062
 CLAUDE_SOURCES = 33
-CODEX_SOURCES = 15
+CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
 GEMINI_SOURCES = 1
@@ -71,6 +71,7 @@ QWEN_SOURCES = 1
 REASONIX_SOURCES = 1
 MUSE_SOURCES = 1
 MCODE_SOURCES = 1
+ZED_SOURCES = 1
 LOCAL_USAGE_SOURCES = 1
 ARCHIVE_SOURCES = 1
 EXTRA_CLAUDE_OBSERVATIONS = 9
@@ -96,6 +97,7 @@ SOURCE_COUNT = (
     + REASONIX_SOURCES
     + MUSE_SOURCES
     + MCODE_SOURCES
+    + ZED_SOURCES
     + LOCAL_USAGE_SOURCES
     + ARCHIVE_SOURCES
 )
@@ -749,6 +751,55 @@ def _kilo_database(path: Path) -> tuple[str, dict[str, int], int]:
                     json.dumps(data, sort_keys=True, separators=(",", ":")),
                 ),
             )
+        connection.commit()
+    finally:
+        connection.close()
+    return session, totals, OBSERVATIONS_PER_JSONL
+
+
+def _zed_database(path: Path) -> tuple[str, dict[str, int], int]:
+    session = "zed-fixture-000"
+    totals = _counts()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                created_at TEXT,
+                data_type TEXT NOT NULL,
+                data BLOB NOT NULL
+            ) STRICT;"""
+        )
+        usages = {}
+        for observation in range(OBSERVATIONS_PER_JSONL):
+            counts = {
+                "input": 100 + observation,
+                "output": 20 + observation,
+                "cacheRead": 5,
+                "cacheWrite": 2,
+                "reasoning": 0,
+            }
+            _add_counts(totals, counts)
+            usages[str(observation)] = {
+                "input_tokens": counts["input"],
+                "output_tokens": counts["output"],
+                "cache_read_input_tokens": counts["cacheRead"],
+                "cache_creation_input_tokens": counts["cacheWrite"],
+            }
+        data = json.dumps(
+            {
+                "model": {"provider": "zed.dev", "model": "claude-sonnet-4-6"},
+                "request_token_usage": usages,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        connection.execute(
+            "INSERT INTO threads VALUES (?, ?, ?, 'json', ?)",
+            (session, "2026-11-13T10:00:00Z", "2026-11-13T09:00:00Z", data),
+        )
         connection.commit()
     finally:
         connection.close()
@@ -1441,6 +1492,31 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, opencode_totals)
     physical_bytes += opencode_target.stat().st_size
     decoded_bytes += opencode_target.stat().st_size
+
+    zed_target = (
+        root / "home" / ".local" / "share" / "zed" / "threads" / "threads.db"
+    )
+    zed_target.parent.mkdir(parents=True, exist_ok=True)
+    zed_session, zed_totals, zed_rows = _zed_database(zed_target)
+    zed_entry = dict(
+        _existing_entry(
+            root, "home/.local/share/zed/threads/threads.db", zed_target
+        ),
+        format="zed-sqlite",
+        session=zed_session,
+        observations=zed_rows,
+        canonicalSessions=1,
+        suppressedObservations=0,
+        decodedBytes=zed_target.stat().st_size,
+        physicalBytes=zed_target.stat().st_size,
+        expectedTotals=zed_totals,
+        retainedPeriods=0,
+    )
+    sources.append(zed_entry)
+    _add_counts(aggregate, zed_totals)
+    _add_counts(canonical_aggregate, zed_totals)
+    physical_bytes += zed_target.stat().st_size
+    decoded_bytes += zed_target.stat().st_size
 
     gemini_session, gemini_data, gemini_totals, gemini_rows = _gemini_source()
     gemini_entry = _source_entry(

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use token_monitor_lite::source_inputs::{
     ArchivePeriod, CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_ARCHIVE_ENTRY_BYTES,
-    OpenCodeAdapter, SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole,
+    OpenCodeAdapter, SessionArchiveAdapter, SqliteSourceError, SqliteSourceRole, ZedAdapter,
     classify_sqlite_source,
 };
 use token_monitor_lite::sources::{SourceFormat, SourceProgress, SourceReader};
@@ -1117,4 +1117,75 @@ fn codex_local_usage_tolerates_future_columns_and_pages_past_one_batch() {
     identities.sort();
     identities.dedup();
     assert_eq!(identities.len(), rows.len());
+}
+
+#[test]
+fn zed_threads_are_read_from_json_and_zstd_payloads() {
+    let root = Root::new();
+    let path = root.path("threads.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                created_at TEXT,
+                data_type TEXT NOT NULL,
+                data BLOB NOT NULL
+            );",
+        )
+        .unwrap();
+    let json_payload = serde_json::to_vec(&json!({
+        "model": {"provider": "zed.dev", "model": "claude-sonnet-4-6"},
+        "request_token_usage": {"0": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 2,
+            "cache_creation_input_tokens": 1
+        }}
+    }))
+    .unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads VALUES (?1, ?2, ?3, 'json', ?4)",
+            params![
+                "thread-json",
+                "2026-11-13T10:00:00Z",
+                "2026-11-13T09:00:00Z",
+                json_payload
+            ],
+        )
+        .unwrap();
+    let compressed = ruzstd::encoding::compress_to_vec(
+        &serde_json::to_vec(&json!({
+            "model": {"provider": "zed.dev", "model": "claude-sonnet-4-6"},
+            "request_token_usage": {"0": {"input_tokens": 3, "output_tokens": 1}}
+        }))
+        .unwrap(),
+        ruzstd::encoding::CompressionLevel::Fastest,
+    );
+    connection
+        .execute(
+            "INSERT INTO threads VALUES (?1, ?2, NULL, 'zstd', ?3)",
+            params!["thread-zstd", "2026-11-13T11:00:00Z", compressed],
+        )
+        .unwrap();
+    drop(connection);
+
+    let rows = ZedAdapter::new(&path).read().unwrap();
+    assert_eq!(rows.len(), 2);
+    let json = rows
+        .iter()
+        .find(|row| row.key.session == "thread-json")
+        .unwrap();
+    assert_eq!(json.tokens.input, 10);
+    assert_eq!(json.tokens.output, 5);
+    assert_eq!(json.tokens.cache_read, 2);
+    assert_eq!(json.tokens.cache_write, 1);
+    assert_eq!(json.billing_provider_hint.as_deref(), Some("zed.dev"));
+    let zstd = rows
+        .iter()
+        .find(|row| row.key.session == "thread-zstd")
+        .unwrap();
+    assert_eq!(zstd.tokens.input, 3);
 }

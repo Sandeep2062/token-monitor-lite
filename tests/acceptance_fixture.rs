@@ -229,6 +229,7 @@ fn source_format(format: &str) -> SourceFormat {
         "reasonix-jsonl" => SourceFormat::ReasonixJsonl,
         "muse-jsonl" => SourceFormat::MuseJsonl,
         "mcode-jsonl" => SourceFormat::McodeJsonl,
+        "zed-sqlite" => SourceFormat::ZedSqlite,
         other => panic!("unexpected generated source format: {other}"),
     }
 }
@@ -325,7 +326,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
         manifest.coverage.source_formats,
         BTreeMap::from([
             ("claude-cli".to_owned(), 33),
-            ("codex-cli".to_owned(), 15),
+            ("codex-cli".to_owned(), 14),
             ("codex-cli-zstd".to_owned(), 32),
             ("opencode-sqlite".to_owned(), 1),
             ("gemini-transcript".to_owned(), 1),
@@ -345,6 +346,7 @@ fn generated_dataset_reparses_through_every_production_reader() {
             ("reasonix-jsonl".to_owned(), 1),
             ("muse-jsonl".to_owned(), 1),
             ("mcode-jsonl".to_owned(), 1),
+            ("zed-sqlite".to_owned(), 1),
             ("session-archive-sqlite".to_owned(), 1),
             ("codex-local-usage-sqlite".to_owned(), 1),
         ])

@@ -40,6 +40,7 @@ pub enum SourceFormat {
     ReasonixJsonl,
     MuseJsonl,
     McodeJsonl,
+    ZedSqlite,
     SessionArchiveSqlite,
     CodexLocalUsageSqlite,
     OpenCodeSqlite,
@@ -67,6 +68,7 @@ impl SourceFormat {
             Self::ReasonixJsonl => "reasonix",
             Self::MuseJsonl => "muse",
             Self::McodeJsonl => "mcode",
+            Self::ZedSqlite => "zed",
             Self::SessionArchiveSqlite => "mixed",
             Self::OpenCodeSqlite => "opencode",
             Self::KiloSqlite => "kilo",
@@ -93,6 +95,7 @@ impl SourceFormat {
             Self::ReasonixJsonl => "reasonix-jsonl",
             Self::MuseJsonl => "muse-jsonl",
             Self::McodeJsonl => "mcode-jsonl",
+            Self::ZedSqlite => "zed-sqlite",
             Self::SessionArchiveSqlite => "session-archive-sqlite",
             Self::CodexLocalUsageSqlite => "codex-local-usage-sqlite",
             Self::OpenCodeSqlite => "opencode-sqlite",
@@ -120,6 +123,7 @@ impl SourceFormat {
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
             "muse-jsonl" => Some(Self::MuseJsonl),
             "mcode-jsonl" => Some(Self::McodeJsonl),
+            "zed-sqlite" => Some(Self::ZedSqlite),
             "session-archive-sqlite" => Some(Self::SessionArchiveSqlite),
             "codex-local-usage-sqlite" => Some(Self::CodexLocalUsageSqlite),
             "opencode-sqlite" => Some(Self::OpenCodeSqlite),
@@ -137,6 +141,7 @@ impl SourceFormat {
                 | Self::OpenCodeSqlite
                 | Self::KiloSqlite
                 | Self::GooseSqlite
+                | Self::ZedSqlite
         )
     }
 }
@@ -782,7 +787,8 @@ impl SourceReader {
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
             | SourceFormat::KiloSqlite
-            | SourceFormat::GooseSqlite => {
+            | SourceFormat::GooseSqlite
+            | SourceFormat::ZedSqlite => {
                 unreachable!("SQLite sources do not use text readers")
             }
         }
@@ -799,6 +805,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::OpenCode(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Kilo(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::Zed(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::SessionArchive(snapshot) => {
                 let mut retained = Vec::new();
                 for session in snapshot.sessions.iter() {

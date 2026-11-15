@@ -12,13 +12,14 @@ use crate::parsers::kilo::KiloReader;
 use crate::parsers::opencode::{
     MAX_RESPONSES as MAX_OPENCODE_RESPONSES, OpenCodeKind, OpenCodeReader, OpenCodeRecord,
 };
+use crate::parsers::zed::ZedReader;
 use crate::parsers::{CostStatus, ReaderError, ResponseUsage};
 use crate::runtime::MonitoredSource;
 use crate::sources::SourceFormat;
 use chrono::DateTime;
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, params};
 use ruzstd::decoding::errors::FrameDecoderError;
-use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
+use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder, StreamingDecoder};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -259,6 +260,24 @@ impl KiloAdapter {
     }
 }
 
+pub struct ZedAdapter {
+    path: PathBuf,
+}
+
+impl ZedAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_zed(&self.path)
+    }
+}
+
 pub struct GooseAdapter {
     path: PathBuf,
 }
@@ -295,6 +314,7 @@ pub enum InputAdapterStatus {
     OpenCodeSqlite,
     KiloSqlite,
     GooseSqlite,
+    ZedSqlite,
 }
 
 pub(crate) enum SqliteInputData {
@@ -303,6 +323,7 @@ pub(crate) enum SqliteInputData {
     OpenCode(Arc<[ResponseUsage]>),
     Kilo(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
+    Zed(Arc<[ResponseUsage]>),
 }
 
 pub struct InputBatch {
@@ -400,6 +421,7 @@ pub enum SourceInput {
     OpenCode(OpenCodeAdapter),
     Kilo(KiloAdapter),
     Goose(GooseAdapter),
+    Zed(ZedAdapter),
 }
 
 impl SourceInput {
@@ -418,6 +440,7 @@ impl SourceInput {
             SourceFormat::OpenCodeSqlite => Self::OpenCode(OpenCodeAdapter::new(path)),
             SourceFormat::KiloSqlite => Self::Kilo(KiloAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
+            SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
             SourceFormat::GeminiTranscript => Self::gemini(path),
             SourceFormat::CursorCacheJson => Self::cursor(path),
             SourceFormat::ClineJson => Self::document(path),
@@ -507,6 +530,7 @@ impl SourceInput {
             Self::OpenCode(_) => InputAdapterStatus::OpenCodeSqlite,
             Self::Kilo(_) => InputAdapterStatus::KiloSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
+            Self::Zed(_) => InputAdapterStatus::ZedSqlite,
         }
     }
 
@@ -523,7 +547,8 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
-            | Self::Goose(_) => {}
+            | Self::Goose(_)
+            | Self::Zed(_) => {}
         }
     }
 
@@ -540,7 +565,8 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
-            | Self::Goose(_) => Ok(true),
+            | Self::Goose(_)
+            | Self::Zed(_) => Ok(true),
         }
     }
 
@@ -555,6 +581,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Ok(Some(SqliteInputData::OpenCode(adapter.read()?))),
             Self::Kilo(adapter) => Ok(Some(SqliteInputData::Kilo(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
+            Self::Zed(adapter) => Ok(Some(SqliteInputData::Zed(adapter.read()?))),
             Self::OrdinaryJsonl(_)
             | Self::Gemini(_)
             | Self::Cursor(_)
@@ -579,6 +606,7 @@ impl SourceInput {
             Self::OpenCode(adapter) => Some(adapter.path()),
             Self::Kilo(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
+            Self::Zed(adapter) => Some(adapter.path()),
         }
     }
 
@@ -615,7 +643,8 @@ impl SourceInput {
             | Self::CodexLocalUsage(_)
             | Self::OpenCode(_)
             | Self::Kilo(_)
-            | Self::Goose(_) => Err(invalid("sqlite input has no JSONL batch")),
+            | Self::Goose(_)
+            | Self::Zed(_) => Err(invalid("sqlite input has no JSONL batch")),
         }
     }
 }
@@ -1419,6 +1448,83 @@ fn read_kilo(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
     drop(transaction);
     snapshot.verify(path)?;
     Ok(Arc::from(reader.snapshot()))
+}
+
+fn read_zed(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    const MAX_THREAD_JSON_BYTES: u64 = 32 * 1024 * 1024;
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    require_columns(
+        &transaction,
+        "threads",
+        &["id", "updated_at", "data_type", "data"],
+    )?;
+    let columns = table_columns(&transaction, "threads")?;
+    let created_at = if columns
+        .as_ref()
+        .is_some_and(|columns| columns.contains("created_at"))
+    {
+        "created_at"
+    } else {
+        "NULL"
+    };
+    let mut reader = ZedReader::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(&format!(
+            "SELECT id, updated_at, {created_at}, data_type, data FROM threads ORDER BY id LIMIT ?1 OFFSET ?2"
+        ))?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let updated_at: String = row.get(1)?;
+            let created_at: Option<String> = row.get(2)?;
+            let data_type: String = row.get(3)?;
+            let data = row
+                .get_ref(4)?
+                .as_bytes()
+                .map_err(|_| SqliteSourceError::Invalid)?;
+            let json = match data_type.trim().to_ascii_lowercase().as_str() {
+                "json" => data.to_vec(),
+                "zstd" => decode_zed_zstd(data, MAX_THREAD_JSON_BYTES)?,
+                _ => return Err(SqliteSourceError::Unsupported),
+            };
+            if json.len() as u64 > MAX_THREAD_JSON_BYTES {
+                return Err(SqliteSourceError::Capacity);
+            }
+            let thread: Value =
+                serde_json::from_slice(&json).map_err(|_| SqliteSourceError::Invalid)?;
+            reader
+                .ingest_thread(&id, &updated_at, created_at.as_deref(), &thread)
+                .map_err(map_opencode_error)?;
+            page_rows += 1;
+        }
+        if page_rows == 0 {
+            break;
+        }
+        offset = offset
+            .checked_add(i64::try_from(page_rows).map_err(|_| SqliteSourceError::Capacity)?)
+            .ok_or(SqliteSourceError::Capacity)?;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn decode_zed_zstd(data: &[u8], limit: u64) -> Result<Vec<u8>, SqliteSourceError> {
+    let mut decoder =
+        StreamingDecoder::new_with_max_window_size(Cursor::new(data), MAX_ZSTD_WINDOW_BYTES)
+            .map_err(|_| SqliteSourceError::Unsupported)?;
+    let mut decoded = Vec::new();
+    decoder
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut decoded)
+        .map_err(|_| SqliteSourceError::Invalid)?;
+    if decoded.len() as u64 > limit {
+        return Err(SqliteSourceError::Capacity);
+    }
+    Ok(decoded)
 }
 
 fn read_goose(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {

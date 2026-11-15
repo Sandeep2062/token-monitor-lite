@@ -250,6 +250,15 @@ Pi, OMP and Senpi share one JSONL record layout under distinct roots: `<home>/.p
 
 All five readers reject negative or non-integral counters, malformed required fields, missing explicit timestamps where the pinned reader requires one, and zero-token rows are ignored. File-mtime fallback applies only to Qwen, Muse and MiniMax Code, matching the pinned readers.
 
+## Zed threads matrix
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `threads.db` row with `data_type=json` or `zstd` and hosted `zed.dev` model | supported | One observation per thread. `request_token_usage` sums its map/array entries; otherwise `cumulative_token_usage` is the fallback. Input/output/cache read/cache write are checked non-negative. | Thread `id`; identity `zed:<id>`. `zstd` payloads decode through the bounded in-process frame reader. |
+| Imported thread, external ACP provider, zero usage | ignored non-usage | No row. | No ownership change. |
+| Missing required schema, unsupported `data_type`, oversized/invalid JSON, missing usage/timestamp, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Workspace folders, titles, reasoning, message count, cost | ignored | No projection. | No additional source slot. |
+
 ## Input and source matrix
 
 | Source/input shape | Status | Exact contract |

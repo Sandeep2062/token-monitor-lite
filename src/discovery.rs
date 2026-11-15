@@ -6,7 +6,7 @@ use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     CodexLocalUsageAdapter, GooseAdapter, KiloAdapter, MAX_DECODED_BYTES, OpenCodeAdapter,
-    SessionArchiveAdapter, SourceInput, has_zstd_suffix, is_compressed_source_path,
+    SessionArchiveAdapter, SourceInput, ZedAdapter, has_zstd_suffix, is_compressed_source_path,
     is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
@@ -1177,6 +1177,42 @@ fn collect_gemini_candidates(
     Ok(())
 }
 
+fn zed_database_paths(inputs: &HostPaths) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let data_base = inputs
+        .xdg_data_home
+        .clone()
+        .unwrap_or_else(|| inputs.home.join(".local").join("share"));
+    paths.push(join_many(
+        inputs.platform,
+        &data_base,
+        &["zed", "threads", "threads.db"],
+    ));
+    paths.push(join_many(
+        inputs.platform,
+        &inputs.home,
+        &[
+            "Library",
+            "Application Support",
+            "Zed",
+            "threads",
+            "threads.db",
+        ],
+    ));
+    let local = inputs
+        .local_app_data
+        .clone()
+        .unwrap_or_else(|| inputs.home.join("AppData").join("Local"));
+    paths.push(join_many(
+        inputs.platform,
+        &local,
+        &["Zed", "threads", "threads.db"],
+    ));
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 fn tokscale_config_dir(inputs: &HostPaths) -> PathBuf {
     if let Some(dir) = inputs
         .env_paths
@@ -1655,6 +1691,54 @@ fn discover_sources_with_id(
                 }),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
+            }
+            continue;
+        }
+        if client == "zed" {
+            for (ordinal, path) in zed_database_paths(inputs).into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "zed",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "zed",
+                        ordinal,
+                    });
+                    continue;
+                }
+                match ZedAdapter::new(&path).read() {
+                    Ok(rows) if !rows.is_empty() => {
+                        if sources.len() == MAX_SOURCES {
+                            notices.push(DiscoveryNotice::SourceLimitReached);
+                            return Ok(sources);
+                        }
+                        let source_id = source_id_for(SourceFormat::ZedSqlite, &path);
+                        if admitted_ids.insert(source_id) {
+                            sources.push(DiscoveredSource {
+                                source_id,
+                                format: SourceFormat::ZedSqlite,
+                                session: "zed".to_owned(),
+                                path,
+                            });
+                        } else {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        }
+                    }
+                    _ => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "zed",
+                        ordinal,
+                    }),
+                }
             }
             continue;
         }

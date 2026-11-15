@@ -267,10 +267,7 @@ fn counter(usage: &Map<String, Value>, key: &str) -> Result<Option<u64>, ReaderE
     }
 }
 
-fn first_optional(
-    usage: &Map<String, Value>,
-    keys: &[&str],
-) -> Result<Option<u64>, ReaderError> {
+fn first_optional(usage: &Map<String, Value>, keys: &[&str]) -> Result<Option<u64>, ReaderError> {
     for key in keys {
         if let Some(value) = counter(usage, key)? {
             return Ok(Some(value));
