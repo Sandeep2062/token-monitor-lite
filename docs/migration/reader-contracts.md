@@ -183,6 +183,25 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
+## Kiro matrix
+
+Kiro keeps usage in four independently-shaped stores. The supported one is the CLI session document at `~/.kiro/sessions/cli/<session>.json`, whose `session_state.conversation_metadata.user_turn_metadatas` array holds one entry per turn. The remaining three — the SQLite `conversations_v2` table, the IDE `sessions/<workspace>/sess_<uuid>/` layout, and the IDE `globalStorage` snapshots — are not read.
+
+The pinned reader's hybrid estimation model is deliberately not implemented. Kiro's Auto agent commonly persists **zero** counters; where the pinned reader estimates from the sibling `messages.jsonl` (`user_prompt_length` plus order-attributed `ToolResults` bytes for input, `context_usage_percentage * context_window` for cache, `assistant_response_length / 4` for output), the native single-document reader cannot reach that sibling and does not fabricate counts.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Turn with `input_token_count` and/or `output_token_count` greater than zero | supported | One observation. Real counters are authoritative; `cache_read_input_token_count` and `cache_write_input_token_count` are carried when present. Reasoning is zero because Kiro reports none separately. | Document `session_id` owns the turn, falling back to the file stem. Identity is `<session>:<turn index>`. |
+| Turn whose `metering_usage` carries entries with `unit == "credit"` | supported | Provider-reported cost: the credit values are summed and multiplied by $0.04 per credit. A turn with no credit entries, or whose credits sum to zero, is unpriced (`Unavailable`) rather than free. | As above. |
+| Turn where every counter is zero or absent | ignored non-usage | No row. This is the Auto-agent case the pinned reader estimates; the native reader contributes nothing. | No ownership change. |
+| `end_timestamp` absent, with a usable file mtime | supported | The file mtime is the timestamp. | As above. |
+| Negative counter, fractional counter, or a negative/non-finite credit value | visible unsupported | Discard the whole candidate. Counters and credits are never clamped. | Prior committed generation remains active. |
+| Missing session state, or a turn timestamp with no file mtime | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Document with no `user_turn_metadatas` array | ignored non-usage | No rows, and the source is not a usage source. | No ownership change. |
+| Session `cwd` | supported, label only | Only the final path component becomes `workspace_label`; `workspace_key` stays unset. The absolute path is never persisted, because the store rejects absolute-path text in every runtime identity column and a home directory in the database would leak more than it explains. | No ownership effect. |
+| `duration_ms`, `total_request_count`, `is_turn_start`, credit redistribution to the nearest emitted turn, `agent`/`mode` | visible unsupported / ignored | Not guessed; `is_turn_start` is an aggregation concern in this codebase. | No source slot. |
+| SQLite `conversations_v2`, IDE `sessions/<workspace>/`, IDE `globalStorage` | visible unsupported / ignored | Not read; each is a separate store shape. | No source slot. |
+
 ## ZCode matrix
 
 ZCode keeps usage in two stores. Transcript JSONL lives at `~/.zcode/projects/<slug>/<session>.jsonl`; the authoritative per-request store is the `model_usage` table at `~/.zcode/cli/db/db.sqlite`. Both are separate sources. The pinned reader's ~4-chars-per-token estimation fallback, `is_turn_start` assignment, per-request duration, and `agent`/`mode` attribution are not implemented.

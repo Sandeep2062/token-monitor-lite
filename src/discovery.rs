@@ -2625,6 +2625,15 @@ fn discover_sources_with_id(
                     &[".grok", "sessions"],
                 )],
             ),
+            "kiro" => (
+                "kiro",
+                SourceFormat::KiroJson,
+                vec![join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".kiro", "sessions", "cli"],
+                )],
+            ),
             "kimi" => (
                 "kimi",
                 SourceFormat::KimiJsonl,
@@ -3100,6 +3109,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 // Droid's session is the `<uuid>` stem of
                 // `<uuid>.settings.json`; the settings document names none.
                 SourceFormat::DroidJson => None,
+                // Kiro's session document names its own session_id; the caller
+                // derives one from the <session>.json stem when absent.
+                SourceFormat::KiroJson => None,
                 // Kimi's wire stream carries no session id; the caller derives
                 // it from the `<GROUP>/<SESSION>/wire.jsonl` path.
                 SourceFormat::KimiJsonl => None,
@@ -3211,6 +3223,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             | SourceFormat::OpenClawJsonl
             | SourceFormat::CommandCodeJsonl
             | SourceFormat::ZcodeJsonl
+            | SourceFormat::KiroJson
     ) {
         return path
             .file_stem()

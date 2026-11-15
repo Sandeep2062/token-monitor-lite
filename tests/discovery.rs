@@ -1072,6 +1072,29 @@ fn mimo_databases_are_discovered_at_the_xdg_data_role() {
 }
 
 #[test]
+fn kiro_cli_sessions_are_discovered_under_the_sessions_role() {
+    let tree = Tree::new();
+    tree.file(
+        ".kiro/sessions/cli/sess-1.json",
+        br#"{"session_id":"sess-1","session_state":{"conversation_metadata":{"user_turn_metadatas":[{"input_token_count":100,"output_token_count":50,"end_timestamp":1782718000}]}}}"#,
+    );
+    // A document carrying no usage is present but must not become a source.
+    tree.file(
+        ".kiro/sessions/cli/empty.json",
+        br#"{"session_id":"empty","session_state":{"conversation_metadata":{}}}"#,
+    );
+
+    let mut paths = tree.paths(&["kiro"]);
+    let report = discover(&paths).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::KiroJson);
+    assert_eq!(report.sources[0].session, "sess-1");
+
+    paths.enabled_clients = BTreeSet::new();
+    assert!(discover(&paths).unwrap().sources.is_empty());
+}
+
+#[test]
 fn zcode_projects_and_the_cli_database_are_discovered() {
     let tree = Tree::new();
     // Transcript store: `<slug>/<session>.jsonl`.

@@ -17,6 +17,7 @@ pub mod hermes;
 pub mod jsonl;
 pub mod kilo;
 pub mod kimi;
+pub mod kiro;
 pub mod mcode;
 pub mod mimo;
 pub mod muse;

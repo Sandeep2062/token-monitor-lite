@@ -425,6 +425,7 @@ pub enum InputAdapterStatus {
     ClineJson,
     AmpJson,
     DroidJson,
+    KiroJson,
     CopilotJsonl,
     CodeBuddyLog,
     CompressedCodexJsonl,
@@ -551,6 +552,7 @@ pub enum SourceInput {
     Cline(DocumentInput),
     Amp(DocumentInput),
     Droid(DocumentInput),
+    Kiro(DocumentInput),
     Copilot(OrdinaryJsonlInput),
     CodeBuddyLog(DocumentInput),
     CompressedJsonl(Box<CompressedJsonlInput>),
@@ -630,6 +632,7 @@ impl SourceInput {
             SourceFormat::ClineJson => Self::document(path),
             SourceFormat::AmpJson => Self::amp(path),
             SourceFormat::DroidJson => Self::droid(path),
+            SourceFormat::KiroJson => Self::kiro(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -709,6 +712,13 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn kiro(path: PathBuf) -> Self {
+        Self::Kiro(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+        })
+    }
+
     pub(crate) fn codebuddy_log(path: PathBuf) -> Self {
         Self::CodeBuddyLog(DocumentInput {
             path,
@@ -735,6 +745,7 @@ impl SourceInput {
             Self::Cline(_) => InputAdapterStatus::ClineJson,
             Self::Amp(_) => InputAdapterStatus::AmpJson,
             Self::Droid(_) => InputAdapterStatus::DroidJson,
+            Self::Kiro(_) => InputAdapterStatus::KiroJson,
             Self::Copilot(_) => InputAdapterStatus::CopilotJsonl,
             Self::CodeBuddyLog(_) => InputAdapterStatus::CodeBuddyLog,
             Self::CompressedJsonl(_) => InputAdapterStatus::CompressedCodexJsonl,
@@ -765,6 +776,7 @@ impl SourceInput {
             Self::Cline(input) => input.reset(),
             Self::Amp(input) => input.reset(),
             Self::Droid(input) => input.reset(),
+            Self::Kiro(input) => input.reset(),
             Self::Copilot(input) => input.cursor.reset(),
             Self::CodeBuddyLog(input) => input.reset(),
             Self::CompressedJsonl(input) => input.reset(),
@@ -795,6 +807,7 @@ impl SourceInput {
             Self::Cline(input) => input.is_current(),
             Self::Amp(input) => input.is_current(),
             Self::Droid(input) => input.is_current(),
+            Self::Kiro(input) => input.is_current(),
             Self::Copilot(input) => input.cursor.is_current(&input.path),
             Self::CodeBuddyLog(input) => input.is_current(),
             Self::CompressedJsonl(input) => input.is_current(),
@@ -845,6 +858,7 @@ impl SourceInput {
             | Self::Cline(_)
             | Self::Amp(_)
             | Self::Droid(_)
+            | Self::Kiro(_)
             | Self::Copilot(_)
             | Self::CodeBuddyLog(_)
             | Self::CompressedJsonl(_) => Ok(None),
@@ -863,6 +877,7 @@ impl SourceInput {
             Self::Cline(input) => Some(&input.path),
             Self::Amp(input) => Some(&input.path),
             Self::Droid(input) => Some(&input.path),
+            Self::Kiro(input) => Some(&input.path),
             Self::Copilot(input) => Some(&input.path),
             Self::CodeBuddyLog(input) => Some(&input.path),
             Self::CompressedJsonl(input) => Some(&input.path),
@@ -943,6 +958,7 @@ impl SourceInput {
             Self::Cline(input) => input.read_batch(),
             Self::Amp(input) => input.read_batch(),
             Self::Droid(input) => input.read_batch(),
+            Self::Kiro(input) => input.read_batch(),
             Self::CodeBuddyLog(input) => input.read_batch(),
             Self::Copilot(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;

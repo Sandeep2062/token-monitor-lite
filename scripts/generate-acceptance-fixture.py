@@ -50,7 +50,7 @@ from typing import Any, Callable
 SCHEMA = "token-monitor-lite-acceptance-v2"
 REVISION = "mixed-2026-11-13.4"
 SEED = 2062
-CLAUDE_SOURCES = 25
+CLAUDE_SOURCES = 24
 CODEX_SOURCES = 14
 ZSTD_SOURCES = 32
 OPENCODE_SOURCES = 1
@@ -68,6 +68,7 @@ GROK_SOURCES = 1
 COMMANDCODE_SOURCES = 1
 MIMO_SOURCES = 1
 ZCODE_SOURCES = 1
+KIRO_SOURCES = 1
 COPILOT_SOURCES = 1
 CODEBUDDY_SOURCES = 1
 WORKBUDDY_SOURCES = 1
@@ -102,6 +103,7 @@ SOURCE_COUNT = (
     + COMMANDCODE_SOURCES
     + MIMO_SOURCES
     + ZCODE_SOURCES
+    + KIRO_SOURCES
     + COPILOT_SOURCES
     + CODEBUDDY_SOURCES
     + WORKBUDDY_SOURCES
@@ -1162,6 +1164,50 @@ def _commandcode_source() -> tuple[str, bytes, dict[str, int], int]:
         parent = entry_id
     data = b"".join(records)
     return f"{slug}/{session}", data, totals, OBSERVATIONS_PER_JSONL
+
+
+def _kiro_source() -> tuple[str, bytes, dict[str, int], int]:
+    """One Kiro CLI session: one authoritative turn per observation."""
+    session = "kiro-fixture-000"
+    totals = _counts()
+    turns = []
+    for observation in range(OBSERVATIONS_PER_JSONL):
+        counts = {
+            "input": 210 + observation,
+            "output": 40 + observation,
+            "cacheRead": 12,
+            "cacheWrite": 2,
+            "reasoning": 0,
+        }
+        _add_counts(totals, counts)
+        turns.append(
+            {
+                "input_token_count": counts["input"],
+                "output_token_count": counts["output"],
+                "cache_read_input_token_count": counts["cacheRead"],
+                "cache_write_input_token_count": counts["cacheWrite"],
+                "end_timestamp": 1782718000 + observation,
+            }
+        )
+    document = {
+        "session_id": session,
+        "cwd": "/work/acceptance",
+        "session_state": {
+            "rts_model_state": {
+                "model_info": {
+                    "model_id": "claude-sonnet-4",
+                    "context_window_tokens": 200_000,
+                }
+            },
+            "conversation_metadata": {"user_turn_metadatas": turns},
+        },
+    }
+    return (
+        f"{session}.json",
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        totals,
+        len(turns),
+    )
 
 
 def _zcode_database(path: Path) -> tuple[str, dict[str, int], int]:
@@ -2234,6 +2280,24 @@ def generate(raw_root: str) -> Path:
     _add_counts(canonical_aggregate, zcode_totals)
     physical_bytes += zcode_target.stat().st_size
     decoded_bytes += zcode_target.stat().st_size
+
+    kiro_path, kiro_data, kiro_totals, kiro_rows = _kiro_source()
+    kiro_entry = _source_entry(
+        root,
+        f"home/.kiro/sessions/cli/{kiro_path}",
+        kiro_data,
+        format_name="kiro-json",
+        session="kiro-fixture-000",
+        observations=kiro_rows,
+        canonical_sessions=1,
+        expected_totals=kiro_totals,
+        physical_bytes=len(kiro_data),
+    )
+    sources.append(kiro_entry)
+    _add_counts(aggregate, kiro_totals)
+    _add_counts(canonical_aggregate, kiro_totals)
+    physical_bytes += len(kiro_data)
+    decoded_bytes += len(kiro_data)
 
     copilot_session, copilot_data, copilot_totals, copilot_rows = _copilot_source()
     copilot_entry = _source_entry(
