@@ -4,9 +4,10 @@
 //! These were previously checked by hand. A hand check is a snapshot of one
 //! afternoon's diligence: it found missing evidence rows, three stale duplicate
 //! rows, and two wrong test counts, and it will drift again within a couple of
-//! commits. Making it a test turns "42 catalog clients, 42 evidence rows, none
-//! missing, none extra, 87 cited test files with accurate counts" into a claim
-//! that verifies itself on every run.
+//! commits. Making it a test turns "every catalog client has exactly one
+//! evidence row, none missing, none extra, and every cited test file exists with
+//! the stated count" into a claim that verifies itself on every run — including
+//! as the catalog grows.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
