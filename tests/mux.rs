@@ -1,11 +1,13 @@
 //! Mux workspace-usage reader contract.
 
-use token_monitor_lite::parsers::mux::{CLIENT, MuxReader};
 use token_monitor_lite::parsers::CostStatus;
+use token_monitor_lite::parsers::mux::{CLIENT, MuxReader};
 
 fn read(document: &str) -> Vec<token_monitor_lite::parsers::ResponseUsage> {
     let mut reader = MuxReader::new("ws_alpha").with_fallback_timestamp(Some(1_700_000_000_000));
-    reader.ingest(document.as_bytes()).expect("document is accepted");
+    reader
+        .ingest(document.as_bytes())
+        .expect("document is accepted");
     reader.snapshot()
 }
 
@@ -52,7 +54,10 @@ fn the_counters_map_to_the_workspace_buckets() {
 #[test]
 fn the_provider_prefix_becomes_the_billing_hint() {
     let found = read(TWO_MODELS);
-    let claude = found.iter().find(|row| row.model == "claude-opus-4-6").unwrap();
+    let claude = found
+        .iter()
+        .find(|row| row.model == "claude-opus-4-6")
+        .unwrap();
     assert_eq!(claude.billing_provider_hint.as_deref(), Some("anthropic"));
     let gpt = found.iter().find(|row| row.model == "gpt-4o").unwrap();
     assert_eq!(gpt.billing_provider_hint.as_deref(), Some("openai"));
@@ -80,7 +85,10 @@ fn a_model_name_containing_colons_keeps_them() {
 #[test]
 fn the_reported_cost_is_the_sum_of_the_buckets() {
     let found = read(TWO_MODELS);
-    let claude = found.iter().find(|row| row.model == "claude-opus-4-6").unwrap();
+    let claude = found
+        .iter()
+        .find(|row| row.model == "claude-opus-4-6")
+        .unwrap();
     // 0.01 + 0.05 + 0.02 + 0.03 = 0.11 USD, reported in nano-USD.
     assert_eq!(claude.cost, CostStatus::Reported(110_000_000));
 }
@@ -109,7 +117,8 @@ fn an_entry_with_no_tokens_is_not_an_observation() {
 fn a_negative_counter_is_clamped_not_rejected() {
     // This is an aggregate document: one bad bucket must not discard a
     // workspace's otherwise valid usage.
-    let document = r#"{"byModel":{"anthropic:m":{"input":{"tokens":-50},"output":{"tokens":100}}}}"#;
+    let document =
+        r#"{"byModel":{"anthropic:m":{"input":{"tokens":-50},"output":{"tokens":100}}}}"#;
     let found = read(document);
     assert_eq!(found[0].tokens.input, 0);
     assert_eq!(found[0].tokens.output, 100);
@@ -125,8 +134,14 @@ fn an_empty_or_absent_by_model_yields_nothing() {
 fn the_session_is_the_workspace_and_the_key_is_workspace_scoped() {
     let found = read(TWO_MODELS);
     assert!(found.iter().all(|row| row.key.session == "ws_alpha"));
-    let claude = found.iter().find(|row| row.model == "claude-opus-4-6").unwrap();
-    assert_eq!(claude.dedup_key.as_deref(), Some("mux:ws_alpha:anthropic:claude-opus-4-6"));
+    let claude = found
+        .iter()
+        .find(|row| row.model == "claude-opus-4-6")
+        .unwrap();
+    assert_eq!(
+        claude.dedup_key.as_deref(),
+        Some("mux:ws_alpha:anthropic:claude-opus-4-6")
+    );
 }
 
 #[test]

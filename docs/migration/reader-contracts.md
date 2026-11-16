@@ -405,6 +405,25 @@ Mux keeps one aggregate counter document per workspace at `~/.mux/sessions/<work
 | Malformed JSON | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 | Dedup key | supported | `mux:<workspaceId>:<modelKey>`, deliberately workspace-scoped: a positional key made the first model in every workspace collide, and the map's iteration order was not stable across re-parses. | As above. |
 
+## Junie matrix
+
+Junie stores local sessions under `~/.junie/sessions/<session-id>/events.jsonl`. Each `LlmResponseMetadataEvent` carries per-model usage rows under `event.agentEvent.modelUsage`, and each row is one observation.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `LlmResponseMetadataEvent` with `modelUsage` rows | supported | One observation per row from its counters. | Session is the containing directory, since the file is always `events.jsonl`. |
+| `UserPromptEvent` | ignored non-usage | Marks a turn; carries no counters. No turn structure is emitted because this observation type has no turn field. | No source slot. |
+| State-snapshot or other kind | ignored non-usage | Skipped. The substring pre-filter only avoids parsing large snapshots; the authoritative skip is on the parsed `kind`, so a usage line that merely *mentions* a skipped kind is not dropped. | No source slot. |
+| Row with no `model` | ignored non-usage | Skipped; there is nothing to attribute it to. | No source slot. |
+| Counter spellings | supported | First present wins per bucket: `inputTokens`/`input`, `outputTokens`/`output`, three cache-read spellings, three cache-write spellings, three reasoning spellings. | As above. |
+| Recorded `timestampMs` plus `usage.time` | supported | `timestampMs` is the call's **end** and `time` its latency in ms, so the start is back-calculated. | As above. |
+| No recorded `timestampMs` | supported | The file mtime is used and is **not** back-anchored: subtracting a latency from it would move the message into the wrong day. | As above. |
+| `cost` positive | supported, cost reported | Carried as source-reported USD. | As above. |
+| `cost` absent or zero | supported, unpriced | Reports nothing — zero here means "none recorded", not "billed nothing". | As above. |
+| Row with no tokens and no cost | ignored non-usage | Not an observation. | No source slot. |
+| Replayed identical event | supported | Collapses: the dedup suffix is the row's position **within its event**, not a file-global counter, so a replay reproduces the same key while distinct rows in one event stay distinct. | As above. |
+| Malformed JSON on a relevant line | visible unsupported | Declined record. | Prior committed generation remains active. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

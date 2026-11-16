@@ -40,6 +40,7 @@ const SUPPORTED_CLIENTS: &[&str] = &[
     "senpi",
     "kimchi",
     "mux",
+    "junie",
     "workbuddy",
 ];
 const COMMAND_CAPACITY: usize = 8;
@@ -1164,6 +1165,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::SenpiJsonl => "senpi",
         SourceFormat::KimchiJsonl => "kimchi",
         SourceFormat::MuxJson => "mux",
+        SourceFormat::JunieJsonl => "junie",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",
         SourceFormat::ReasonixJsonl => "reasonix",

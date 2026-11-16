@@ -292,6 +292,30 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn junie_session_events_are_discovered_under_the_session_directory() {
+    let tree = Tree::new();
+    let body = br#"{"kind":"UserPromptEvent","timestampMs":1785594800000}
+{"kind":"AgentEvent","timestampMs":1785594801000,"event":{"agentEvent":{"kind":"LlmResponseMetadataEvent","modelUsage":[{"model":"golden-goose","inputTokens":100,"outputTokens":20}]}}}
+"#;
+    tree.file(".junie/sessions/session-260709-110000/events.jsonl", body);
+    // A sibling non-`events.jsonl` file is not admitted.
+    tree.file(".junie/sessions/session-260709-110000/other.jsonl", body);
+
+    let report = discover(&tree.paths(&["junie"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::JunieJsonl);
+    assert_eq!(report.sources[0].session, "session-260709-110000");
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::JunieJsonl)
+    );
+}
+
+#[test]
 fn mux_workspace_usage_is_discovered_per_workspace() {
     let tree = Tree::new();
     tree.file(
@@ -307,20 +331,24 @@ fn mux_workspace_usage_is_discovered_per_workspace() {
 
     let report = discover(&tree.paths(&["mux"])).unwrap();
     assert_eq!(report.sources.len(), 2);
-    assert!(report
-        .sources
-        .iter()
-        .all(|source| source.format == SourceFormat::MuxJson));
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::MuxJson)
+    );
     // Each workspace is its own session, so two workspaces cannot collapse.
     let sessions: std::collections::BTreeSet<&str> =
         report.sources.iter().map(|s| s.session.as_str()).collect();
     assert_eq!(sessions.len(), 2);
 
     let disabled = discover(&tree.paths(&["claude"])).unwrap();
-    assert!(disabled
-        .sources
-        .iter()
-        .all(|source| source.format != SourceFormat::MuxJson));
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::MuxJson)
+    );
 }
 
 #[test]
@@ -338,10 +366,12 @@ fn kimchi_sessions_are_discovered_in_the_pi_format() {
     assert_eq!(report.sources[0].format, SourceFormat::KimchiJsonl);
 
     let disabled = discover(&tree.paths(&["claude"])).unwrap();
-    assert!(disabled
-        .sources
-        .iter()
-        .all(|source| source.format != SourceFormat::KimchiJsonl));
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::KimchiJsonl)
+    );
 }
 
 #[test]

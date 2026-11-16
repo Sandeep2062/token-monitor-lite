@@ -1,7 +1,6 @@
 //! Bounded source reading. Client-specific parsers are separate modules/tasks.
 
 pub mod amp;
-pub mod mux;
 pub mod antigravity;
 pub mod catpaw;
 pub mod cherrystudio;
@@ -22,6 +21,7 @@ pub mod grok;
 pub mod hermes;
 pub mod jcode;
 pub mod jsonl;
+pub mod junie;
 pub mod kilo;
 pub mod kimchi;
 pub mod kimi;
@@ -31,6 +31,7 @@ pub mod mcode;
 pub mod mimo;
 pub mod mistral;
 pub mod muse;
+pub mod mux;
 pub mod omp;
 pub mod openclaw;
 pub mod opencode;

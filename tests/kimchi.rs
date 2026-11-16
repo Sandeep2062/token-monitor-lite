@@ -59,7 +59,10 @@ fn the_header_names_the_session() {
 fn the_message_carries_its_model_and_provider() {
     let found = read(&[header("s"), assistant(1, 1)]);
     assert_eq!(found[0].model, "kimi-k2.6");
-    assert_eq!(found[0].billing_provider_hint.as_deref(), Some("kimchi-dev"));
+    assert_eq!(
+        found[0].billing_provider_hint.as_deref(),
+        Some("kimchi-dev")
+    );
 }
 
 #[test]

@@ -1067,7 +1067,7 @@ impl SourceInput {
             Self::Vibe(_) => InputAdapterStatus::VibeJson,
             Self::PrimeAgent(_) => InputAdapterStatus::PrimeAgentJsonl,
             Self::Jcode(_) => InputAdapterStatus::JcodeJson,
-    Self::Mux(_) => InputAdapterStatus::MuxJson,
+            Self::Mux(_) => InputAdapterStatus::MuxJson,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,

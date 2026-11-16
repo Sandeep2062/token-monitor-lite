@@ -21,12 +21,15 @@ use crate::parsers::{
     gemini::GeminiReader,
     grok::GrokReader,
     jcode::JcodeReader,
+    junie::JunieReader,
+    kimchi::KimchiReader,
     kimi::KimiReader,
     kiro::KiroReader,
     lmstudio::LmstudioReader,
     mcode::McodeReader,
     mistral::VibeReader,
     muse::MuseReader,
+    mux::MuxReader,
     omp::OmpReader,
     openclaw::OpenClawReader,
     pi::PiReader,
@@ -35,8 +38,6 @@ use crate::parsers::{
     qodercn::QodercnReader,
     qwen::QwenReader,
     reasonix::ReasonixReader,
-    mux::MuxReader,
-    kimchi::KimchiReader,
     senpi::SenpiReader,
     workbuddy::WorkBuddyReader,
     zcode::ZcodeReader,
@@ -71,6 +72,7 @@ pub enum SourceFormat {
     SenpiJsonl,
     KimchiJsonl,
     MuxJson,
+    JunieJsonl,
     AntigravityJsonl,
     QwenJsonl,
     ReasonixJsonl,
@@ -129,6 +131,7 @@ impl SourceFormat {
             Self::SenpiJsonl => "senpi",
             Self::KimchiJsonl => "kimchi",
             Self::MuxJson => "mux",
+            Self::JunieJsonl => "junie",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
             Self::ReasonixJsonl => "reasonix",
@@ -181,6 +184,7 @@ impl SourceFormat {
             Self::SenpiJsonl => "senpi-jsonl",
             Self::KimchiJsonl => "kimchi-jsonl",
             Self::MuxJson => "mux-json",
+            Self::JunieJsonl => "junie-jsonl",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
             Self::ReasonixJsonl => "reasonix-jsonl",
@@ -237,6 +241,7 @@ impl SourceFormat {
             "senpi-jsonl" => Some(Self::SenpiJsonl),
             "kimchi-jsonl" => Some(Self::KimchiJsonl),
             "mux-json" => Some(Self::MuxJson),
+            "junie-jsonl" => Some(Self::JunieJsonl),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -497,6 +502,7 @@ enum ResponseReader {
     Senpi(Box<SenpiReader>),
     Kimchi(Box<KimchiReader>),
     Mux(Box<MuxReader>),
+    Junie(Box<JunieReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
     Reasonix(Box<ReasonixReader>),
@@ -537,6 +543,7 @@ impl ResponseReader {
             Self::Senpi(reader) => reader.ingest(record),
             Self::Kimchi(reader) => reader.ingest(record),
             Self::Mux(reader) => reader.ingest(record),
+            Self::Junie(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
             Self::Reasonix(reader) => reader.ingest(record),
@@ -577,6 +584,7 @@ impl ResponseReader {
             Self::Senpi(reader) => reader.snapshot(),
             Self::Kimchi(reader) => reader.snapshot(),
             Self::Mux(reader) => reader.snapshot(),
+            Self::Junie(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
             Self::Reasonix(reader) => reader.snapshot(),
@@ -614,6 +622,7 @@ impl ResponseReader {
             | Self::Senpi(_)
             | Self::Kimchi(_)
             | Self::Mux(_)
+            | Self::Junie(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
             | Self::Reasonix(_)
@@ -684,6 +693,7 @@ impl ResponseReader {
             Self::Senpi(reader) => reader.has_supported_usage(),
             Self::Kimchi(reader) => reader.has_supported_usage(),
             Self::Mux(reader) => reader.has_supported_usage(),
+            Self::Junie(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
             Self::Reasonix(reader) => reader.has_supported_usage(),
@@ -1155,13 +1165,20 @@ impl SourceReader {
             SourceFormat::KimchiJsonl => {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Kimchi(Box::new(
-                    KimchiReader::new("kimchi", &self.key.session).with_fallback_timestamp(fallback),
+                    KimchiReader::new("kimchi", &self.key.session)
+                        .with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::MuxJson => {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Mux(Box::new(
                     MuxReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::JunieJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Junie(Box::new(
+                    JunieReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::AntigravityJsonl => {
