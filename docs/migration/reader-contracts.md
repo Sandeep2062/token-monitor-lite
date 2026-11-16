@@ -442,6 +442,26 @@ Auggie writes one session snapshot per session at `~/.augment/sessions/<sessionI
 | Turn identity | supported | The exchange's `requestId`, else the turn's `sequenceId`, else the turn's position — so a re-read collapses while distinct turns stay distinct. | As above. |
 | Malformed JSON | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
 
+## gajae-code matrix
+
+gajae-code (`gjc`) writes JSONL sessions at `~/.gjc/agent/sessions/<project-slug>/*.jsonl`, with depth-2 per-pass sub-agent children at `<slug>/<session>/N-*.jsonl`. Each line is tagged by `type`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `{"type":"session"}` header | supported, emits nothing | Carries `id` and `cwd`; the header itself is not an observation. | Session is the header's `id`. |
+| `{"type":"message"}` with `role: "assistant"` | supported | One observation from its `usage` block. | As above. |
+| `message` with any other role | ignored non-usage | User and tool turns carry no billable usage. | No source slot. |
+| `service_tier_change`, or any other `type` | ignored non-usage | Skipped. | No source slot. |
+| `usage.cost.total` finite and non-negative | supported, cost reported | Reused verbatim as an authoritative USD figure. | As above. |
+| `usage.cost.total` absent, negative or non-finite | supported, unpriced | Reports nothing so the pricing layer can price from tokens. A negative total is treated as unreported rather than clamped. | As above. |
+| `message.timestamp` (unix ms) | supported | Preferred; falls back to the entry's ISO `timestamp`, then the file mtime. | As above. |
+| `cwd` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
+| Message with `id` | supported | Dedup key `gjc:<session>:<message id>`. | As above. |
+| Message with no `id` | supported | A deterministic key folding session, timestamp, model, provider, the token breakdown and a hash of the line, so a depth-1/depth-2 replay collapses while distinct messages stay apart. | As above. |
+| File with no `session` header | supported | Falls back to the caller's session (the file stem). | As above. |
+| Missing `provider` | supported | No provider hint at all rather than an invented `gjc` pseudo-provider that no pricing row can match. | As above. |
+| Malformed JSON on a line | visible unsupported | Declined record. | Prior committed generation remains active. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

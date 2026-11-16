@@ -17,6 +17,7 @@ pub mod droid;
 pub mod dsh;
 pub mod fx;
 pub mod gemini;
+pub mod gjc;
 pub mod goose;
 pub mod grok;
 pub mod hermes;

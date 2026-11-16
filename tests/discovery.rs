@@ -292,6 +292,34 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn gjc_sessions_are_discovered_including_depth_two_children() {
+    let tree = Tree::new();
+    let body = br#"{"type":"session","id":"gjc-1","timestamp":"2026-07-09T11:00:00.000Z","cwd":"/work/pi"}
+{"type":"message","id":"msg_001","timestamp":"2026-07-09T11:00:01.000Z","message":{"role":"assistant","model":"claude-sonnet-4","provider":"anthropic","timestamp":1785594801000,"usage":{"input":100,"output":50}}}
+"#;
+    tree.file(".gjc/agent/sessions/project-a/pass-1.jsonl", body);
+    // A depth-2 per-pass sub-agent child.
+    tree.file(".gjc/agent/sessions/project-a/session-1/2-pass.jsonl", body);
+
+    let report = discover(&tree.paths(&["gjc"])).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::GjcJsonl)
+    );
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::GjcJsonl)
+    );
+}
+
+#[test]
 fn augment_session_snapshots_are_discovered_by_stem() {
     let tree = Tree::new();
     tree.file(

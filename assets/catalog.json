@@ -22,6 +22,7 @@
     {"id":"mux","label":"Mux"},
     {"id":"junie","label":"Junie"},
     {"id":"augment","label":"Augment Code"},
+    {"id":"gjc","label":"gajae-code"},
     {"id":"goose","label":"Goose"},
     {"id":"zed","label":"Zed"},
     {"id":"kilo","label":"Kilo"},
