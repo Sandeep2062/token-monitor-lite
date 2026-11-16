@@ -292,6 +292,29 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn freebuff_lane_is_partitioned_from_codebuff() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/manicode/projects/free/chats/2025-12-14T10-00-00.000Z/chat-messages.json",
+        br#"[{"id":"f1","variant":"ai","metadata":{"model":"gpt-5","usage":{"inputTokens":10,"outputTokens":5}}}]"#,
+    );
+    tree.file(
+        ".config/manicode/projects/paid/chats/2025-12-14T11-00-00.000Z/chat-messages.json",
+        br#"[{"id":"c1","variant":"ai","metadata":{"model":"claude-sonnet-4-5","usage":{"inputTokens":20,"outputTokens":8}}}]"#,
+    );
+
+    // The `free` lane belongs to Freebuff...
+    let freebuff = discover(&tree.paths(&["freebuff"])).unwrap();
+    assert_eq!(freebuff.sources.len(), 1);
+    assert_eq!(freebuff.sources[0].format, SourceFormat::FreebuffJson);
+
+    // ...and everything else to Codebuff, so no chat is counted twice.
+    let codebuff = discover(&tree.paths(&["codebuff"])).unwrap();
+    assert_eq!(codebuff.sources.len(), 1);
+    assert_eq!(codebuff.sources[0].format, SourceFormat::CodebuffJson);
+}
+
+#[test]
 fn codebuff_chat_histories_are_discovered() {
     let tree = Tree::new();
     tree.file(

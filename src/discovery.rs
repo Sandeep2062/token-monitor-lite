@@ -2994,6 +2994,7 @@ fn discover_sources_with_id(
                 path.file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name == "chat-messages.json")
+                    && !crate::parsers::freebuff::is_freebuff_path(path)
             });
             candidates.sort();
             for (ordinal, path) in candidates.into_iter().enumerate() {
@@ -3026,6 +3027,72 @@ fn discover_sources_with_id(
                 sources.push(DiscoveredSource {
                     source_id,
                     format: SourceFormat::CodebuffJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
+        if client == "freebuff" {
+            // The same tree and the same file shape as Codebuff; only the lane
+            // marker separates them, so a chat can never be counted twice.
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for channel in ["manicode", "manicode-dev", "manicode-staging"] {
+                let root = join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".config", channel, "projects"],
+                );
+                collect_source_candidates(
+                    &root,
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "chat-messages.json")
+                    && crate::parsers::freebuff::is_freebuff_path(path)
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::FreebuffJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "freebuff",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::FreebuffJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::FreebuffJson,
                     session,
                     path,
                 });
@@ -4232,7 +4299,7 @@ fn catpaw_database_scope(name: &str) -> bool {
 }
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
-    if format == SourceFormat::CodebuffJson {
+    if format == SourceFormat::CodebuffJson || format == SourceFormat::FreebuffJson {
         let session = crate::parsers::codebuff::session_from_path(path);
         return Ok(session);
     }
@@ -4272,6 +4339,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             let value: Value = serde_json::from_slice(&record).map_err(|_| ())?;
             let session = match format {
                 SourceFormat::CodebuffJson => None,
+                SourceFormat::FreebuffJson => None,
                 SourceFormat::ClaudeCli => value.get("sessionId").and_then(Value::as_str),
                 SourceFormat::CodexCli => {
                     if value.get("type").and_then(Value::as_str) == Some("session_meta") {

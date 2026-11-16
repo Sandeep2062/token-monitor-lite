@@ -658,6 +658,7 @@ pub enum InputAdapterStatus {
     MuxJson,
     AugmentJson,
     CodebuffJson,
+    FreebuffJson,
     TraeJson,
     GooseSqlite,
     HermesSqlite,
@@ -797,6 +798,7 @@ pub enum SourceInput {
     Mux(Box<DocumentInput>),
     Augment(Box<DocumentInput>),
     Codebuff(Box<DocumentInput>),
+    Freebuff(Box<DocumentInput>),
     Trae(Box<DocumentInput>),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
@@ -916,6 +918,7 @@ impl SourceInput {
             SourceFormat::MuxJson => Self::mux(path),
             SourceFormat::AugmentJson => Self::augment(path),
             SourceFormat::CodebuffJson => Self::codebuff(path),
+            SourceFormat::FreebuffJson => Self::freebuff(path),
             SourceFormat::TraeJson => Self::trae(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
@@ -1006,6 +1009,14 @@ impl SourceInput {
             cursor: DocumentCursor::default(),
             window: None,
         })
+    }
+
+    pub(crate) fn freebuff(path: PathBuf) -> Self {
+        Self::Freebuff(Box::new(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+            window: None,
+        }))
     }
 
     pub(crate) fn codebuff(path: PathBuf) -> Self {
@@ -1103,6 +1114,7 @@ impl SourceInput {
             Self::Mux(_) => InputAdapterStatus::MuxJson,
             Self::Augment(_) => InputAdapterStatus::AugmentJson,
             Self::Codebuff(_) => InputAdapterStatus::CodebuffJson,
+            Self::Freebuff(_) => InputAdapterStatus::FreebuffJson,
             Self::Trae(_) => InputAdapterStatus::TraeJson,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
@@ -1151,6 +1163,7 @@ impl SourceInput {
             Self::Mux(input) => input.reset(),
             Self::Augment(input) => input.reset(),
             Self::Codebuff(input) => input.reset(),
+            Self::Freebuff(input) => input.reset(),
             Self::Trae(input) => input.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
@@ -1199,6 +1212,7 @@ impl SourceInput {
             Self::Mux(input) => input.is_current(),
             Self::Augment(input) => input.is_current(),
             Self::Codebuff(input) => input.is_current(),
+            Self::Freebuff(input) => input.is_current(),
             Self::Trae(input) => input.is_current(),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
@@ -1271,6 +1285,7 @@ impl SourceInput {
             | Self::Mux(_)
             | Self::Augment(_)
             | Self::Codebuff(_)
+            | Self::Freebuff(_)
             | Self::Trae(_)
             | Self::PrimeAgent(_)
             | Self::Kimi(_)
@@ -1303,6 +1318,7 @@ impl SourceInput {
             Self::Mux(input) => Some(&input.path),
             Self::Augment(input) => Some(&input.path),
             Self::Codebuff(input) => Some(&input.path),
+            Self::Freebuff(input) => Some(&input.path),
             Self::Trae(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
@@ -1386,6 +1402,7 @@ impl SourceInput {
             Self::Mux(input) => input.read_batch(),
             Self::Augment(input) => input.read_batch(),
             Self::Codebuff(input) => input.read_batch(),
+            Self::Freebuff(input) => input.read_batch(),
             Self::Trae(input) => input.read_batch(),
             Self::PrimeAgent(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;

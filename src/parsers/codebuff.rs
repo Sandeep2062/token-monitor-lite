@@ -106,9 +106,16 @@ pub struct CodebuffReader {
 
 impl CodebuffReader {
     pub fn new(session: impl Into<String>) -> Self {
+        Self::new_for(CLIENT, session)
+    }
+
+    /// Freebuff persists the byte-identical `chat-messages.json` shape and
+    /// parses it through these same helpers, differing only in client id, so
+    /// the reader is parameterized rather than duplicated.
+    pub fn new_for(client: &str, session: impl Into<String>) -> Self {
         Self {
             key: SessionKey {
-                client: CLIENT.to_owned(),
+                client: client.to_owned(),
                 session: session.into(),
             },
             fallback_timestamp: None,

@@ -45,6 +45,7 @@ const SUPPORTED_CLIENTS: &[&str] = &[
     "gjc",
     "opencodereview",
     "codebuff",
+    "freebuff",
     "trae",
     "workbuddy",
 ];
@@ -1175,6 +1176,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::GjcJsonl => "gjc",
         SourceFormat::OpenCodeReviewJsonl => "opencodereview",
         SourceFormat::CodebuffJson => "codebuff",
+        SourceFormat::FreebuffJson => "freebuff",
         SourceFormat::TraeJson => "trae",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",

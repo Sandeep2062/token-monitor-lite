@@ -19,6 +19,7 @@ use crate::parsers::{
     cursor::CursorReader,
     droid::DroidReader,
     dsh::DshReader,
+    freebuff::reader as freebuff_reader,
     fx::FxReader,
     gemini::GeminiReader,
     gjc::GjcReader,
@@ -82,6 +83,7 @@ pub enum SourceFormat {
     GjcJsonl,
     OpenCodeReviewJsonl,
     CodebuffJson,
+    FreebuffJson,
     TraeJson,
     AntigravityJsonl,
     QwenJsonl,
@@ -146,6 +148,7 @@ impl SourceFormat {
             Self::GjcJsonl => "gjc",
             Self::OpenCodeReviewJsonl => "opencodereview",
             Self::CodebuffJson => "codebuff",
+            Self::FreebuffJson => "freebuff",
             Self::TraeJson => "trae",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
@@ -204,6 +207,7 @@ impl SourceFormat {
             Self::GjcJsonl => "gjc-jsonl",
             Self::OpenCodeReviewJsonl => "opencodereview-jsonl",
             Self::CodebuffJson => "codebuff-json",
+            Self::FreebuffJson => "freebuff-json",
             Self::TraeJson => "trae-json",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
@@ -266,6 +270,7 @@ impl SourceFormat {
             "gjc-jsonl" => Some(Self::GjcJsonl),
             "opencodereview-jsonl" => Some(Self::OpenCodeReviewJsonl),
             "codebuff-json" => Some(Self::CodebuffJson),
+            "freebuff-json" => Some(Self::FreebuffJson),
             "trae-json" => Some(Self::TraeJson),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
@@ -532,6 +537,7 @@ enum ResponseReader {
     Gjc(Box<GjcReader>),
     OpenCodeReview(Box<OpenCodeReviewReader>),
     Codebuff(Box<CodebuffReader>),
+    Freebuff(Box<CodebuffReader>),
     Trae(Box<TraeReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
@@ -578,6 +584,7 @@ impl ResponseReader {
             Self::Gjc(reader) => reader.ingest(record),
             Self::OpenCodeReview(reader) => reader.ingest(record),
             Self::Codebuff(reader) => reader.ingest(record),
+            Self::Freebuff(reader) => reader.ingest(record),
             Self::Trae(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
@@ -624,6 +631,7 @@ impl ResponseReader {
             Self::Gjc(reader) => reader.snapshot(),
             Self::OpenCodeReview(reader) => reader.snapshot(),
             Self::Codebuff(reader) => reader.snapshot(),
+            Self::Freebuff(reader) => reader.snapshot(),
             Self::Trae(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
@@ -667,6 +675,7 @@ impl ResponseReader {
             | Self::Gjc(_)
             | Self::OpenCodeReview(_)
             | Self::Codebuff(_)
+            | Self::Freebuff(_)
             | Self::Trae(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
@@ -743,6 +752,7 @@ impl ResponseReader {
             Self::Gjc(reader) => reader.has_supported_usage(),
             Self::OpenCodeReview(reader) => reader.has_supported_usage(),
             Self::Codebuff(reader) => reader.has_supported_usage(),
+            Self::Freebuff(reader) => reader.has_supported_usage(),
             Self::Trae(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
@@ -1253,6 +1263,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Codebuff(Box::new(
                     CodebuffReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::FreebuffJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Freebuff(Box::new(
+                    freebuff_reader(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::TraeJson => {

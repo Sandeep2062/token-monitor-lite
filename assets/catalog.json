@@ -24,6 +24,7 @@
     {"id":"augment","label":"Augment Code"},
     {"id":"gjc","label":"gajae-code"},
     {"id":"codebuff","label":"Codebuff"},
+    {"id":"freebuff","label":"Freebuff"},
     {"id":"opencodereview","label":"OpenCodeReview"},
     {"id":"trae","label":"Trae"},
     {"id":"goose","label":"Goose"},
