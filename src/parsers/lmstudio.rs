@@ -22,13 +22,18 @@
 //! The pinned reader streams an 8 MiB window and carries identity across
 //! evictions, because `server-logs/` grows without bound and its stated
 //! regression is that refusing an oversized log "loses every record in that
-//! file, past and future, with no diagnostic". This codebase's document input
-//! delivers one whole source revision at a time, so the scan here sees the
-//! complete byte slice and needs no carry: every record's metadata is still
-//! ahead of it. The trade is a **16 MiB document limit**. A log past it is a
-//! visible source failure that retains the prior committed generation, rather
-//! than the silent total loss the pinned reader was written to avoid — but it
-//! does mean a very large log stops refreshing until it is rotated.
+//! file, past and future, with no diagnostic". This reader is fed the same
+//! 8 MiB tail window by its input adapter, aligned forward to a newline, so it
+//! sees the same records the pinned reader does. Because a record's identity
+//! always precedes its `usage` object, no carry across evictions is needed: the
+//! window boundary is a record boundary, and every record inside it still has
+//! its metadata ahead of it.
+//!
+//! The window is a declared read scope, not a silent truncation. The adapter
+//! reports `truncated_head`, which reaches the source health row as "older
+//! records outside the scan window". That is the honest version of the pinned
+//! reader's eviction: the oldest records are out of scope, and the user is told
+//! so rather than being shown a total that quietly stops advancing.
 //!
 //! The log header is naive, so it is the writing host's wall clock and is
 //! resolved in the local zone, exactly as the pinned reader does. See the note
