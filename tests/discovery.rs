@@ -292,6 +292,38 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn mux_workspace_usage_is_discovered_per_workspace() {
+    let tree = Tree::new();
+    tree.file(
+        ".mux/sessions/ws_alpha/session-usage.json",
+        br#"{"version":1,"byModel":{"anthropic:claude-opus-4-6":{"input":{"tokens":100},"output":{"tokens":200}}},"lastRequest":{"timestamp":1700000000000}}"#,
+    );
+    tree.file(
+        ".mux/sessions/ws_beta/session-usage.json",
+        br#"{"version":1,"byModel":{"openai:gpt-4o":{"input":{"tokens":50}}},"lastRequest":{"timestamp":1700000001000}}"#,
+    );
+    // A sibling document that is not the usage file is not admitted.
+    tree.file(".mux/sessions/ws_alpha/other.json", br#"{"byModel":{}}"#);
+
+    let report = discover(&tree.paths(&["mux"])).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(report
+        .sources
+        .iter()
+        .all(|source| source.format == SourceFormat::MuxJson));
+    // Each workspace is its own session, so two workspaces cannot collapse.
+    let sessions: std::collections::BTreeSet<&str> =
+        report.sources.iter().map(|s| s.session.as_str()).collect();
+    assert_eq!(sessions.len(), 2);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(disabled
+        .sources
+        .iter()
+        .all(|source| source.format != SourceFormat::MuxJson));
+}
+
+#[test]
 fn kimchi_sessions_are_discovered_in_the_pi_format() {
     let tree = Tree::new();
     let body = br#"{"type":"session","version":3,"id":"kimchi-1","timestamp":"2026-08-01T00:00:00.000Z","cwd":"/tmp/kimchi-project"}

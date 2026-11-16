@@ -2867,6 +2867,59 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "mux" {
+            // Mux keeps one aggregate counter document per workspace at
+            // `~/.mux/sessions/<workspaceId>/session-usage.json`.
+            let root = join_many(inputs.platform, &inputs.home, &[".mux", "sessions"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "session-usage.json")
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::MuxJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "mux",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::MuxJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::MuxJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "jcode" {
             // Jcode writes one compact JSON session snapshot per session at
             // `~/.jcode/sessions/session_*.json`. The sibling journal is not
@@ -3951,6 +4004,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     })
                 }
                 SourceFormat::ReasonixJsonl => None,
+                // Mux is handled above: its session is the workspace directory.
+                SourceFormat::MuxJson => None,
                 // OpenClaw's session is the transcript's file stem, which the
                 // caller already knows; the event stream carries no session id.
                 SourceFormat::OpenClawJsonl => None,
@@ -4084,6 +4139,17 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
                     .map(str::to_owned)
             })
+            .ok_or(());
+    }
+    // `~/.mux/sessions/<workspaceId>/session-usage.json`: the session is the
+    // workspace, which is the containing directory.
+    if format == SourceFormat::MuxJson {
+        return path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
             .ok_or(());
     }
     // `~/.jcode/sessions/session_<stamp>_<id>.json`: the snapshot names its

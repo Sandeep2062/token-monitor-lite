@@ -35,6 +35,7 @@ use crate::parsers::{
     qodercn::QodercnReader,
     qwen::QwenReader,
     reasonix::ReasonixReader,
+    mux::MuxReader,
     kimchi::KimchiReader,
     senpi::SenpiReader,
     workbuddy::WorkBuddyReader,
@@ -69,6 +70,7 @@ pub enum SourceFormat {
     OmpJsonl,
     SenpiJsonl,
     KimchiJsonl,
+    MuxJson,
     AntigravityJsonl,
     QwenJsonl,
     ReasonixJsonl,
@@ -126,6 +128,7 @@ impl SourceFormat {
             Self::OmpJsonl => "omp",
             Self::SenpiJsonl => "senpi",
             Self::KimchiJsonl => "kimchi",
+            Self::MuxJson => "mux",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
             Self::ReasonixJsonl => "reasonix",
@@ -177,6 +180,7 @@ impl SourceFormat {
             Self::OmpJsonl => "omp-jsonl",
             Self::SenpiJsonl => "senpi-jsonl",
             Self::KimchiJsonl => "kimchi-jsonl",
+            Self::MuxJson => "mux-json",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
             Self::ReasonixJsonl => "reasonix-jsonl",
@@ -232,6 +236,7 @@ impl SourceFormat {
             "omp-jsonl" => Some(Self::OmpJsonl),
             "senpi-jsonl" => Some(Self::SenpiJsonl),
             "kimchi-jsonl" => Some(Self::KimchiJsonl),
+            "mux-json" => Some(Self::MuxJson),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -491,6 +496,7 @@ enum ResponseReader {
     Omp(Box<OmpReader>),
     Senpi(Box<SenpiReader>),
     Kimchi(Box<KimchiReader>),
+    Mux(Box<MuxReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
     Reasonix(Box<ReasonixReader>),
@@ -530,6 +536,7 @@ impl ResponseReader {
             Self::Omp(reader) => reader.ingest(record),
             Self::Senpi(reader) => reader.ingest(record),
             Self::Kimchi(reader) => reader.ingest(record),
+            Self::Mux(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
             Self::Reasonix(reader) => reader.ingest(record),
@@ -569,6 +576,7 @@ impl ResponseReader {
             Self::Omp(reader) => reader.snapshot(),
             Self::Senpi(reader) => reader.snapshot(),
             Self::Kimchi(reader) => reader.snapshot(),
+            Self::Mux(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
             Self::Reasonix(reader) => reader.snapshot(),
@@ -605,6 +613,7 @@ impl ResponseReader {
             | Self::Omp(_)
             | Self::Senpi(_)
             | Self::Kimchi(_)
+            | Self::Mux(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
             | Self::Reasonix(_)
@@ -674,6 +683,7 @@ impl ResponseReader {
             Self::Omp(reader) => reader.has_supported_usage(),
             Self::Senpi(reader) => reader.has_supported_usage(),
             Self::Kimchi(reader) => reader.has_supported_usage(),
+            Self::Mux(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
             Self::Reasonix(reader) => reader.has_supported_usage(),
@@ -1146,6 +1156,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Kimchi(Box::new(
                     KimchiReader::new("kimchi", &self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::MuxJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Mux(Box::new(
+                    MuxReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::AntigravityJsonl => {

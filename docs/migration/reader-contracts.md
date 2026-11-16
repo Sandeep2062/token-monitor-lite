@@ -388,6 +388,23 @@ Kimchi Coding writes the Pi append-only JSONL record format under its own agent 
 | Assistant `message` with no `usage` | visible unsupported | The Pi format requires it, so a malformed record is reported rather than skipped. | Prior committed generation remains active. |
 | Dedup key prefix | supported | `kimchi:` rather than `pi:`. A shared prefix would let one client's row suppress the other's on a machine running both. | As above. |
 
+## Mux matrix
+
+Mux keeps one aggregate counter document per workspace at `~/.mux/sessions/<workspaceId>/session-usage.json`, split by model under `byModel`. It is **not** a transcript: there is no per-request record and no message text, so one observation per `(workspace × model)` entry is the finest row the format supports.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `byModel.<key>` with any non-zero counter | supported | One observation from the `input`/`cached`/`cacheCreate`/`output`/`reasoning` buckets. | Session is the workspace id, i.e. the containing directory. |
+| `byModel.<key>` with every counter zero | ignored non-usage | Not an observation. | No source slot. |
+| `provider:model` key | supported | Split at the **first** colon; the prefix becomes the billing hint. A model whose own name contains colons keeps them. | As above. |
+| Key with no prefix | supported | The whole key is the model and **no** provider hint is emitted — a blank provider string would be a fabricated pricing key. | As above. |
+| Bucket `cost_usd` values | supported | Summed across all five buckets and carried as a source-reported cost. A document with no cost anywhere reports nothing, which stays distinct from a genuine zero. | As above. |
+| Negative counter | clamped | Floors at zero without discarding the entry: this is an aggregate document, so one contradictory bucket must not throw away a workspace's other usage. | As above. |
+| `lastRequest.timestamp` | supported | Used as the observation timestamp; otherwise the file mtime. | As above. |
+| Absent `byModel`, or an empty one | ignored non-usage | Nothing to attribute. | No source slot. |
+| Malformed JSON | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Dedup key | supported | `mux:<workspaceId>:<modelKey>`, deliberately workspace-scoped: a positional key made the first model in every workspace collide, and the map's iteration order was not stable across re-parses. | As above. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.
