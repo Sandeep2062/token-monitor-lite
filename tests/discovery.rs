@@ -292,6 +292,32 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn codebuff_chat_histories_are_discovered() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/manicode/projects/proj/chats/2025-12-14T10-00-00.000Z/chat-messages.json",
+        br#"[{"id":"m1","variant":"ai","metadata":{"model":"claude-sonnet-4-5","usage":{"inputTokens":1000,"outputTokens":500}}}]"#,
+    );
+
+    let report = discover(&tree.paths(&["codebuff"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::CodebuffJson);
+    // The identity is channel/project/chat, derived from the path.
+    assert_eq!(
+        report.sources[0].session,
+        "manicode/proj/2025-12-14T10-00-00.000Z"
+    );
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::CodebuffJson)
+    );
+}
+
+#[test]
 fn trae_usage_cache_dumps_are_discovered() {
     let tree = Tree::new();
     tree.file(

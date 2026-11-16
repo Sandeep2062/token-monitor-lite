@@ -8,6 +8,7 @@ pub mod cherrystudio;
 pub mod claude;
 pub mod cline;
 pub mod codebuddy;
+pub mod codebuff;
 pub mod codex;
 pub mod commandcode;
 pub mod copilot;

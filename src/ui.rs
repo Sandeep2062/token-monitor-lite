@@ -1038,6 +1038,7 @@ fn client_label(client: &str) -> &'static str {
         "augment" => "Augment Code",
         "gjc" => "gajae-code",
         "opencodereview" => "OpenCodeReview",
+        "codebuff" => "Codebuff",
         "trae" => "Trae",
         "workbuddy" => "WorkBuddy",
         "zed" => "Zed",
@@ -1500,6 +1501,7 @@ fn source_format(format: SourceFormat) -> &'static str {
     match format {
         SourceFormat::ClaudeCli => "Claude CLI",
         SourceFormat::AmpJson => "Amp",
+        SourceFormat::CodebuffJson => "Codebuff",
         SourceFormat::DroidJson => "Droid",
         SourceFormat::KimiJsonl => "Kimi CLI",
         SourceFormat::CommandCodeJsonl => "Command Code",

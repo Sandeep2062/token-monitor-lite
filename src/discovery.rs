@@ -2969,6 +2969,72 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "codebuff" {
+            // Codebuff keeps chat history under
+            // `<config>/<channel>/projects/<project>/chats/<chatId>/chat-messages.json`,
+            // with `manicode` plus the `-dev` and `-staging` channels.
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for channel in ["manicode", "manicode-dev", "manicode-staging"] {
+                let root = join_many(
+                    inputs.platform,
+                    &inputs.home,
+                    &[".config", channel, "projects"],
+                );
+                collect_source_candidates(
+                    &root,
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "chat-messages.json")
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::CodebuffJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "codebuff",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::CodebuffJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::CodebuffJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "trae" {
             // Trae's usage-API dump lands in the collector cache directory, the
             // same convention the cursor and antigravity `*-cache` lanes use.
@@ -4166,6 +4232,10 @@ fn catpaw_database_scope(name: &str) -> bool {
 }
 
 fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
+    if format == SourceFormat::CodebuffJson {
+        let session = crate::parsers::codebuff::session_from_path(path);
+        return Ok(session);
+    }
     if matches!(
         format,
         SourceFormat::CodeBuddyJsonl | SourceFormat::LmstudioLog
@@ -4201,6 +4271,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         for record in batch.records {
             let value: Value = serde_json::from_slice(&record).map_err(|_| ())?;
             let session = match format {
+                SourceFormat::CodebuffJson => None,
                 SourceFormat::ClaudeCli => value.get("sessionId").and_then(Value::as_str),
                 SourceFormat::CodexCli => {
                     if value.get("type").and_then(Value::as_str) == Some("session_meta") {

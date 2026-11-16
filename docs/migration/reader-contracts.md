@@ -480,6 +480,28 @@ OpenCodeReview stores sessions as JSONL at `~/.opencodereview/sessions/<encoded-
 | Provider | no hint | The pinned reader falls back to an `opencodereview` pseudo-provider that no pricing row can match; none is emitted here. | As above. |
 | Malformed JSON on a relevant line | visible unsupported | Declined record. | Prior committed generation remains active. |
 
+## Codebuff matrix
+
+Codebuff writes `projects/<project>/chats/<chatId>/chat-messages.json`, a serialized `ChatMessage[]`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Assistant entry (`variant`/`role` in `ai`/`agent`/`assistant`) with usage in `metadata.usage` | supported | One observation. | Session is `channel/project/chat` from the path. |
+| Usage only in `metadata.codebuff.usage` | supported | Same turn, reached by fallback. | As above. |
+| Usage only in the stashed RunState history | supported | Same turn; this is where OpenRouter-routed calls land. | As above. |
+| Usage in more than one place | supported, merged by fallback | Fields are filled only where still unset. The locations describe one turn, so adding them would double-count. | As above. |
+| camelCase or snake_case counters | supported | Both accepted per counter. | As above. |
+| `promptTokensDetails.cachedTokens` | supported | Supplies `cache_read` when the flat keys are absent. | As above. |
+| Non-assistant entry | ignored non-usage | Not an observation. | No source slot. |
+| Assistant entry with no counter and no credits | ignored non-usage | Not an observation. | No source slot. |
+| Credits present, no counters | supported, cost reported | A priced observation with zero tokens. | As above. |
+| No `model` | supported | `codebuff-unknown`. | As above. |
+| Unrecognised model family | supported, unpriced provider | No provider hint is invented. | As above. |
+| Message `id` | supported | The upstream id is the stable identity. | As above. |
+| No message `id` | supported | Identity is derived from session, time, model, ordinal and the full token breakdown. | As above. |
+| File-safe `chatId` directory | supported | Decoded by flipping only the two separators after `T`; a blanket replacement corrupts the date and fails silently. | Supplies the time when the message carries none. |
+| Non-array document, or malformed JSON | visible unsupported | Nothing to attribute, or the candidate is discarded. | Prior committed generation remains active. |
+
 ## Trae matrix
 
 Trae's usage-API cache is an array of session objects dumped under `trae-cache/sessions/*.json`. The API returns exact token counts, so nothing is estimated.
