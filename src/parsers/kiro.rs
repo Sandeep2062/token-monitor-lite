@@ -47,6 +47,14 @@ pub struct KiroReader {
     fallback_timestamp_ms: Option<i64>,
     responses: Vec<ResponseUsage>,
     retained_identity_bytes: usize,
+    /// Turns whose counters were all zero or absent.
+    ///
+    /// Kiro's Auto agent persists `0` to mean "not measured", so these turns
+    /// are real work with no recorded size. They are not declined — the record
+    /// parsed fine — but they are not counted either, so the source's totals
+    /// are short by this many turns. Reported rather than hidden: a source that
+    /// silently under-reports is the failure this monitor exists to avoid.
+    unmeasured_turns: u32,
 }
 
 impl KiroReader {
@@ -56,6 +64,7 @@ impl KiroReader {
             fallback_timestamp_ms: None,
             responses: Vec::new(),
             retained_identity_bytes: 0,
+            unmeasured_turns: 0,
         }
     }
 
@@ -120,20 +129,28 @@ impl KiroReader {
             let Some(turn) = turn.as_object() else {
                 return Err(ReaderError::InvalidRecord);
             };
-            let Some(usage) = normalize_turn(
+            match normalize_turn(
                 turn,
                 &session,
                 &model,
                 index,
                 workspace_label.as_deref(),
                 self.fallback_timestamp_ms,
-            )?
-            else {
-                continue;
-            };
-            self.push(usage)?;
+            )? {
+                TurnOutcome::Emitted(usage) => self.push(usage)?,
+                // Real work with no recorded size. Counted, not dropped
+                // silently: the source's totals are short by these turns.
+                TurnOutcome::Unmeasured => {
+                    self.unmeasured_turns = self.unmeasured_turns.saturating_add(1);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Turns that parsed but carried no measurable counters.
+    pub fn unmeasured_turns(&self) -> u32 {
+        self.unmeasured_turns
     }
 
     fn push(&mut self, usage: ResponseUsage) -> Result<(), ReaderError> {
@@ -159,11 +176,20 @@ impl KiroReader {
     }
 }
 
+/// What one `user_turn_metadatas` entry produced.
+enum TurnOutcome {
+    Emitted(ResponseUsage),
+    /// The turn is real but its counters are all zero or absent, which Kiro
+    /// writes for the Auto agent to mean "not measured".
+    Unmeasured,
+}
+
 /// Normalize one `user_turn_metadatas` entry.
 ///
 /// Real counters win when present and positive. A turn whose counters are all
-/// zero yields nothing: the pinned reader estimates there, and the native
-/// reader deliberately does not invent counts.
+/// zero is reported as [`TurnOutcome::Unmeasured`] rather than silently
+/// dropped: the pinned reader estimates there, and this reader deliberately
+/// does not invent counts, but the caller still needs to know the turn existed.
 fn normalize_turn(
     turn: &Map<String, Value>,
     session: &str,
@@ -171,13 +197,13 @@ fn normalize_turn(
     index: usize,
     workspace: Option<&str>,
     fallback_timestamp_ms: Option<i64>,
-) -> Result<Option<ResponseUsage>, ReaderError> {
+) -> Result<TurnOutcome, ReaderError> {
     let input = positive_counter(turn, "input_token_count")?;
     let output = positive_counter(turn, "output_token_count")?;
     // A negative counter is a rejection even when another counter would make
     // the turn non-empty, because the row is then not interpretable.
     if input == 0 && output == 0 {
-        return Ok(None);
+        return Ok(TurnOutcome::Unmeasured);
     }
     let cache_read = positive_counter(turn, "cache_read_input_token_count")?;
     let cache_write = positive_counter(turn, "cache_write_input_token_count")?;
@@ -190,7 +216,7 @@ fn normalize_turn(
     if identity.len() > MAX_IDENTITY_BYTES {
         return Err(ReaderError::Declined("Kiro turn identity"));
     }
-    Ok(Some(ResponseUsage {
+    Ok(TurnOutcome::Emitted(ResponseUsage {
         key: SessionKey::new(CLIENT, session),
         model: model.to_owned(),
         tokens: TokenCounts {

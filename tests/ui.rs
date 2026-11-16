@@ -50,6 +50,7 @@ fn health(
         source_generation,
         declined_records: 0,
         truncated_head: false,
+        unmeasured_records: 0,
     }
 }
 
@@ -1005,4 +1006,35 @@ fn a_healthy_source_reports_declined_records_and_a_windowed_scan() {
             .detail
             .contains("older records outside the scan window")
     );
+}
+
+#[test]
+fn a_healthy_source_reports_unmeasured_turns() {
+    // Kiro's Auto agent writes zero to mean "not measured". Those turns are not
+    // errors, but they are absent from the totals, so the row says so instead
+    // of claiming a current snapshot.
+    let mut source = health(
+        "/kiro.json",
+        SourceFormat::KiroJson,
+        SourceHealthStatus::Healthy,
+        Some(6),
+    );
+    source.unmeasured_records = 4;
+
+    let mut controller = UiController::new();
+    controller.accept_snapshot(snapshot(
+        1,
+        TokenCounts::default(),
+        Vec::new(),
+        vec![source],
+        WatchStatus::Available,
+    ));
+    let rows = controller.presentation().sources;
+    assert_eq!(rows[0].severity, SourceSeverity::Healthy);
+    assert!(
+        rows[0]
+            .detail
+            .contains("4 turn(s) with no recorded counters")
+    );
+    assert!(!rows[0].detail.contains("current snapshot"));
 }

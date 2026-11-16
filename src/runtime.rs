@@ -98,6 +98,9 @@ pub struct SourceHealth {
     /// The last published generation was read through a tail window, so the
     /// totals cover the retained window rather than all history.
     pub truncated_head: bool,
+    /// Records that parsed but carried no measurable counters, so the totals
+    /// are short by this many records without any of them being errors.
+    pub unmeasured_records: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -506,6 +509,7 @@ impl RuntimeSource {
             source_generation: self.ledger_generation,
             declined_records: self.reader.declined_records(),
             truncated_head: self.reader.truncated_head(),
+            unmeasured_records: self.reader.unmeasured_records(),
         }
     }
 }
@@ -853,6 +857,7 @@ impl WorkerState {
                         source_generation: Some(source.generation),
                         declined_records: 0,
                         truncated_head: false,
+                        unmeasured_records: 0,
                     },
                 )
             })

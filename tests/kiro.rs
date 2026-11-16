@@ -69,13 +69,16 @@ fn several_turns_are_separate_observations() {
 }
 
 #[test]
-fn an_all_zero_turn_is_not_estimated() {
+fn an_all_zero_turn_is_not_estimated_but_is_reported() {
     let mut reader = reader();
     // Kiro's Auto agent commonly persists zeros. The pinned reader estimates
     // from the sibling messages.jsonl; the native reader contributes nothing.
+    // It must not contribute silently, though: the turn is real work with no
+    // recorded size, so the source reports how many such turns it skipped.
     ingest(&mut reader, &document(&turn(0, 0))).unwrap();
     assert!(reader.snapshot().is_empty());
     assert!(!reader.has_supported_usage());
+    assert_eq!(reader.unmeasured_turns(), 1);
 }
 
 #[test]

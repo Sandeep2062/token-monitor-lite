@@ -628,6 +628,16 @@ impl ResponseReader {
         }
     }
 
+    /// Records that parsed but carried no measurable counters, so they are
+    /// absent from the totals without being errors. Only Kiro reports these:
+    /// its Auto agent writes zero to mean "not measured".
+    fn unmeasured_records(&self) -> u32 {
+        match self {
+            Self::Kiro(reader) => reader.unmeasured_turns(),
+            _ => 0,
+        }
+    }
+
     fn has_supported_usage(&self, rows: &[ResponseUsage]) -> bool {
         match self {
             Self::Claude(_) => !rows.is_empty(),
@@ -715,6 +725,9 @@ pub struct SourceStep {
     pub progress: SourceProgress,
     /// Records this generation declined without rejecting the source.
     pub declined_records: u32,
+    /// Records that parsed but carried no measurable counters, so they are
+    /// absent from the totals without being errors.
+    pub unmeasured_records: u32,
 }
 
 /// Errors deliberately omit paths and captured source values.
@@ -757,6 +770,9 @@ pub struct SourceReader {
     /// oldest records are deliberately absent. Also kept beside the snapshot
     /// for the same reason: it is a property of the scan, not of the rows.
     last_truncated: bool,
+    /// Records that parsed but carried no measurable counters in the last
+    /// published generation.
+    last_unmeasured: u32,
 }
 
 impl SourceReader {
@@ -787,6 +803,7 @@ impl SourceReader {
             declined: 0,
             last_declined: 0,
             last_truncated: false,
+            last_unmeasured: 0,
         }
     }
 
@@ -811,6 +828,12 @@ impl SourceReader {
     /// Whether the last published generation was read through a tail window.
     pub fn truncated_head(&self) -> bool {
         self.last_truncated
+    }
+
+    /// Records that parsed but carried no measurable counters in the last
+    /// published generation.
+    pub fn unmeasured_records(&self) -> u32 {
+        self.last_unmeasured
     }
 
     /// Invalidate only working state. Keep the published last-good source
@@ -871,6 +894,7 @@ impl SourceReader {
                 Err(error) => return Err(error.into()),
             }
         }
+        let unmeasured = candidate.unmeasured_records();
         if batch.more_available {
             return Ok(SourceStep {
                 bytes_read: batch.physical_bytes_read,
@@ -878,6 +902,7 @@ impl SourceReader {
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
                 declined_records: self.declined,
+                unmeasured_records: unmeasured,
             });
         }
         if !self.input.is_current()? {
@@ -888,6 +913,7 @@ impl SourceReader {
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
                 declined_records: self.declined,
+                unmeasured_records: unmeasured,
             });
         }
         if !self.dirty {
@@ -897,6 +923,7 @@ impl SourceReader {
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Unchanged,
                 declined_records: self.last_declined,
+                unmeasured_records: self.last_unmeasured,
             });
         }
         candidate.finish()?;
@@ -920,6 +947,7 @@ impl SourceReader {
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
                 declined_records: self.declined,
+                unmeasured_records: unmeasured,
             });
         }
         let generation = self
@@ -950,12 +978,14 @@ impl SourceReader {
         self.dirty = false;
         self.last_declined = self.declined;
         self.last_truncated = batch.truncated_head;
+        self.last_unmeasured = candidate.unmeasured_records();
         Ok(SourceStep {
             bytes_read: batch.physical_bytes_read,
             physical_bytes_read: batch.physical_bytes_read,
             decoded_bytes_read: batch.decoded_bytes_read,
             progress: SourceProgress::Published { delta },
             declined_records: self.last_declined,
+            unmeasured_records: self.last_unmeasured,
         })
     }
 
@@ -1273,6 +1303,7 @@ impl SourceReader {
             decoded_bytes_read: 0,
             progress: SourceProgress::Published { delta },
             declined_records: 0,
+            unmeasured_records: 0,
         })
     }
 }

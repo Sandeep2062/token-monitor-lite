@@ -1221,7 +1221,19 @@ fn source_rows(snapshot: &MonitorSnapshot) -> Vec<SourceHealthRow> {
                             // log, so older records are deliberately absent.
                             detail.push_str(" · older records outside the scan window");
                         }
-                        if source.declined_records == 0 && !source.truncated_head {
+                        if source.unmeasured_records > 0 {
+                            // Real work with no recorded size: Kiro's Auto agent
+                            // writes zero to mean "not measured". The totals are
+                            // short by these turns, so say so.
+                            detail.push_str(&format!(
+                                " · {} turn(s) with no recorded counters",
+                                source.unmeasured_records
+                            ));
+                        }
+                        if source.declined_records == 0
+                            && !source.truncated_head
+                            && source.unmeasured_records == 0
+                        {
                             detail.push_str(" · current snapshot");
                         }
                         detail
