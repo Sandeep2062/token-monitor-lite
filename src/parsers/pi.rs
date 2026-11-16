@@ -108,17 +108,17 @@ impl PiReader {
         let is_operation = OPERATION_TYPES.contains(&entry_type);
         let (usage_object, recorded_model, recorded_provider, updates_current_model) =
             if entry_type == "message" && role == Some("assistant") {
-                let message = message.ok_or(ReaderError::Unsupported("Pi assistant message"))?;
+                let message = message.ok_or(ReaderError::Declined("Pi assistant message"))?;
                 let usage = message
                     .get("usage")
                     .and_then(Value::as_object)
-                    .ok_or(ReaderError::Unsupported("Pi assistant usage"))?;
+                    .ok_or(ReaderError::Declined("Pi assistant usage"))?;
                 let model = message
                     .get("model")
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|model| !model.is_empty())
-                    .ok_or(ReaderError::Unsupported("Pi assistant model"))?;
+                    .ok_or(ReaderError::Declined("Pi assistant model"))?;
                 let provider = message
                     .get("provider")
                     .and_then(Value::as_str)
@@ -131,11 +131,11 @@ impl PiReader {
                     true,
                 )
             } else if entry_type == "message" && role == Some("toolResult") {
-                let message = message.ok_or(ReaderError::Unsupported("Pi tool result"))?;
+                let message = message.ok_or(ReaderError::Declined("Pi tool result"))?;
                 let usage = message
                     .get("usage")
                     .and_then(Value::as_object)
-                    .ok_or(ReaderError::Unsupported("Pi tool-result usage"))?;
+                    .ok_or(ReaderError::Declined("Pi tool-result usage"))?;
                 let model = message
                     .get("model")
                     .and_then(Value::as_str)
@@ -153,7 +153,7 @@ impl PiReader {
                 let usage = object
                     .get("usage")
                     .and_then(Value::as_object)
-                    .ok_or(ReaderError::Unsupported("Pi operation usage"))?;
+                    .ok_or(ReaderError::Declined("Pi operation usage"))?;
                 let model = object
                     .get("model")
                     .and_then(Value::as_str)
@@ -223,7 +223,7 @@ impl PiReader {
             format!("{}:{session}:line:{}", self.client, self.ordinal)
         };
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Pi record identity"));
+            return Err(ReaderError::Declined("Pi record identity"));
         }
         self.ordinal += 1;
 
@@ -247,7 +247,7 @@ impl PiReader {
                 || usage_row.timestamp_ms != self.rows[index].timestamp_ms
                 || usage_row.model != self.rows[index].model
             {
-                return Err(ReaderError::Unsupported("Pi duplicate response identity"));
+                return Err(ReaderError::Declined("Pi duplicate response identity"));
             }
             return Ok(());
         }
@@ -280,7 +280,7 @@ fn normalize_usage(usage: &Map<String, Value>) -> Result<(TokenCounts, u64), Rea
     let cache_write = counter(usage, "cacheWrite")?;
     let cache_write_1h = counter(usage, "cacheWrite1h")?;
     if cache_write_1h > cache_write {
-        return Err(ReaderError::Unsupported("Pi cache write 1h"));
+        return Err(ReaderError::Declined("Pi cache write 1h"));
     }
     // `reasoning` is intentionally read but not mapped: Pi documents it as a
     // subset of `output`, while the canonical reasoning counter is additive.
@@ -322,7 +322,7 @@ fn response_timestamp(
             .map(|timestamp| timestamp.timestamp_millis())
             .map_err(|_| ReaderError::InvalidTimestamp);
     }
-    fallback.ok_or(ReaderError::Unsupported("Pi record timestamp"))
+    fallback.ok_or(ReaderError::Declined("Pi record timestamp"))
 }
 
 fn tokens_total(tokens: TokenCounts) -> Result<u64, ReaderError> {

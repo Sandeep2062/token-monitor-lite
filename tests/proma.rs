@@ -137,7 +137,7 @@ fn a_missing_timestamp_without_a_fallback_is_visible_unsupported() {
         r#"{"type":"assistant","session_id":"s","message":{"usage":{"input_tokens":10,"output_tokens":2}}}"#,
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("Proma record timestamp"));
+    assert_eq!(error, ReaderError::Declined("Proma record timestamp"));
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn a_negative_counter_is_rejected_not_clamped() {
         &sdk_assistant(r#""input_tokens":-5,"output_tokens":2"#),
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("Proma counter"));
+    assert_eq!(error, ReaderError::Declined("Proma counter"));
 }
 
 #[test]

@@ -1,6 +1,10 @@
 //! Shared timestamp parsing for the catalog JSONL readers. A missing or
-//! malformed explicit timestamp is visible unsupported; callers may use a
+//! malformed explicit timestamp is a declined record; callers may use a
 //! documented file-mtime fallback only where the pinned reader does.
+//!
+//! A timestamp that carries an explicit offset is absolute and is used as-is.
+//! A naive timestamp is the writing host's wall clock and is resolved in the
+//! local zone — see `naive_to_epoch_ms`.
 
 use serde_json::Value;
 
@@ -29,10 +33,31 @@ pub fn parse_timestamp_str(value: &str) -> Option<i64> {
         "%Y-%m-%d %H:%M:%S",
     ] {
         if let Ok(timestamp) = chrono::NaiveDateTime::parse_from_str(value, format) {
-            return Some(timestamp.and_utc().timestamp_millis());
+            return Some(naive_to_epoch_ms(timestamp));
         }
     }
     value.parse::<i64>().ok().and_then(numeric_ms)
+}
+
+/// A timestamp with no zone designator is the writing host's local wall clock.
+///
+/// These sources are read on the machine that wrote them, so the local zone is
+/// the only defensible reading. Interpreting them as UTC instead shifts every
+/// such record by the host's UTC offset, which silently moves records across
+/// midnight and corrupts the day/month buckets even though record ordering is
+/// unaffected. The pinned readers resolve these against the host zone, so this
+/// matches them.
+///
+/// A wall clock inside a DST fold or gap is ambiguous or nonexistent. `Local`
+/// resolves the fold to the earlier instant and the gap by shifting forward,
+/// which is deterministic and keeps the record inside the intended day.
+fn naive_to_epoch_ms(timestamp: chrono::NaiveDateTime) -> i64 {
+    use chrono::TimeZone;
+    match chrono::Local.from_local_datetime(&timestamp) {
+        chrono::LocalResult::Single(local) => local.timestamp_millis(),
+        chrono::LocalResult::Ambiguous(earlier, _) => earlier.timestamp_millis(),
+        chrono::LocalResult::None => timestamp.and_utc().timestamp_millis(),
+    }
 }
 
 fn numeric_ms(value: i64) -> Option<i64> {

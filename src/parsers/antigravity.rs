@@ -166,9 +166,8 @@ impl AntigravityDbReader {
     }
 
     pub fn ingest_blob(&mut self, blob: &[u8]) -> Result<(), ReaderError> {
-        let chat =
-            message_field(blob, 1).ok_or(ReaderError::Unsupported("Antigravity chat model"))?;
-        let usage = message_field(chat, 4).ok_or(ReaderError::Unsupported("Antigravity usage"))?;
+        let chat = message_field(blob, 1).ok_or(ReaderError::Declined("Antigravity chat model"))?;
+        let usage = message_field(chat, 4).ok_or(ReaderError::Declined("Antigravity usage"))?;
         let input = varint_field(usage, 1)
             .unwrap_or(0)
             .saturating_add(varint_field(usage, 2).unwrap_or(0));

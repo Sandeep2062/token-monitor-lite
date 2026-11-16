@@ -94,7 +94,7 @@ impl DroidReader {
             .and_then(Value::as_str)
             .map(normalize_model)
             .filter(|model| !model.is_empty())
-            .ok_or(ReaderError::Unsupported("Droid session model"))?;
+            .ok_or(ReaderError::Declined("Droid session model"))?;
         if model.len() > MAX_IDENTITY_BYTES || model.chars().any(char::is_control) {
             return Err(ReaderError::InvalidRecord);
         }
@@ -122,7 +122,7 @@ impl DroidReader {
             (Some(modified), Some(lock)) => modified.max(lock),
             (Some(modified), None) => modified,
             (None, Some(lock)) => lock,
-            (None, None) => return Err(ReaderError::Unsupported("Droid session timestamp")),
+            (None, None) => return Err(ReaderError::Declined("Droid session timestamp")),
         };
 
         Ok(Some(ResponseUsage {

@@ -59,7 +59,7 @@ impl KiloReader {
             .and_then(Value::as_str)
             .filter(|value| valid_identity(value))
         else {
-            return Err(ReaderError::Unsupported("Kilo message model"));
+            return Err(ReaderError::Declined("Kilo message model"));
         };
         let provider = object
             .get("providerID")
@@ -77,15 +77,15 @@ impl KiloReader {
         let reasoning = optional_u64(tokens, "reasoning")?;
         let output = inclusive_output
             .checked_sub(reasoning)
-            .ok_or(ReaderError::Unsupported("Kilo reasoning/output"))?;
+            .ok_or(ReaderError::Declined("Kilo reasoning/output"))?;
         let cache = tokens
             .get("cache")
             .and_then(Value::as_object)
-            .ok_or(ReaderError::Unsupported("Kilo token cache"))?;
+            .ok_or(ReaderError::Declined("Kilo token cache"))?;
         let cache_read = required_u64(cache, "read")
-            .map_err(|_| ReaderError::Unsupported("Kilo cache read/write"))?;
+            .map_err(|_| ReaderError::Declined("Kilo cache read/write"))?;
         let cache_write = required_u64(cache, "write")
-            .map_err(|_| ReaderError::Unsupported("Kilo cache read/write"))?;
+            .map_err(|_| ReaderError::Declined("Kilo cache read/write"))?;
         if input == 0 && output == 0 && reasoning == 0 && cache_read == 0 && cache_write == 0 {
             return Ok(());
         }
@@ -103,10 +103,10 @@ impl KiloReader {
             .and_then(|time| time.get("created"))
             .and_then(flexible_timestamp)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Kilo message timestamp"))?;
+            .ok_or(ReaderError::Declined("Kilo message timestamp"))?;
         let identity = format!("kilo:{session}:{row_id}");
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Kilo message identity"));
+            return Err(ReaderError::Declined("Kilo message identity"));
         }
         self.retained_identity_bytes = self
             .retained_identity_bytes

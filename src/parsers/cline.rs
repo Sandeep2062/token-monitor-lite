@@ -111,7 +111,7 @@ impl ClineReader {
             self.current_provider = Some(provider.to_owned());
         }
         let Some(model) = self.current_model.as_deref() else {
-            return Err(ReaderError::Unsupported("Cline message model"));
+            return Err(ReaderError::Declined("Cline message model"));
         };
         let provider = self.current_provider.clone();
         let input_tokens = optional_u64(metrics, "inputTokens")?;
@@ -123,7 +123,7 @@ impl ClineReader {
             .ok_or(ReaderError::Overflow)?;
         let input = input_tokens
             .checked_sub(cached)
-            .ok_or(ReaderError::Unsupported("Cline cache/input"))?;
+            .ok_or(ReaderError::Declined("Cline cache/input"))?;
         let total = input_tokens
             .checked_add(output)
             .ok_or(ReaderError::Overflow)?;
@@ -134,7 +134,7 @@ impl ClineReader {
             .get("ts")
             .and_then(flexible_timestamp)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Cline message timestamp"))?;
+            .ok_or(ReaderError::Declined("Cline message timestamp"))?;
         let id = object.get("id").and_then(Value::as_str);
         let dedup_key = match id {
             None => Some(format!("cline-cli:{session}:{}", self.assistant_ordinal)),
@@ -145,7 +145,7 @@ impl ClineReader {
             .as_ref()
             .is_some_and(|key| key.len() > MAX_IDENTITY_BYTES)
         {
-            return Err(ReaderError::Unsupported("Cline message identity"));
+            return Err(ReaderError::Declined("Cline message identity"));
         }
         let identity_bytes = dedup_key.as_ref().map_or(0, String::len);
         self.retained_identity_bytes = self

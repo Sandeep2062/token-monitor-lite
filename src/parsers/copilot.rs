@@ -94,7 +94,7 @@ impl CopilotReader {
             return Ok(());
         }
         let model = first_attr(attributes, MODEL_ATTRS)
-            .ok_or(ReaderError::Unsupported("Copilot record model"))?;
+            .ok_or(ReaderError::Declined("Copilot record model"))?;
         if !valid_identity(model) {
             return Err(ReaderError::InvalidRecord);
         }
@@ -106,7 +106,7 @@ impl CopilotReader {
         }
         let timestamp = record_timestamp(object)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Copilot record timestamp"))?;
+            .ok_or(ReaderError::Declined("Copilot record timestamp"))?;
         let response_id = attributes.get("gen_ai.response.id").and_then(Value::as_str);
         let trace_id = object.get("traceId").and_then(Value::as_str);
         let span_id = object.get("spanId").and_then(Value::as_str);
@@ -120,7 +120,7 @@ impl CopilotReader {
             })
             .unwrap_or_else(|| format!("copilot:{session}:{source}:{}", self.rows.len()));
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Copilot record identity"));
+            return Err(ReaderError::Declined("Copilot record identity"));
         }
         let cache_for_input = cache_read.min(input);
         let input = input

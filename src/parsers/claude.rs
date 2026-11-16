@@ -196,7 +196,7 @@ impl ClaudeReader {
                     "result" | "stream_event" | "message_start" | "message_delta" | "message_stop"
                 )
             {
-                return Err(ReaderError::Unsupported("headless usage record"));
+                return Err(ReaderError::Declined("headless usage record"));
             }
             return Ok(());
         }
@@ -225,7 +225,7 @@ impl ClaudeReader {
                     "total_cost_usd",
                 ] {
                     if usage.get(field).is_some_and(|v| !v.is_null()) {
-                        return Err(ReaderError::Unsupported("additional billable usage"));
+                        return Err(ReaderError::Declined("additional billable usage"));
                     }
                 }
             }
@@ -286,7 +286,7 @@ impl ClaudeReader {
                 .as_deref()
                 .is_some_and(|model| model != existing.usage.model)
             {
-                return Err(ReaderError::Unsupported("response model conflict"));
+                return Err(ReaderError::Declined("response model conflict"));
             }
             if provider.as_deref().is_some_and(|p| {
                 existing
@@ -295,7 +295,7 @@ impl ClaudeReader {
                     .as_deref()
                     .is_some_and(|old| old != p)
             }) {
-                return Err(ReaderError::Unsupported("billing identity conflict"));
+                return Err(ReaderError::Declined("billing identity conflict"));
             }
             let added_bytes = if existing.usage.billing_provider_hint.is_none() {
                 provider.as_ref().map_or(0, String::len)
@@ -312,7 +312,7 @@ impl ClaudeReader {
                     .as_ref()
                     .is_some_and(|old| old != agent)
                 {
-                    return Err(ReaderError::Unsupported("agent identity conflict"));
+                    return Err(ReaderError::Declined("agent identity conflict"));
                 }
                 existing.usage.agent = Some(agent.clone());
             }
@@ -329,7 +329,7 @@ impl ClaudeReader {
         let model = message
             .model
             .filter(|m| !m.trim().is_empty())
-            .ok_or(ReaderError::Unsupported("missing model"))?;
+            .ok_or(ReaderError::Declined("missing model"))?;
         let model = normalize_model(&model);
         let timestamp_ms = self
             .pending_start
@@ -607,9 +607,9 @@ impl ClaudeReader {
         let model = match explicit_model {
             Some(model) if model.trim().eq_ignore_ascii_case("<synthetic>") => return Ok(()),
             Some(model) if !model.trim().is_empty() => model.trim().to_owned(),
-            Some(_) => return Err(ReaderError::Unsupported("empty tool-result model")),
+            Some(_) => return Err(ReaderError::Declined("empty tool-result model")),
             None if self.suppress_unattributed_tool_results => {
-                return Err(ReaderError::Unsupported("model-less tool result"));
+                return Err(ReaderError::Declined("model-less tool result"));
             }
             None => self
                 .last_model
@@ -729,7 +729,7 @@ impl ClaudeReader {
                 .copied()
             {
                 if self.responses[existing_index].usage.model != model {
-                    return Err(ReaderError::Unsupported("advisor model conflict"));
+                    return Err(ReaderError::Declined("advisor model conflict"));
                 }
                 merges.push((existing_index, advisor_usage));
                 continue;
@@ -794,6 +794,15 @@ impl ClaudeReader {
             return Err(ReaderError::Capacity("retained identity bytes"));
         }
         Ok(())
+    }
+
+    /// A declined record may have left a turn-start timestamp or a pending
+    /// model/provider behind. Clearing them keeps the next record from
+    /// inheriting the skipped one's context.
+    pub fn on_declined(&mut self) {
+        self.pending_start = None;
+        self.last_model = None;
+        self.last_provider = None;
     }
 
     /// Bounded captured rows in source order; cost remains unavailable. This

@@ -146,7 +146,7 @@ fn a_non_assistant_role_is_rejected() {
         br#"{"role":"user","modelID":"mimo-v2","tokens":{"input":10,"output":5},"time":{"created":1770983426420}}"#,
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("MiMo assistant role"));
+    assert_eq!(error, ReaderError::Declined("MiMo assistant role"));
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn reasoning_above_output_is_rejected_rather_than_underflowing() {
         br#"{"role":"assistant","modelID":"mimo-v2","tokens":{"input":10,"output":5,"reasoning":9},"time":{"created":1770983426420}}"#,
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("MiMo reasoning/output"));
+    assert_eq!(error, ReaderError::Declined("MiMo reasoning/output"));
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn a_missing_model_is_visible_unsupported() {
         br#"{"role":"assistant","tokens":{"input":10,"output":5},"time":{"created":1770983426420}}"#,
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("MiMo message model"));
+    assert_eq!(error, ReaderError::Declined("MiMo message model"));
 }
 
 #[test]

@@ -145,7 +145,7 @@ impl UnslothReader {
             ),
         };
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Unsloth identity"));
+            return Err(ReaderError::Declined("Unsloth identity"));
         }
 
         let usage = ResponseUsage {

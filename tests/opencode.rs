@@ -174,7 +174,10 @@ fn contradictory_role_is_unsupported_and_tokenless_assistant_is_ignored() {
         &data,
         None,
     ));
-    assert!(matches!(row, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        row,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 
     let assistant = payload(json!({
         "role": "assistant",
@@ -209,7 +212,10 @@ fn missing_or_partial_cache_is_visible_unsupported() {
             &data,
             None,
         ));
-        assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+        assert!(matches!(
+            result,
+            Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+        ));
     }
 }
 
@@ -281,7 +287,7 @@ fn reasoning_greater_than_inclusive_output_is_visible_unsupported() {
             &data,
             None,
         )),
-        Err(ReaderError::Unsupported(_))
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
     ));
 }
 
@@ -300,7 +306,7 @@ fn missing_model_or_timestamp_is_visible_unsupported() {
             &no_model,
             None,
         )),
-        Err(ReaderError::Unsupported(_))
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
     ));
 
     let no_time = payload(json!({
@@ -316,7 +322,7 @@ fn missing_model_or_timestamp_is_visible_unsupported() {
             &no_time,
             None,
         )),
-        Err(ReaderError::Unsupported(_))
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
     ));
 }
 

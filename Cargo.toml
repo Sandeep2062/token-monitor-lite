@@ -21,7 +21,7 @@ required-features = ["desktop"]
 
 [dependencies]
 anyhow = "=1.0.104"
-chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "clock"] }
 chrono-tz = "=0.10.4"
 notify = "=8.2.0"
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "backup"] }

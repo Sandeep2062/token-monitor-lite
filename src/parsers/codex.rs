@@ -256,6 +256,16 @@ impl CodexReader {
         Ok(())
     }
 
+    /// A declined record can leave a half-built usage record or model-less
+    /// rows pending. Both are dropped: settling a usage record whose own record
+    /// failed would charge tokens the source did not successfully describe, and
+    /// keeping model-less rows would make `finish` fail on a record that was
+    /// already declined.
+    pub fn on_declined(&mut self) {
+        self.pending_usage_record = None;
+        self.pending_model_rows.clear();
+    }
+
     pub fn has_supported_usage(&self) -> bool {
         self.supported_usage
     }
@@ -281,7 +291,7 @@ impl CodexReader {
             return Ok(());
         }
         let Some(payload) = object.get("payload").filter(|v| !v.is_null()) else {
-            return Err(ReaderError::Unsupported("non-rollout record"));
+            return Err(ReaderError::Declined("non-rollout record"));
         };
         let payload = payload.as_object().ok_or(ReaderError::InvalidRecord)?;
         let payload_kind = string(payload, "type")?;
@@ -449,7 +459,7 @@ impl CodexReader {
             || object.contains_key("usage")
             || payload_kind.as_deref() == Some("token_count")
         {
-            return Err(ReaderError::Unsupported("additional usage record"));
+            return Err(ReaderError::Declined("additional usage record"));
         }
         Ok(())
     }
@@ -786,7 +796,7 @@ impl CodexReader {
             || total.as_ref().is_some_and(Usage::supported);
         if !supported {
             if last.is_some() || total.is_some() {
-                return Err(ReaderError::Unsupported("unclassified token counters"));
+                return Err(ReaderError::Declined("unclassified token counters"));
             }
             return Ok(());
         }

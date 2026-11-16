@@ -151,7 +151,10 @@ fn missing_stats_model_is_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]

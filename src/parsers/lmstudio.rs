@@ -30,11 +30,10 @@
 //! than the silent total loss the pinned reader was written to avoid — but it
 //! does mean a very large log stops refreshing until it is rotated.
 //!
-//! The pinned reader resolves the log header against the host's local
-//! timezone. This crate's `chrono` build has no `clock` feature and its shared
-//! timestamp parser reads naive timestamps as UTC, so that is what is used.
-//! **A record's timestamp therefore differs from the pinned reader's by the
-//! host's UTC offset.** Record ordering is unaffected.
+//! The log header is naive, so it is the writing host's wall clock and is
+//! resolved in the local zone, exactly as the pinned reader does. See the note
+//! on `naive_to_epoch_ms` in `timestamps`: reading it as UTC would shift every
+//! record by the host's offset and move records across midnight.
 //!
 //! Not implemented: `is_turn_start` (this codebase has no such field). Not
 //! needed: the provider-reported-cost marker, because LM Studio runs the model
@@ -117,7 +116,7 @@ impl LmstudioReader {
         let response_id = response_id_in(metadata);
         let model = model_in(metadata).unwrap_or_else(|| "unknown".to_owned());
         if model.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("LM Studio model identity"));
+            return Err(ReaderError::Declined("LM Studio model identity"));
         }
         let timestamp_ms = last_log_timestamp(metadata).unwrap_or(self.fallback_timestamp_ms);
         if timestamp_ms <= 0 {
@@ -140,7 +139,7 @@ impl LmstudioReader {
             ),
         };
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("LM Studio response identity"));
+            return Err(ReaderError::Declined("LM Studio response identity"));
         }
         let usage = ResponseUsage {
             key: self.key.clone(),
@@ -372,8 +371,8 @@ fn json_string_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// real header, so a bare-bracket last-match scan would date the usage from the
 /// model's own output.
 ///
-/// The header is naive and is interpreted as UTC; see the module note on that
-/// deviation.
+/// The header is naive and is resolved in the host's local zone; see the module
+/// note and `timestamps::naive_to_epoch_ms`.
 fn last_log_timestamp(bytes: &[u8]) -> Option<i64> {
     let text = String::from_utf8_lossy(bytes);
     let mut parsed = None;

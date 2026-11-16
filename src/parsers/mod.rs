@@ -89,6 +89,21 @@ pub enum ReaderError {
     InvalidRecord,
     #[error("invalid or missing response timestamp")]
     InvalidTimestamp,
+    /// A single record cannot be interpreted, but the source as a whole is
+    /// still sound. The driver skips this record, counts it, and publishes
+    /// every other record in the same generation.
+    ///
+    /// This is the record-level counterpart of [`Self::Unsupported`]. Use it
+    /// whenever the failure is confined to one record: a missing or conflicting
+    /// identity, an unparseable timestamp, a counter that does not reconcile.
+    /// Rejecting the whole source for one of those freezes the source's totals
+    /// permanently, because a log only grows and the same record is re-read
+    /// every pass.
+    #[error("declined record: {0}")]
+    Declined(&'static str),
+    /// The source as a whole cannot be interpreted: framing, schema version,
+    /// ownership, or a structural contract. The complete candidate is rejected
+    /// and the prior committed generation is retained.
     #[error("unsupported source coverage: {0}")]
     Unsupported(&'static str),
     #[error("source reader capacity exceeded: {0}")]

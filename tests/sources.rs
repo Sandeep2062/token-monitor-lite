@@ -312,6 +312,52 @@ fn changing_source_during_multibatch_reconciliation_discards_mixed_candidate() {
 }
 
 #[test]
+fn a_declined_record_is_quarantined_and_the_rest_of_the_source_still_publishes() {
+    // One uninterpretable record must not freeze the source. Before the split
+    // between a declined record and an unsupported source, this record made
+    // every later pass fail identically, so the totals never advanced again.
+    let mut bytes = claude("first", 7);
+    bytes.push(b'\n');
+    // An assistant record with usage but no model: record-level uninterpretable.
+    bytes.extend(
+        br#"{"type":"assistant","timestamp":"2026-11-09T10:00:01Z","message":{"id":"no-model","usage":{"input_tokens":5}}}"#,
+    );
+    bytes.push(b'\n');
+    bytes.extend(claude("third", 11));
+    bytes.push(b'\n');
+    let source = Source::new(&bytes);
+    let mut reader = SourceReader::new(source.0.clone(), SourceFormat::ClaudeCli, "a");
+
+    let mut published = None;
+    loop {
+        let step = reader.step().unwrap();
+        match step.progress {
+            SourceProgress::Pending => {}
+            SourceProgress::Published { delta } => {
+                published = Some((delta.input, step.declined_records));
+                break;
+            }
+            SourceProgress::Unchanged => panic!("expected a publication"),
+        }
+    }
+    // Both interpretable records are counted; the declined one is not.
+    assert_eq!(published, Some((18, 1)));
+    let snapshot = reader.last_good().unwrap();
+    assert_eq!(snapshot.rows.len(), 2);
+    assert_eq!(snapshot.totals.input, 18);
+    assert_eq!(reader.declined_records(), 1);
+
+    // The source keeps advancing afterwards, which is the whole point.
+    source.append(&{
+        let mut row = claude("fourth", 4);
+        row.push(b'\n');
+        row
+    });
+    assert_eq!(publish(&mut reader), 4);
+    assert_eq!(reader.last_good().unwrap().totals.input, 22);
+}
+
+#[test]
 fn unsupported_and_oversized_sources_withhold_every_candidate_row() {
     use token_monitor_lite::parsers::jsonl::MAX_RECORD_BYTES;
     let mut bytes = claude("a", 7);
@@ -367,4 +413,51 @@ fn cc_mirror_path_sets_client_and_file_mtime_is_the_fallback_timestamp() {
     assert_eq!(snapshot.rows[0].key.client, "cc-mirror/variant");
     assert_eq!(snapshot.rows[0].timestamp_ms, expected_timestamp);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_unbounded_log_is_read_through_a_tail_window_and_says_so() {
+    // server-logs/ grows without bound. A whole-document read eventually
+    // breaches the record cap, and a cap breach freezes the source until the
+    // log is rotated. The window keeps it refreshing and reports the truncation
+    // instead of hiding it.
+    use token_monitor_lite::source_inputs::LMSTUDIO_WINDOW_BYTES;
+
+    let path = std::env::temp_dir().join(format!(
+        "token-monitor-lmstudio-window-{}-{}.log",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let record = |id: &str, input: u64| {
+        format!(
+            "[2026-07-09 11:00:00][INFO][m]\n{{\n  \"id\": \"{id}\",\n  \"model\": \"m\",\n  \"usage\": {{\n    \"prompt_tokens\": {input},\n    \"completion_tokens\": 1,\n    \"total_tokens\": {}\n  }}\n}}\n",
+            input + 1
+        )
+    };
+    // Padding pushes the first record outside the window.
+    let mut log = record("chatcmpl-old", 100);
+    log.push_str(&"x".repeat(LMSTUDIO_WINDOW_BYTES as usize + 4096));
+    log.push('\n');
+    log.push_str(&record("chatcmpl-new", 7));
+    fs::write(&path, &log).unwrap();
+
+    let mut reader = SourceReader::new(path.clone(), SourceFormat::LmstudioLog, "log");
+    let mut published = None;
+    loop {
+        let step = reader.step().unwrap();
+        match step.progress {
+            SourceProgress::Pending => {}
+            SourceProgress::Published { delta } => {
+                published = Some(delta.input);
+                break;
+            }
+            SourceProgress::Unchanged => panic!("expected a publication"),
+        }
+    }
+    // Only the record inside the window is counted, and the truncation is
+    // reported rather than silently dropping the older record.
+    assert_eq!(published, Some(7));
+    assert!(reader.truncated_head());
+    assert_eq!(reader.last_good().unwrap().rows.len(), 1);
+    fs::remove_file(&path).unwrap();
 }

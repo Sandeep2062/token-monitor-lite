@@ -110,7 +110,7 @@ impl McodeReader {
         let result = if event_type == "exec.completed" {
             value
                 .get("result")
-                .ok_or(ReaderError::Unsupported("mcode completed result"))?
+                .ok_or(ReaderError::Declined("mcode completed result"))?
         } else {
             value
         };
@@ -122,17 +122,17 @@ impl McodeReader {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|provider| !provider.is_empty())
-            .ok_or(ReaderError::Unsupported("mcode provider"))?;
+            .ok_or(ReaderError::Declined("mcode provider"))?;
         let model_id = model
             .get("modelId")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|model| !model.is_empty())
-            .ok_or(ReaderError::Unsupported("mcode model"))?;
+            .ok_or(ReaderError::Declined("mcode model"))?;
         let usages = if event_type == "exec.completed" {
             let usage = result
                 .get("usage")
-                .ok_or(ReaderError::Unsupported("mcode completed usage"))?;
+                .ok_or(ReaderError::Declined("mcode completed usage"))?;
             let tokens = usage_tokens(usage)?;
             if tokens_total(tokens)? == 0 {
                 return Ok(());

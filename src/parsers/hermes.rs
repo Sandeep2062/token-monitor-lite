@@ -79,14 +79,14 @@ impl HermesReader {
         let cache_write = non_negative(row.cache_write_tokens.unwrap_or(0))?;
         let reasoning = non_negative(row.reasoning_tokens.unwrap_or(0))?;
         if reasoning > output {
-            return Err(ReaderError::Unsupported("Hermes reasoning exceeds output"));
+            return Err(ReaderError::Declined("Hermes reasoning exceeds output"));
         }
         if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
             return Ok(());
         }
         let timestamp = timestamp_secs_to_ms(row.started_at)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Hermes session timestamp"))?;
+            .ok_or(ReaderError::Declined("Hermes session timestamp"))?;
         // SQLite groups a NULL provider separately from an empty-string one, so
         // the dedup identity keeps them apart: the NULL sentinel stands in for a
         // missing value while an empty string stays an empty key. Folding one
@@ -102,7 +102,7 @@ impl HermesReader {
             .map(str::to_owned);
         let identity = format!("hermes:{}:{}:{}", row.session_id, model, provider_key);
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Hermes session identity"));
+            return Err(ReaderError::Declined("Hermes session identity"));
         }
         self.retained_identity_bytes = self
             .retained_identity_bytes

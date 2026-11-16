@@ -116,7 +116,7 @@ fn an_assistant_message_without_usage_is_a_visible_rejection() {
         reader
             .ingest(&serde_json::to_vec(&no_usage).unwrap())
             .expect_err("usage is required"),
-        token_monitor_lite::parsers::ReaderError::Unsupported("Pi assistant usage")
+        token_monitor_lite::parsers::ReaderError::Declined("Pi assistant usage")
     );
 }
 

@@ -6,9 +6,19 @@ The tables describe the **selected Gate 2A target**, not the narrower implementa
 
 - **supported** — emit the normalized observation stated below;
 - **ignored non-usage** — retain only the listed parser state, if any, and emit no usage;
+- **declined record** — the record alone cannot be interpreted. Skip it, count it, and publish every other record in the same generation. The count is exposed as `declined_records` on the source health row, so the totals are visibly short by that many records rather than silently short;
 - **visible unsupported** — reject the complete source candidate, retain the prior committed generation, and expose only a fixed redacted health reason.
 
-There is no best-effort or partial-success class. Malformed, over-budget, locked, incomplete, changing, canonicalization-failed, or storage-failed candidates never delete, zero, or partially replace last-good rows.
+The **declined record** class exists because a source is re-read from byte zero on every pass. Rejecting the whole candidate for one uninterpretable record therefore freezes that source's totals permanently: the next pass hits the same record and fails identically, and a log only grows, so the source never recovers on its own. That is the failure the pinned LM Studio reader was explicitly written to avoid, and it is the worst failure mode a usage monitor can have — quiet under-reporting behind a status badge.
+
+The split is by scope, not by severity:
+
+- **declined record** — the failure is confined to one record: a missing or conflicting identity, an unparseable timestamp, a counter that does not reconcile, a schema variant on one row.
+- **visible unsupported** — the source as a whole cannot be interpreted: framing, ownership, a structural or schema contract, a capacity or overflow breach.
+
+A reader that declines a record must also reset whatever *pending per-record* state it was building, through `on_declined`. Session-scoped state (a current model, a seen set, an ordinal that only advances on success) is unaffected by a skip and needs no override.
+
+There is no best-effort or partial-success class beyond the counted decline. Malformed, over-budget, locked, incomplete, changing, canonicalization-failed, or storage-failed candidates never delete, zero, or partially replace last-good rows.
 
 ## Common normalized boundary
 
@@ -65,7 +75,7 @@ Opaque source IDs, never lexical paths, order provenance. Paths exist only in di
 | Claude Desktop transcript and `.cc-mirror/<variant>/config/projects` transcript | supported | Same checked observations, with Desktop/variant client ownership and the exact non-secret provider hint. | `cc-mirror/<sanitized-variant>` remains distinct from `claude`; no path-derived provider guess outside the pinned layout. |
 | Token-bearing record whose only billable meaning is a cost/currency/price field | visible unsupported | No row; Gate 3 owns pricing. | Prior source generation retained. |
 | Known progress/system/queue/file-history record with no supported usage or timing role | ignored non-usage | No row. | No ownership change. |
-| Unknown or malformed usage-like record, unsupported provider/model conflict, invalid UTF-8/JSON, oversized record, or cap breach | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Unknown or malformed usage-like record, unsupported provider/model conflict, invalid UTF-8/JSON, oversized record, or cap breach | declined record, or visible unsupported on a cap/framing breach | An uninterpretable record is skipped and counted; a cap or framing breach still rejects the whole candidate. | Prior committed generation remains active. |
 
 ## Codex rollout matrix
 
@@ -87,7 +97,7 @@ Opaque source IDs, never lexical paths, order provenance. Paths exist only in di
 | Supported headless Codex rollout | supported | Same state machine, with `Codex Headless` agent attribution retained outside secret/runtime content. | Declared session/thread. |
 | Non-usage `response_item`/`event_msg` kinds (messages, function calls/results, notices, plan updates) | ignored non-usage | May update only explicitly listed turn/activity gates; prompts, output, cwd, and tool content are never persisted. | No usage row. |
 | Supplemental ledger row proven to duplicate native rollout usage | ignored non-usage | Mark native-backed overlap; do not add it. | Exact native thread/response identity required. |
-| Cost-only, unknown usage-like, malformed/inconsistent counter, unresolved model, unsupported fork/record, invalid UTF-8/JSON, oversized record, or cap breach | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Cost-only, unknown usage-like, malformed/inconsistent counter, unresolved model, unsupported fork/record, invalid UTF-8/JSON, oversized record, or cap breach | declined record, or visible unsupported on a cap/framing breach | An uninterpretable record is skipped and counted; a cap or framing breach still rejects the whole candidate. | Prior committed generation remains active. |
 
 ## OpenCode SQLite matrix
 
@@ -102,12 +112,12 @@ OpenCode has no JSONL transcript. Current databases keep metadata in `session_v2
 | Legacy assistant rows for a session that already has current rows | ignored non-usage | The frozen legacy history is not added a second time. A non-current legacy summary or subtask assistant that the v1 migration would have restored is visible unsupported instead. | Current transcript wins. |
 | Migrated legacy summary/subtask assistant that would supply omitted compaction or task usage | visible unsupported | No row; the reader does not reconstruct the two histories. | Prior source generation retained. |
 | Assistant payload with `tokens` absent or `null` | ignored non-usage | No usage row. A `cost`-only payload is also ignored because Gate 3 owns pricing. | No usage row. |
-| Assistant payload where `tokens` exists but `input`, `output`, `cache.read`, or `cache.write` is missing, non-integral, negative, or unsafe | visible unsupported | Discard the candidate. The pinned reader clamps negatives and truncates fractional timestamps; the native contract deliberately does not. | Prior committed generation remains active. |
+| Assistant payload where `tokens` exists but `input`, `output`, `cache.read`, or `cache.write` is missing, non-integral, negative, or unsafe | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader clamps negatives and truncates fractional timestamps; the native contract deliberately does not. | Prior rows retained; `declined_records` increments. |
 | `$.time.created` missing but a non-negative `time_created` column exists | supported | Use the column value as milliseconds. Fractional millisecond values, negative values, and overflow are visible unsupported. Epoch seconds are not guessed or scaled. | Same row session. |
 | Same message ID in two admitted channel databases | supported | Identical rows collapse through the stable message identity. Conflicting content for the same identity is a candidate conflict, not a merge. | Source-qualified provenance is retained. |
 | Forked copies with different message IDs but identical content | visible unsupported | No content-fingerprint merge is implemented, so the native reader does not silently choose one copy. | Prior source generation retained. |
 | Agent/mode, duration, workspace, title, cost/currency, and provider canonicalization | ignored non-selection | These fields are not persisted or projected. Only the explicit provider ID is retained as a bounded non-secret hint. | No usage mutation. |
-| Missing required table columns, a malformed `session_message`/`message` table, invalid UTF-8/JSON, an oversized row, or a cap breach | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Missing required table columns, a malformed `session_message`/`message` table, invalid UTF-8/JSON, an oversized row, or a cap breach | declined record, or visible unsupported on a cap/framing breach | An uninterpretable record is skipped and counted; a cap or framing breach still rejects the whole candidate. | Prior committed generation remains active. |
 | OpenCode legacy JSON message files, `OPENCODE_DB` path overrides, and unknown SQLite shapes | visible unsupported | Not discovered or admitted; no format guessing. | No source slot is created. |
 
 OpenCode's stored components follow the common inclusive-parent rule: `input` excludes cache read/write, and `reasoning` is a subset of inclusive `output`. The native boundary keeps input/cache components as stored and splits reasoning out of output exactly once, so the canonical component sum matches `input + output + cache_read + cache_write` without double-counting reasoning.
@@ -123,9 +133,9 @@ Gemini CLI keeps JSON session documents and JSONL recordings under `~/.gemini/tm
 | JSONL `init` line | ignored non-usage | Establish session ID and current model. | Current JSONL source. |
 | JSONL direct `gemini`/`tokens` event with a resolved model | supported | Same token normalization as a session message. Event/session `timestamp` or file mtime. | Session from the event or `init`; message `id` when present. |
 | JSONL/JSON `stats` with `models` or a direct stats object | supported | One row per model. Prompt-style counters are treated as cache-inclusive and split once; `input` without prompt counters is treated as net. | Session from the payload; stats-derived rows are source-local because they carry no message identity. |
-| Negative, fractional, unsafe, or overflowing counters | visible unsupported | Discard the candidate. The pinned reader clamps negatives; the native reader does not. | Prior committed generation remains active. |
+| Negative, fractional, unsafe, or overflowing counters | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader clamps negatives; the native reader does not. | Prior rows retained; `declined_records` increments. |
 | Direct event or stats usage with no resolvable model | visible unsupported | No fabricated `unknown` model. | Prior committed generation remains active. |
-| Malformed JSON line, non-array `messages`, invalid session/message ID, or unknown usage-like shape | visible unsupported | Discard the candidate. The pinned reader skips malformed JSONL lines; the native reader does not. | Prior source generation retained. |
+| Malformed JSON line, non-array `messages`, invalid session/message ID, or unknown usage-like shape | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader skips malformed JSONL lines; the native reader does not. | Prior rows retained; `declined_records` increments. |
 | A non-session JSON file under `tmp` that is not `session-*.json` or `tmp/<id>/chats/*.json` | ignored non-usage | Not discovered. | No source slot. |
 | Cross-file duplicate or forked Gemini transcripts, `GEMINI_CLI_HOME`, cost/currency, and model-specific pricing | visible unsupported / ignored | No content merge or environment relocation is guessed. Cost is Gate 3. | Prior source generation retained. |
 
@@ -153,9 +163,9 @@ The supported source is Cline CLI/Desktop's shared `~/.cline/data/sessions/<sess
 | Assistant message with `modelInfo` (or a previously resolved model) and `metrics` | supported | `inputTokens` is gross: cache read + cache write are subtracted once; `outputTokens` is retained; reasoning is zero; cost is unavailable. `modelInfo.id/provider` and file `agent` become model/provider/agent hints. | `sessionId` or the source file-stem fallback. Message `id`, else a stable assistant ordinal. |
 | Message with zero input/output and no cost | ignored non-usage | No row. | No ownership change. |
 | Non-assistant message, or assistant without `metrics` | ignored non-usage | No row. | No ownership change. |
-| Cache read + cache write greater than `inputTokens` | visible unsupported | Discard the candidate. The pinned reader saturating-subtracts and can under-count; the native reader refuses that shape. | Prior committed generation remains active. |
+| Cache read + cache write greater than `inputTokens` | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader saturating-subtracts and can under-count; the native reader refuses that shape. | Prior rows retained; `declined_records` increments. |
 | Assistant with metrics but no resolvable model | visible unsupported | No fabricated `unknown` model. | Prior committed generation remains active. |
-| Invalid JSON, missing `messages`, non-object message/metrics, negative/fractional counter, or invalid timestamp | visible unsupported | Discard the candidate. | Prior source generation retained. |
+| Invalid JSON, missing `messages`, non-object message/metrics, negative/fractional counter, or invalid timestamp | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | visible unsupported / ignored | Not discovered or not parsed; no format guessing. | No source slot. |
 
 ## Amp thread matrix
@@ -168,7 +178,7 @@ Amp threads live under `<XDG_DATA_HOME or home/.local/share>/amp/threads` and th
 | Assistant message `usage` with `model` and token counters, when the ledger yields no token rows | supported | Same component checks; `inputTokens`/`outputTokens` aliases are used. Timestamp from usage, else thread created + message ID, else file mtime. | Thread `id`. `messageId` or message index is the identity. |
 | Ledger event or assistant message with zero tokens | ignored non-usage | No row. | No ownership change. |
 | Event/message without a model, non-assistant message, or messages absent | ignored non-usage | No row. | No ownership change. |
-| Negative/fractional counters, invalid JSON, non-object ledger/message, or invalid timestamp shape | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Negative/fractional counters, invalid JSON, non-object ledger/message, or invalid timestamp shape | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | Ledger and message reconciliation, credits/cost, reasoning, provider inference, and overlapping non-identical thread copies | visible unsupported / ignored | No fabricated merge or provider. Cost is Gate 3. | Prior source generation retained. |
 
 ## Kilo SQLite matrix
@@ -180,7 +190,7 @@ Kilo CLI stores assistant turns in OpenCode's message schema at `<XDG_DATA_HOME 
 | Assistant payload with top-level `modelID`, strict `tokens.cache.read`/`write`, `input`, `output`, optional `reasoning`, and `time.created` | supported | One observation. Reason is split out of inclusive output once; input/cache stay as stored; provider uses explicit `providerID` only; cost is unavailable. Payload `session_id` overrides the row column. | Row ID is the stable identity (`kilo:<session>:<row>`). Missing `time.created` uses the database file mtime. |
 | Zero-token assistant row (including legacy migration stubs) | ignored non-usage | No row. | No ownership change. |
 | Non-assistant row or row without `tokens` | ignored non-usage | Not selected by the query. | No ownership change. |
-| Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | visible unsupported | Discard the candidate. The pinned reader clamps counters; the native reader does not. | Prior committed generation remains active. |
+| Missing/partial cache, missing model, negative/fractional counter, reasoning greater than output, or invalid ID/timestamp | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader clamps counters; the native reader does not. | Prior rows retained; `declined_records` increments. |
 | Kilo IDE task roots, provider inference/fallback, cost/currency, and migration-stub reconstruction | visible unsupported / ignored | No guessed provider or task-log format. | No source slot. |
 
 ## Cherry Studio matrix
@@ -206,7 +216,7 @@ The schema is probed with `pragma_table_info` and the statement assembled from w
 | `cost` explicitly zero in any currency | supported, cost reported | Authoritative: the call was billed at zero, so pricing must not re-estimate it. | As above. |
 | Model id `<synthetic>` | ignored | Not a billed model. | No source slot. |
 | Missing or blank model | supported | Reported as `unknown` rather than dropping the row: the tokens were still spent. | As above. |
-| Negative counter | visible unsupported | Discard the candidate. The ledger writes unsigned counters, so a negative value means the row is not trustworthy. | Prior committed generation remains active. |
+| Negative counter | declined record | Skip and count this record; every other record in the source still publishes. The ledger writes unsigned counters, so a negative value means the row is not trustworthy. | Prior rows retained; `declined_records` increments. |
 | `total_tokens` only, with no individual bucket columns | visible unsupported | Not guessed. A total cannot supply individual buckets. | No source slot. |
 | Conversation title from the optional `message`/`topic` join | supported | Presentation metadata only; never persisted, consistent with the `title` privacy invariant. | As above. |
 
@@ -228,10 +238,11 @@ The counters are inclusive: `prompt_tokens` already contains both cache buckets 
 | An escaped `"usage"` inside a string value | ignored | Not a marker; a prompt that quotes the key must not start a record. | As above. |
 | `"id"` without a `chatcmpl-` / `cmpl-` / `resp_` prefix | supported, content-derived key | The log is full of request and model-file ids, so only a response id may key the record; otherwise the key is derived from the record's own content, which stays stable because a whole revision is re-scanned from the start. | As above. |
 | A date inside the model's own answer | ignored | Timestamps come only from the log header shape, never from a bare bracketed date later in the file. | As above. |
-| No readable header and no file mtime | visible unsupported | The candidate is rejected. | Prior committed generation remains active. |
-| Negative counter, malformed usage object | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| No readable header and no file mtime | declined record | The record is skipped and counted; the rest of the log still publishes. | Prior rows retained; `declined_records` increments. |
+| Negative counter, malformed usage object | declined record | The record is skipped and counted; the rest of the log still publishes. | As above. |
 | A log larger than 16 MiB | visible unsupported | This codebase delivers one whole source revision, so the scan sees the complete slice and needs no eviction carry; the trade is that a log past the document limit fails visibly instead of silently losing every record. | Prior committed generation remains active. |
-| `is_turn_start`, and host-local-timezone resolution of the naive header | not implemented | This codebase has no turn-start field, and `chrono` here has no `clock` feature, so headers are read as UTC. A record's timestamp therefore differs from the pinned reader's by the host's UTC offset. Record ordering is unaffected. | No source slot. |
+| `is_turn_start` | not implemented | This codebase has no turn-start field. | No source slot. |
+| Host-local resolution of the naive header | supported | A header with no zone designator is the writing host's wall clock and is resolved in the local zone, matching the pinned reader. Reading it as UTC would shift every record by the host's offset and move records across midnight, corrupting the day and month buckets. | As above. |
 
 ## Unsloth matrix
 
@@ -252,7 +263,7 @@ The counters are inclusive, so cache and reasoning are moved out of prompt/compl
 | `total_tokens` larger than the bucket sum | supported | Trusted, so a provider that counts differently is not shortened. | As above. |
 | Cache larger than the prompt, reasoning larger than completion | clamped | Shares are capped; input and output floor at zero. | As above. |
 | Timestamp zero or negative | ignored non-usage | No observation. | No source slot. |
-| Negative counter, empty id | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Negative counter, empty id | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | `is_turn_start` | not implemented | This codebase has no such field. | No source slot. |
 
 ## Devin matrix
@@ -273,7 +284,7 @@ Devin CLI keeps sessions in `~/.local/share/devin/cli/sessions.db`. Usage lives 
 | No own `created_at` | supported | The database mtime is used and is **not** back-anchored: subtracting a turn duration from a file timestamp would move the record to the wrong day. | As above. |
 | `working_directory` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
 | `message_nodes` or `sessions` absent | supported | An older or partial database is empty history, not a query failure. | No source slot. |
-| Malformed JSON, negative counter, empty session id | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Malformed JSON, negative counter, empty session id | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | Desktop `acp-events/*.ndjson` | visible unsupported | Not read. Those file names are independent UUIDs, so attributing them needs a title-to-session map built from this database and reconciled across sibling files — impossible for a per-source byte reader without guessing. | No source slot. |
 | `duration_ms`, `is_turn_start`, and `inferred_provider_from_model` | not implemented | This codebase's observation has no duration or turn-start field, and an unrecognized model keeps no provider hint rather than being attributed to `devin`. | No source slot. |
 
@@ -297,7 +308,7 @@ A snapshot carries both a per-model breakdown and top-level session aggregates. 
 | `total_cost` negative or non-finite | supported, unpriced | Treated as unreported rather than clamped to zero, so the observation stays eligible for repricing. | As above. |
 | `total_cost` explicitly `0.0` | supported, cost reported | Authoritative: fx really did bill nothing. | As above. |
 | Document with no `snapshot` | ignored non-usage | Nothing to attribute. | No source slot. |
-| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Malformed JSON, negative counter | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | Sibling `session.json`, shared `index.json`, and the global `usage.jsonl` | visible unsupported | Not read. The first two are cross-file reads a per-source byte reader cannot perform, so the timestamp falls back to the usage file's mtime and no workspace or title is reported; the global stream carries no session id or workspace, exactly as the pinned reader declines it. | No source slot. |
 
 ## Mistral Vibe matrix
@@ -323,7 +334,7 @@ A Vibe transcript carries no per-message model, timestamp or token counts, so **
 | `end_time` / `start_time` | supported | `end_time` wins, then `start_time`, then the file mtime. | As above. |
 | `origin_directory`, or `environment.working_directory` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
 | `title` | supported | Presentation metadata only; never persisted. | As above. |
-| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Malformed JSON, negative counter | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | `message_count`, provider inference | not implemented | This codebase's observation has no message-count field, and no provider hint is emitted rather than attributing the session to `mistral`. | No source slot. |
 
 ## Prime Agent matrix
@@ -360,7 +371,7 @@ Cache accounting is decided from the **message-local** usage shape, never from t
 | `working_dir` | supported | Only the final path component survives, as a label; a raw absolute path is refused in every runtime identity column. | As above. |
 | Blank session `id`, `model`, or `provider_key` | supported | Falls back to the file stem, `unknown`, and `jcode` respectively. | As above. |
 | Message with no `id` | supported | A `snapshot:<ordinal>` fallback keeps a custom or malformed file parseable without colliding. | As above. |
-| Malformed JSON, negative counter | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+| Malformed JSON, negative counter | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | Sibling journal (`*.journal.jsonl`) | visible unsupported | Not read. Merging it means appending the unsaved suffix, replacing a snapshot entry in place when the journal repeats its id, and re-scoping the billing provider per append batch — a cross-file merge this per-source contract cannot perform. The snapshot alone is self-contained. | No source slot. |
 | `is_turn_start`, `message_count`, provider canonicalization | not implemented | No such fields on this codebase's observation; `provider_key` is reported verbatim as the billing hint. | No source slot. |
 
@@ -384,7 +395,7 @@ DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH
 | Current `isSeeded: true` header | supported | The cut is the **last** tagged `session/end-seed { inherited: true }` marker, because a nested fork can inherit an ancestor's marker. | As above. |
 | `isSeeded: true` with no readable tagged cut | visible unsupported | The whole transcript is refused: inherited usage cannot be distinguished from child-owned usage, so charging the copied prefix to the child is worse than omitting it until a later scan reads the marker. | Prior committed generation remains active. |
 | Identical replayed rows within one file | deduplicated | Dropped by the full identity envelope. A repeated `message.id` with different time, usage or routing still separates, because a non-unique id must not fold two real calls. | As above. |
-| Malformed JSON, a negative or non-integral counter | visible unsupported | Discard the whole candidate. | Prior committed generation remains active. |
+| Malformed JSON, a negative or non-integral counter | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
 | Per-call generation latency (`duration_ms`), `is_turn_start`, and the compressed-source cache with its fingerprint | visible unsupported | Not guessed. Latency needs the `step/start` anchor and turn-start needs the `(turn, step)` slot map; both are aggregation concerns in this codebase rather than properties of one observation. | No source slot. |
 
 ## Qoder CN matrix
@@ -404,7 +415,7 @@ Qoder CN is one opt-in, fork-only client with two lanes. The legacy store is a `
 | Missing model | supported | `qoder-agent`, the pinned reader's documented fallback. | As above. |
 | Bare `project_name`, or a `cwd` path | supported | The bare name becomes the workspace label. A path never becomes `workspace_key`: the store rejects absolute-path text in identity columns, so only the final component survives, as a label. | As above. |
 | Project name exactly `.` | ignored | The app's "no project" sentinel is not a label. | As above. |
-| Negative, non-numeric or missing required counter; non-object `token_info`/`usage`; control character in an identity | visible unsupported | Discard the whole candidate. A fractional counter truncates, matching the pinned `Number(value)` adapter, because the value is a real reading rather than a malformed one. | Prior committed generation remains active. |
+| Negative, non-numeric or missing required counter; non-object `token_info`/`usage`; control character in an identity | declined record | Skip and count this record; every other record in the source still publishes. A fractional counter truncates, matching the pinned `Number(value)` adapter, because the value is a real reading rather than a malformed one. | Prior rows retained; `declined_records` increments. |
 | `gmt_create`, or the transcript `timestamp` | supported | Stored as recorded; an unparseable transcript timestamp falls back to the epoch, which falls outside any window. | As above. |
 | Missing `chat_session` table or `project_name` column | supported | The project subquery is replaced by `NULL`; the probe decides, rather than inferring from a failed prepare. | As above. |
 | Per-source last-complete-snapshot cache with db/WAL fingerprints, the `unpriced:qodercn` marker, cross-format dedup, and the `TOKEN_MONITOR_QODER_CN_*` overrides | visible unsupported / ignored | Not guessed. A failed read is a visible failure that keeps the prior committed generation, which the runtime already guarantees; no second copy is maintained. | No source slot. |
@@ -444,7 +455,7 @@ The pinned reader's cross-file reconciliation is deliberately not implemented. I
 | Record with no `model` | supported | Model reported as `unknown`; the counts are still real. | As above. |
 | First line of `type: "session"` | supported | The whole file is native Pi format and is delegated to the Pi reader under the `proma` client, including Pi's own model-change and tool-result rules. | Pi's own session ownership applies. |
 | All-zero counters | ignored non-usage | No row. | No ownership change. |
-| Negative or non-integral counter, or a missing timestamp with no file mtime | visible unsupported | Discard the whole candidate. Counters are never clamped. | Prior committed generation remains active. |
+| Negative or non-integral counter, or a missing timestamp with no file mtime | declined record | Skip and count this record; every other record in the source still publishes. Counters are never clamped. | Prior rows retained; `declined_records` increments. |
 | `_createdAt`, then `timestamp`, then the file mtime | supported | The first usable timestamp wins; the chain matches the pinned reader. | As above. |
 | Cross-file reconciliation, the `agent-sessions.json` index, journal-over-native precedence, fork-history dedup, `inferred_provider_from_model`, and the Pi per-call USD cost | visible unsupported / ignored | Not guessed; see the note above. | No source slot. |
 
@@ -774,7 +785,7 @@ These are acceptance limits, not truncation targets:
 - one identity/provider/model/session string: 4,096 bytes;
 - retained identity strings per request-like source: 8 MiB.
 
-SQLite is read in deterministic pages no larger than the framing row limit. Release acceptance is exactly 1,000 canonical sessions across 100 mixed logical sources; passing that fixture does not relax any per-source bound. Cap exhaustion is visible unsupported and never publishes a truncated candidate.
+SQLite is read in deterministic pages no larger than the framing row limit. Release acceptance is exactly 1,000 canonical sessions across 100 mixed logical sources; passing that fixture does not relax any per-source bound. Cap exhaustion is visible unsupported and never publishes a truncated candidate, with one deliberate exception: an append-only log read through a declared tail window reports `truncated_head` and publishes the retained window rather than failing. The window is a declared read scope, not a silent truncation — the source health row says the oldest records are outside it.
 
 ## Current implementation delta at freeze
 

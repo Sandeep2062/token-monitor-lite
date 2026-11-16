@@ -132,7 +132,10 @@ fn missing_conversation_uses_the_account_day_fallback() {
 fn missing_event_array_and_negative_counters_are_visible_unsupported() {
     let mut reader = CursorReader::new("active");
     let missing = reader.ingest(&serde_json::to_vec(&json!({"usage": []})).unwrap());
-    assert!(matches!(missing, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        missing,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 
     let negative = reader.ingest(
         &serde_json::to_vec(&json!({

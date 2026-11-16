@@ -611,6 +611,23 @@ impl ResponseReader {
         }
     }
 
+    /// Called after a record was declined, before the next record is read.
+    ///
+    /// Only readers that hold *pending per-record* state need to override this.
+    /// A skipped record can leave a half-built record behind, and the next
+    /// record would then inherit it: Claude's turn-start timestamp, Codex's
+    /// pending usage/model rows, Grok's open turn. Readers whose state is
+    /// session-scoped (a current model, a seen set, an ordinal that only
+    /// advances on success) are unaffected by a skip and keep the no-op.
+    fn on_declined(&mut self) {
+        match self {
+            Self::Claude(reader) => reader.on_declined(),
+            Self::Codex(reader) => reader.on_declined(),
+            Self::Grok(reader) => reader.on_declined(),
+            _ => {}
+        }
+    }
+
     fn has_supported_usage(&self, rows: &[ResponseUsage]) -> bool {
         match self {
             Self::Claude(_) => !rows.is_empty(),
@@ -696,6 +713,8 @@ pub struct SourceStep {
     pub physical_bytes_read: usize,
     pub decoded_bytes_read: usize,
     pub progress: SourceProgress,
+    /// Records this generation declined without rejecting the source.
+    pub declined_records: u32,
 }
 
 /// Errors deliberately omit paths and captured source values.
@@ -727,6 +746,17 @@ pub struct SourceReader {
     candidate: Option<ResponseReader>,
     last_good: Option<Arc<SourceSnapshot>>,
     dirty: bool,
+    /// Records declined in the candidate generation currently being read.
+    declined: u32,
+    /// Records declined in the last published generation. Kept beside the
+    /// snapshot rather than inside it so a quarantine count never forces a
+    /// storage schema change, and so a restart reports zero until it has
+    /// actually scanned.
+    last_declined: u32,
+    /// The last published generation was read through a tail window, so the
+    /// oldest records are deliberately absent. Also kept beside the snapshot
+    /// for the same reason: it is a property of the scan, not of the rows.
+    last_truncated: bool,
 }
 
 impl SourceReader {
@@ -754,6 +784,9 @@ impl SourceReader {
             candidate: None,
             last_good: None,
             dirty: true,
+            declined: 0,
+            last_declined: 0,
+            last_truncated: false,
         }
     }
 
@@ -767,6 +800,17 @@ impl SourceReader {
 
     pub fn last_good(&self) -> Option<Arc<SourceSnapshot>> {
         self.last_good.clone()
+    }
+
+    /// Records declined by the last published generation. Zero before the
+    /// first scan of this process.
+    pub fn declined_records(&self) -> u32 {
+        self.last_declined
+    }
+
+    /// Whether the last published generation was read through a tail window.
+    pub fn truncated_head(&self) -> bool {
+        self.last_truncated
     }
 
     /// Invalidate only working state. Keep the published last-good source
@@ -803,6 +847,7 @@ impl SourceReader {
         if batch.reset || self.candidate.is_none() {
             self.candidate = Some(self.new_response_reader());
             self.dirty = true;
+            self.declined = 0;
         }
         self.dirty |= batch.decoded_bytes_read != 0 || !batch.records.is_empty();
         let candidate = self
@@ -810,7 +855,21 @@ impl SourceReader {
             .as_mut()
             .expect("candidate initialized above");
         for record in &batch.records {
-            candidate.ingest(record)?;
+            match candidate.ingest(record) {
+                Ok(()) => {}
+                // A record the reader cannot interpret is quarantined, not
+                // fatal. Rejecting the candidate here would retain last-good
+                // totals forever: the source is re-read from byte zero on the
+                // next pass, hits the same record, and fails identically, so a
+                // single unrecognized record would freeze the source's totals
+                // permanently. Skipping it keeps every other record in the
+                // generation and surfaces the loss as a count.
+                Err(ReaderError::Declined(_)) => {
+                    self.declined = self.declined.saturating_add(1);
+                    candidate.on_declined();
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         if batch.more_available {
             return Ok(SourceStep {
@@ -818,6 +877,7 @@ impl SourceReader {
                 physical_bytes_read: batch.physical_bytes_read,
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
+                declined_records: self.declined,
             });
         }
         if !self.input.is_current()? {
@@ -827,6 +887,7 @@ impl SourceReader {
                 physical_bytes_read: batch.physical_bytes_read,
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
+                declined_records: self.declined,
             });
         }
         if !self.dirty {
@@ -835,6 +896,7 @@ impl SourceReader {
                 physical_bytes_read: batch.physical_bytes_read,
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Unchanged,
+                declined_records: self.last_declined,
             });
         }
         candidate.finish()?;
@@ -857,6 +919,7 @@ impl SourceReader {
                 physical_bytes_read: batch.physical_bytes_read,
                 decoded_bytes_read: batch.decoded_bytes_read,
                 progress: SourceProgress::Pending,
+                declined_records: self.declined,
             });
         }
         let generation = self
@@ -885,11 +948,14 @@ impl SourceReader {
             source_state: ObservationSourceState::Live,
         }));
         self.dirty = false;
+        self.last_declined = self.declined;
+        self.last_truncated = batch.truncated_head;
         Ok(SourceStep {
             bytes_read: batch.physical_bytes_read,
             physical_bytes_read: batch.physical_bytes_read,
             decoded_bytes_read: batch.decoded_bytes_read,
             progress: SourceProgress::Published { delta },
+            declined_records: self.last_declined,
         })
     }
 
@@ -1206,6 +1272,7 @@ impl SourceReader {
             physical_bytes_read: 0,
             decoded_bytes_read: 0,
             progress: SourceProgress::Published { delta },
+            declined_records: 0,
         })
     }
 }

@@ -159,7 +159,7 @@ impl FxReader {
         let (provider, model) = split_model(raw_model);
         let dedup_key = format!("fx:{}:{model}", self.key.session);
         if dedup_key.len() > MAX_IDENTITY_BYTES || model.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("fx identity"));
+            return Err(ReaderError::Declined("fx identity"));
         }
         let usage = ResponseUsage {
             key: self.key.clone(),

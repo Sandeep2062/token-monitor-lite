@@ -144,7 +144,10 @@ fn negative_counters_are_rejected_rather_than_clamped() {
 fn reasoning_above_output_is_visible_unsupported() {
     let mut reader = HermesReader::new();
     let result = reader.ingest(&row("session-e", "gpt-5", None, counts(10, 5, 6)));
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]

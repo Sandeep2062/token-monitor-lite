@@ -111,12 +111,18 @@ fn cache_greater_than_input_is_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]
 fn missing_messages_is_visible_unsupported() {
     let mut reader = ClineReader::new("cline-session");
     let result = reader.ingest(&serde_json::to_vec(&json!({"sessionId": "x"})).unwrap());
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }

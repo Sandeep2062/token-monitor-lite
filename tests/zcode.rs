@@ -200,7 +200,7 @@ fn a_missing_timestamp_without_a_fallback_is_visible_unsupported() {
         r#"{"role":"assistant","sessionId":"s","usage":{"input_tokens":10,"output_tokens":5}}"#,
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("ZCode line timestamp"));
+    assert_eq!(error, ReaderError::Declined("ZCode line timestamp"));
 }
 
 #[test]
@@ -336,7 +336,7 @@ fn an_overlap_larger_than_the_input_is_rejected_not_saturated() {
     // inside the value means the row is not interpretable.
     assert_eq!(
         normalize_row(&input).unwrap_err(),
-        ReaderError::Unsupported("ZCode cache overlap")
+        ReaderError::Declined("ZCode cache overlap")
     );
 }
 

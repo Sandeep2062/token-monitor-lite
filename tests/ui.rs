@@ -48,6 +48,8 @@ fn health(
         format,
         status,
         source_generation,
+        declined_records: 0,
+        truncated_head: false,
     }
 }
 
@@ -962,4 +964,45 @@ fn cost_columns_use_the_active_catalog_for_home_models_and_sessions() {
     assert_eq!(presentation.models.rows[0].cost, "$4.50");
     assert_eq!(presentation.sessions[0].cost, "$4.50");
     assert_eq!(presentation.recent_sessions[0].cost, "$4.50");
+}
+
+#[test]
+fn a_healthy_source_reports_declined_records_and_a_windowed_scan() {
+    // A source can be healthy and current while its totals are short by the
+    // records the reader declined, or while it covers only the retained tail of
+    // an unbounded log. Both are stated on the row rather than hidden behind a
+    // plain "current snapshot".
+    let mut declined = health(
+        "/one.jsonl",
+        SourceFormat::ClaudeCli,
+        SourceHealthStatus::Healthy,
+        Some(4),
+    );
+    declined.declined_records = 3;
+    let mut windowed = health(
+        "/two.log",
+        SourceFormat::LmstudioLog,
+        SourceHealthStatus::Healthy,
+        Some(5),
+    );
+    windowed.truncated_head = true;
+
+    let mut controller = UiController::new();
+    controller.accept_snapshot(snapshot(
+        1,
+        TokenCounts::default(),
+        Vec::new(),
+        vec![declined, windowed],
+        WatchStatus::Available,
+    ));
+    let rows = controller.presentation().sources;
+    assert_eq!(rows[0].severity, SourceSeverity::Healthy);
+    assert!(rows[0].detail.contains("3 record(s) declined"));
+    assert!(!rows[0].detail.contains("current snapshot"));
+    assert_eq!(rows[1].severity, SourceSeverity::Healthy);
+    assert!(
+        rows[1]
+            .detail
+            .contains("older records outside the scan window")
+    );
 }

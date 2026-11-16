@@ -1205,7 +1205,26 @@ fn source_rows(snapshot: &MonitorSnapshot) -> Vec<SourceHealthRow> {
                         "No successful observation · refresh manually".to_owned()
                     }
                     (SourceSeverity::Healthy, Some(generation)) => {
-                        format!("Generation {generation} · current snapshot")
+                        let mut detail = format!("Generation {generation}");
+                        if source.declined_records > 0 {
+                            // The totals are published and current, but they are
+                            // short by the records the reader declined. Saying so
+                            // is the difference between a monitor and a monitor
+                            // you can trust.
+                            detail.push_str(&format!(
+                                " · {} record(s) declined",
+                                source.declined_records
+                            ));
+                        }
+                        if source.truncated_head {
+                            // The scan covered the retained tail of an unbounded
+                            // log, so older records are deliberately absent.
+                            detail.push_str(" · older records outside the scan window");
+                        }
+                        if source.declined_records == 0 && !source.truncated_head {
+                            detail.push_str(" · current snapshot");
+                        }
+                        detail
                     }
                     _ => "No successful observation".to_owned(),
                 },

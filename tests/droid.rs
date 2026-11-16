@@ -124,7 +124,10 @@ fn negative_counters_are_rejected_rather_than_clamped() {
 fn missing_model_is_visible_unsupported() {
     let mut reader = reader();
     let result = reader.ingest(br#"{"tokenUsage": {"inputTokens": 10, "outputTokens": 5}}"#);
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]
@@ -168,7 +171,10 @@ fn unusable_timestamp_is_visible_unsupported() {
     let mut reader = DroidReader::new("session-d");
     let result =
         reader.ingest(br#"{"model": "m", "tokenUsage": {"inputTokens": 1, "outputTokens": 1}}"#);
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]

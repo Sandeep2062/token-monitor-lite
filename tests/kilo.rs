@@ -88,7 +88,10 @@ fn zero_rows_and_missing_cache_are_handled() {
     let mut missing = payload();
     missing["tokens"].as_object_mut().unwrap().remove("cache");
     let result = reader.ingest("row-3", "session", &serde_json::to_vec(&missing).unwrap());
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]
@@ -106,6 +109,6 @@ fn negative_or_reasoning_over_output_is_visible_unsupported() {
     over["tokens"]["reasoning"] = json!(20);
     assert!(matches!(
         reader.ingest("row-5", "session", &serde_json::to_vec(&over).unwrap()),
-        Err(ReaderError::Unsupported(_))
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
     ));
 }

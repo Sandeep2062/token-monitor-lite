@@ -36,12 +36,12 @@ impl ZedReader {
         let model = thread
             .get("model")
             .and_then(Value::as_object)
-            .ok_or(ReaderError::Unsupported("Zed thread model"))?;
+            .ok_or(ReaderError::Declined("Zed thread model"))?;
         let provider = model
             .get("provider")
             .and_then(Value::as_str)
             .map(str::trim)
-            .ok_or(ReaderError::Unsupported("Zed thread provider"))?;
+            .ok_or(ReaderError::Declined("Zed thread provider"))?;
         if !provider.eq_ignore_ascii_case(HOSTED_PROVIDER) {
             return Ok(());
         }
@@ -50,7 +50,7 @@ impl ZedReader {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|model| !model.is_empty())
-            .ok_or(ReaderError::Unsupported("Zed thread model id"))?;
+            .ok_or(ReaderError::Declined("Zed thread model id"))?;
         if !super::tencent_buddy::valid_identity(thread_id) {
             return Err(ReaderError::InvalidRecord);
         }

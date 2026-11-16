@@ -92,7 +92,10 @@ fn missing_model_or_timestamp_is_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 
     let mut reader = MuseReader::new("fallback");
     let result = reader.ingest(

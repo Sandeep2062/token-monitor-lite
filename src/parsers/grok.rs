@@ -113,7 +113,7 @@ impl GrokReader {
 
         if is_user_message_chunk(&value) {
             self.flush_active_turn();
-            let timestamp_ms = timestamp_ms.ok_or(ReaderError::Unsupported("Grok timestamp"))?;
+            let timestamp_ms = timestamp_ms.ok_or(ReaderError::Declined("Grok timestamp"))?;
             self.active_turn = Some(ActiveTurn {
                 baseline_total: self.last_total.unwrap_or(0),
                 max_total: self.last_total.unwrap_or(0),
@@ -125,8 +125,7 @@ impl GrokReader {
         }
 
         if let Some(usage) = completed_turn_usage(&value)?.filter(CompletedUsage::has_tokens) {
-            let timestamp_ms =
-                timestamp_ms.ok_or(ReaderError::Unsupported("Grok usage timestamp"))?;
+            let timestamp_ms = timestamp_ms.ok_or(ReaderError::Declined("Grok usage timestamp"))?;
             let model = self
                 .resolved_model(&value)
                 .unwrap_or_else(|| UNKNOWN_MODEL.to_owned());
@@ -160,7 +159,7 @@ impl GrokReader {
                 }
                 if total > previous {
                     let timestamp_ms =
-                        timestamp_ms.ok_or(ReaderError::Unsupported("Grok counter timestamp"))?;
+                        timestamp_ms.ok_or(ReaderError::Declined("Grok counter timestamp"))?;
                     if self.active_turn.is_none() {
                         self.active_turn = Some(ActiveTurn {
                             baseline_total: previous,
@@ -309,6 +308,14 @@ impl GrokReader {
             }
         }
         responses
+    }
+
+    /// A declined record can be the user message that opened a turn. The open
+    /// turn is flushed rather than dropped: its observed totals are real, and
+    /// abandoning it would leave the next turn's baseline pointing at a total
+    /// that was never emitted.
+    pub fn on_declined(&mut self) {
+        self.flush_active_turn();
     }
 
     pub fn has_supported_usage(&self) -> bool {

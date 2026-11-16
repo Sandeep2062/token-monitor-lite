@@ -95,7 +95,7 @@ fn a_bucket_sum_that_disagrees_with_the_recorded_total_is_rejected() {
     });
     let fixture = Fixture::new(&broken, None);
     let error = reader.ingest(fixture.row()).unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("CatPaw token sum"));
+    assert_eq!(error, ReaderError::Declined("CatPaw token sum"));
 }
 
 #[test]

@@ -93,7 +93,7 @@ impl KimiReader {
             .map(|seconds| (seconds * 1000.0) as i64)
             .filter(|millis| *millis > 0)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Kimi wire timestamp"))?;
+            .ok_or(ReaderError::Declined("Kimi wire timestamp"))?;
 
         let message_id = payload
             .get("message_id")

@@ -181,7 +181,7 @@ impl CursorReader {
             .as_ref()
             .is_some_and(|key| key.len() > MAX_IDENTITY_BYTES)
         {
-            return Err(ReaderError::Unsupported("Cursor event identity"));
+            return Err(ReaderError::Declined("Cursor event identity"));
         }
         let identity_bytes = dedup_key.as_ref().map_or(0, String::len);
         self.retained_identity_bytes = self

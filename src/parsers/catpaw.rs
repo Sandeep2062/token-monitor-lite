@@ -144,7 +144,7 @@ impl CatpawReader {
         let session = format!("catpaw:{}:{}", row.namespace, row.conversation_id);
         let identity = format!("{session}:{}", row.message_id);
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("CatPaw message identity"));
+            return Err(ReaderError::Declined("CatPaw message identity"));
         }
         let usage = ResponseUsage {
             key: SessionKey::new(CLIENT, &session),
@@ -217,7 +217,7 @@ fn tokens(usage: &Value, recorded_total: Option<i64>) -> Result<TokenCounts, Rea
     if !anchored {
         // An unanchored sum means the buckets and the stored total disagree, so
         // the row cannot be interpreted.
-        return Err(ReaderError::Unsupported("CatPaw token sum"));
+        return Err(ReaderError::Declined("CatPaw token sum"));
     }
     Ok(tokens)
 }

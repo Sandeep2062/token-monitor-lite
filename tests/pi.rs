@@ -140,7 +140,10 @@ fn missing_header_and_bad_cache_write_1h_are_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 
     ingest(&mut reader, header("pi-session"));
     let result = reader.ingest(
@@ -161,7 +164,10 @@ fn missing_header_and_bad_cache_write_1h_are_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]

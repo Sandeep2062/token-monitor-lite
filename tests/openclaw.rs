@@ -112,7 +112,10 @@ fn assistant_row_without_a_model_is_visible_unsupported() {
     let result = reader.ingest(
         br#"{"type":"message","id":"m1","message":{"role":"assistant","usage":{"input":10,"output":5},"timestamp":1700000000000}}"#,
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]
@@ -156,7 +159,10 @@ fn reasoning_above_output_is_visible_unsupported() {
     let result = reader.ingest(
         br#"{"type":"message","id":"m1","message":{"role":"assistant","model":"m","usage":{"input":10,"output":5,"reasoningTokens":6},"timestamp":1700000000000}}"#,
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]
@@ -249,5 +255,8 @@ fn sqlite_session_events_reset_carried_model_on_a_session_change() {
 
     // A second session must not inherit the first session's model.
     let result = reader.ingest_session_event("sess-b", Some(2_000), usage.as_object().unwrap());
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }

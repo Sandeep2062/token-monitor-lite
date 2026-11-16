@@ -162,7 +162,7 @@ impl QodercnReader {
             row.source
         );
         if session.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Qoder CN session identity"));
+            return Err(ReaderError::Declined("Qoder CN session identity"));
         }
         let message = row
             .message_id
@@ -170,7 +170,7 @@ impl QodercnReader {
             .unwrap_or(session_tail);
         let identity = format!("{session}:{message}");
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Qoder CN message identity"));
+            return Err(ReaderError::Declined("Qoder CN message identity"));
         }
         // A real path is kept as the workspace key; a bare project name is kept
         // as the label. Either way an absolute path must not reach the store.

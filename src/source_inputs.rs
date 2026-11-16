@@ -35,7 +35,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +47,12 @@ pub const MAX_ZSTD_WINDOW_BYTES: u64 = 1 << 26;
 pub const MAX_ARCHIVE_ROWS: usize = 10_000;
 pub const MAX_ARCHIVE_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_LOCAL_USAGE_ROWS: usize = 16_384;
+/// How much of an unbounded append-only log is scanned per revision.
+///
+/// Matches the pinned LM Studio reader's streaming window, so the two agree on
+/// which records are in scope. Larger than any realistic current-period log and
+/// well inside the 16 MiB record cap.
+pub const LMSTUDIO_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
 const SQLITE_PAGE_ROWS: i64 = 1_024;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_SQLITE_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
@@ -439,6 +445,7 @@ impl DshInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -682,6 +689,9 @@ pub struct InputBatch {
     pub decoded_bytes_read: usize,
     pub reset: bool,
     pub incomplete_tail: bool,
+    /// The batch starts partway into the source because a tail window was
+    /// applied, so the oldest records are deliberately not present.
+    pub truncated_head: bool,
     pub more_available: bool,
 }
 
@@ -694,6 +704,7 @@ impl fmt::Debug for InputBatch {
             .field("decoded_bytes_read", &self.decoded_bytes_read)
             .field("reset", &self.reset)
             .field("incomplete_tail", &self.incomplete_tail)
+            .field("truncated_head", &self.truncated_head)
             .field("more_available", &self.more_available)
             .finish()
     }
@@ -715,6 +726,15 @@ pub struct GeminiInput {
 pub struct DocumentInput {
     path: PathBuf,
     cursor: DocumentCursor,
+    /// Read only the last `window` bytes of a document instead of all of it.
+    ///
+    /// Only for append-only logs that grow without bound. A whole-document read
+    /// of such a log eventually exceeds the record cap, and a cap breach is a
+    /// visible source failure that stops the source refreshing until the log is
+    /// rotated — the exact silent-stall the pinned LM Studio reader was written
+    /// to avoid. A tail window keeps the source current at the cost of the
+    /// oldest records, which are already outside any current period.
+    window: Option<u64>,
 }
 
 pub type CursorInput = DocumentInput;
@@ -940,6 +960,7 @@ impl SourceInput {
         Self::Cursor(CursorInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -947,6 +968,7 @@ impl SourceInput {
         Self::Cline(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -954,6 +976,7 @@ impl SourceInput {
         Self::Amp(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -961,6 +984,7 @@ impl SourceInput {
         Self::Droid(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -968,6 +992,7 @@ impl SourceInput {
         Self::Kiro(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -975,6 +1000,7 @@ impl SourceInput {
         Self::Jcode(Box::new(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         }))
     }
 
@@ -982,6 +1008,7 @@ impl SourceInput {
         Self::Vibe(Box::new(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         }))
     }
 
@@ -989,6 +1016,7 @@ impl SourceInput {
         Self::Fx(Box::new(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         }))
     }
 
@@ -996,6 +1024,12 @@ impl SourceInput {
         Self::Lmstudio(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            // `server-logs/` grows without bound. A whole-document read would
+            // eventually breach the record cap, and a cap breach is a visible
+            // source failure that freezes the source until the log is rotated.
+            // A tail window keeps it refreshing; the oldest records fall out of
+            // the window, which is where the pinned reader's eviction lands too.
+            window: Some(LMSTUDIO_WINDOW_BYTES),
         })
     }
 
@@ -1003,6 +1037,7 @@ impl SourceInput {
         Self::CodeBuddyLog(DocumentInput {
             path,
             cursor: DocumentCursor::default(),
+            window: None,
         })
     }
 
@@ -1251,6 +1286,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1262,6 +1298,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1273,6 +1310,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1289,6 +1327,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1300,6 +1339,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1311,6 +1351,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1322,6 +1363,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1334,6 +1376,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1351,6 +1394,7 @@ impl SourceInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
@@ -1413,10 +1457,11 @@ impl GeminiInput {
                     decoded_bytes_read: batch.bytes_read,
                     reset: batch.reset,
                     incomplete_tail: batch.incomplete_tail,
+                    truncated_head: false,
                     more_available: batch.more_available,
                 })
             }
-            GeminiInputKind::Document(cursor) => cursor.read_batch(&self.path),
+            GeminiInputKind::Document(cursor) => cursor.read_batch(&self.path, None),
         }
     }
 }
@@ -1432,12 +1477,12 @@ impl DocumentInput {
     }
 
     fn read_batch(&mut self) -> io::Result<InputBatch> {
-        self.cursor.read_batch(&self.path)
+        self.cursor.read_batch(&self.path, self.window)
     }
 }
 
 impl DocumentCursor {
-    fn read_batch(&mut self, path: &Path) -> io::Result<InputBatch> {
+    fn read_batch(&mut self, path: &Path, window: Option<u64>) -> io::Result<InputBatch> {
         let mut file = File::open(path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() {
@@ -1451,25 +1496,46 @@ impl DocumentCursor {
                 decoded_bytes_read: 0,
                 reset: false,
                 incomplete_tail: false,
+                truncated_head: false,
                 more_available: false,
             });
         }
         let length = metadata.len();
-        if length > MAX_RECORD_BYTES as u64 {
-            return Err(invalid("Gemini JSON document exceeds 16 MiB limit"));
+        // A tail window keeps an append-only log refreshing past the record
+        // cap. The window is aligned forward to the next newline so the scan
+        // never starts mid-record, and the truncation is reported rather than
+        // hidden: the totals then cover the retained window, not all history.
+        let start = match window {
+            Some(window) if length > window => {
+                file.seek(SeekFrom::Start(length - window))?;
+                let mut probe = Vec::new();
+                file.by_ref().take(window).read_to_end(&mut probe)?;
+                let skip = probe
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(probe.len(), |index| index + 1);
+                length - window + skip as u64
+            }
+            _ => 0,
+        };
+        let available = length - start;
+        if available > MAX_RECORD_BYTES as u64 {
+            return Err(invalid("JSON document exceeds 16 MiB limit"));
         }
-        let mut bytes = Vec::with_capacity(length as usize);
+        let mut bytes = Vec::with_capacity(available as usize);
+        file.seek(SeekFrom::Start(start))?;
         file.read_to_end(&mut bytes)?;
-        if bytes.len() as u64 != length || current_stamp(path)? != stamp {
-            return Err(invalid("Gemini JSON document changed during read"));
+        if bytes.len() as u64 != available || current_stamp(path)? != stamp {
+            return Err(invalid("JSON document changed during read"));
         }
         self.stamp = Some(stamp);
         Ok(InputBatch {
             records: vec![bytes],
-            physical_bytes_read: length as usize,
-            decoded_bytes_read: length as usize,
+            physical_bytes_read: available as usize,
+            decoded_bytes_read: available as usize,
             reset: true,
             incomplete_tail: false,
+            truncated_head: start > 0,
             more_available: false,
         })
     }
@@ -1530,6 +1596,7 @@ impl CompressedJsonlInput {
                 .unwrap_or(usize::MAX),
             reset,
             incomplete_tail: framed.incomplete_tail,
+            truncated_head: false,
             more_available,
         })
     }
@@ -2907,6 +2974,7 @@ fn map_catpaw_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3070,6 +3138,7 @@ fn map_devin_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3205,6 +3274,7 @@ fn map_unsloth_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3381,6 +3451,7 @@ fn map_cherrystudio_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3523,6 +3594,7 @@ fn map_qodercn_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3533,6 +3605,7 @@ fn map_zcode_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Overflow => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
     }
 }
@@ -3546,6 +3619,7 @@ fn map_mimo_error(error: ReaderError) -> SqliteSourceError {
         ReaderError::Capacity(_) => SqliteSourceError::Capacity,
         ReaderError::InvalidRecord
         | ReaderError::InvalidTimestamp
+        | ReaderError::Declined(_)
         | ReaderError::Unsupported(_)
         | ReaderError::Overflow => SqliteSourceError::Invalid,
     }
@@ -3790,7 +3864,9 @@ fn map_opencode_error(error: ReaderError) -> SqliteSourceError {
     match error {
         ReaderError::Unsupported(_) => SqliteSourceError::Unsupported,
         ReaderError::Capacity(_) | ReaderError::Overflow => SqliteSourceError::Capacity,
-        ReaderError::InvalidRecord | ReaderError::InvalidTimestamp => SqliteSourceError::Invalid,
+        ReaderError::InvalidRecord | ReaderError::InvalidTimestamp | ReaderError::Declined(_) => {
+            SqliteSourceError::Invalid
+        }
     }
 }
 

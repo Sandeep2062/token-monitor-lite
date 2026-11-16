@@ -124,7 +124,7 @@ impl AmpReader {
         let timestamp = timestamp_value(object.get("timestamp"))?
             .or_else(|| (created_ms > 0).then_some(created_ms))
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Amp ledger timestamp"))?;
+            .ok_or(ReaderError::Declined("Amp ledger timestamp"))?;
         Ok(Some(AmpRecord {
             usage: ResponseUsage {
                 key: SessionKey::new("amp", session),
@@ -177,7 +177,7 @@ impl AmpReader {
                     .then_some(created_ms.saturating_add(message_id.saturating_mul(1_000)))
             })
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Amp message timestamp"))?;
+            .ok_or(ReaderError::Declined("Amp message timestamp"))?;
         let identity = if message_id > 0 {
             format!("amp:{session}:message:{message_id}")
         } else {
@@ -208,7 +208,7 @@ impl AmpReader {
         }
         let identity_bytes = usage.dedup_key.as_ref().map_or(0, String::len);
         if identity_bytes > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Amp message identity"));
+            return Err(ReaderError::Declined("Amp message identity"));
         }
         self.retained_identity_bytes = self
             .retained_identity_bytes

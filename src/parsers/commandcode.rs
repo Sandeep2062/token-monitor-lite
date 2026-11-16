@@ -186,7 +186,7 @@ impl CommandCodeReader {
             .and_then(Value::as_str)
             .and_then(parse_timestamp_str)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Command Code timestamp"))?;
+            .ok_or(ReaderError::Declined("Command Code timestamp"))?;
 
         let raw_model = self
             .model_id

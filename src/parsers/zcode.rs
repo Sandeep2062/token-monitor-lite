@@ -104,7 +104,7 @@ impl ZcodeReader {
             Some(timestamp) => parse_rfc3339_ms(timestamp)?,
             None => self
                 .fallback_timestamp_ms
-                .ok_or(ReaderError::Unsupported("ZCode line timestamp"))?,
+                .ok_or(ReaderError::Declined("ZCode line timestamp"))?,
         };
         let model = self
             .model
@@ -223,7 +223,7 @@ pub fn normalize_row(row: &ZcodeUsageRow<'_>) -> Result<Option<ResponseUsage>, R
     };
     let identity = format!("zcode-sqlite:{}", row.id);
     if identity.len() > MAX_IDENTITY_BYTES {
-        return Err(ReaderError::Unsupported("ZCode message identity"));
+        return Err(ReaderError::Declined("ZCode message identity"));
     }
     Ok(Some(ResponseUsage {
         key: SessionKey::new(CLIENT, session),
@@ -371,7 +371,7 @@ fn cache_overlap(cache_read: u64, cache_write: u64) -> Result<u64, ReaderError> 
 fn subtract_overlap(value: u64, overlap: u64) -> Result<u64, ReaderError> {
     value
         .checked_sub(overlap)
-        .ok_or(ReaderError::Unsupported("ZCode cache overlap"))
+        .ok_or(ReaderError::Declined("ZCode cache overlap"))
 }
 
 fn tokens_total(tokens: &TokenCounts) -> u64 {

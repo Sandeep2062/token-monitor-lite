@@ -120,7 +120,7 @@ fn explicit_tool_result_usage_uses_transcript_identity_and_prior_ownership() {
 }
 
 #[test]
-fn tool_result_without_explicit_tokens_is_ignored_and_synthetic_carrier_is_unsupported() {
+fn tool_result_without_explicit_tokens_is_ignored_and_synthetic_carrier_is_declined() {
     let mut reader = ClaudeReader::new("session-a");
     reader.ingest(br#"{"type":"assistant","timestamp":"2026-11-09T10:00:00Z","message":{"id":"msg","model":"claude-main","usage":{"input_tokens":10}}}"#).unwrap();
     reader.ingest(br#"{"type":"user","timestamp":"2026-11-09T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","text":"no explicit tokens"}]}}"#).unwrap();
@@ -131,9 +131,11 @@ fn tool_result_without_explicit_tokens_is_ignored_and_synthetic_carrier_is_unsup
     let error = reader
         .ingest(br#"{"type":"tool_result","timestamp":"2026-11-09T10:00:03Z","input_tokens":4}"#)
         .unwrap_err();
+    // A record-level decline, not a source-level rejection: the rest of the
+    // transcript stays publishable and the driver counts the skipped record.
     assert_eq!(
         error,
-        token_monitor_lite::parsers::ReaderError::Unsupported("model-less tool result")
+        token_monitor_lite::parsers::ReaderError::Declined("model-less tool result")
     );
     assert_eq!(reader.snapshot(), before);
 }

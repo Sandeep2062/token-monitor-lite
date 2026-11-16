@@ -102,7 +102,7 @@ pub fn normalize_record(record: &MimoRecord<'_>) -> Result<Option<ResponseUsage>
     match object.get("role") {
         None | Some(Value::Null) => {}
         Some(role) if role.as_str() == Some("assistant") => {}
-        Some(_) => return Err(ReaderError::Unsupported("MiMo assistant role")),
+        Some(_) => return Err(ReaderError::Declined("MiMo assistant role")),
     }
     let tokens = match object.get("tokens") {
         None | Some(Value::Null) => return Ok(None),
@@ -116,7 +116,7 @@ pub fn normalize_record(record: &MimoRecord<'_>) -> Result<Option<ResponseUsage>
     let reasoning = optional_u64(tokens, "reasoning")?;
     let output = inclusive_output
         .checked_sub(reasoning)
-        .ok_or(ReaderError::Unsupported("MiMo reasoning/output"))?;
+        .ok_or(ReaderError::Declined("MiMo reasoning/output"))?;
     // Unlike OpenCode, a missing cache block is zero rather than a rejection.
     let (cache_read, cache_write) = match tokens.get("cache") {
         None | Some(Value::Null) => (0, 0),
@@ -130,7 +130,7 @@ pub fn normalize_record(record: &MimoRecord<'_>) -> Result<Option<ResponseUsage>
         record.database, record.session_id, record.message_id
     );
     if identity.len() > MAX_IDENTITY_BYTES {
-        return Err(ReaderError::Unsupported("MiMo message identity"));
+        return Err(ReaderError::Declined("MiMo message identity"));
     }
     Ok(Some(ResponseUsage {
         key: SessionKey::new(CLIENT, record.session_id),
@@ -171,7 +171,7 @@ fn resolve_model(object: &Map<String, Value>) -> Result<&str, ReaderError> {
         .and_then(|model| model.get("id"))
         .and_then(Value::as_str)
         .filter(|value| valid_identity(value))
-        .ok_or(ReaderError::Unsupported("MiMo message model"))
+        .ok_or(ReaderError::Declined("MiMo message model"))
 }
 
 fn resolve_provider(object: &Map<String, Value>) -> Result<Option<String>, ReaderError> {
@@ -228,7 +228,7 @@ fn resolve_timestamp(
     }
     fallback
         .filter(|timestamp| *timestamp >= 0)
-        .ok_or(ReaderError::Unsupported("MiMo message timestamp"))
+        .ok_or(ReaderError::Declined("MiMo message timestamp"))
 }
 
 /// MiMo may write epoch seconds where OpenCode writes milliseconds, so a value

@@ -92,7 +92,7 @@ impl GeminiReader {
         }
         let timestamp = event_timestamp(object)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Gemini message timestamp"))?;
+            .ok_or(ReaderError::Declined("Gemini message timestamp"))?;
         let usage = normalize_session_tokens(tokens)?;
         let id = object.get("id").and_then(Value::as_str);
         self.push(session, model, timestamp, usage, id)
@@ -129,11 +129,11 @@ impl GeminiReader {
             let model = self
                 .current_model
                 .clone()
-                .ok_or(ReaderError::Unsupported("Gemini event model"))?;
+                .ok_or(ReaderError::Declined("Gemini event model"))?;
             let tokens = tokens_value.as_object().ok_or(ReaderError::InvalidRecord)?;
             let timestamp = event_timestamp(object)
                 .or(self.fallback_timestamp_ms)
-                .ok_or(ReaderError::Unsupported("Gemini event timestamp"))?;
+                .ok_or(ReaderError::Declined("Gemini event timestamp"))?;
             let usage = normalize_direct_tokens(tokens)?;
             let id = object.get("id").and_then(Value::as_str);
             let session = self.session.clone();
@@ -147,7 +147,7 @@ impl GeminiReader {
         };
         let timestamp = event_timestamp(object)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Gemini stats timestamp"))?;
+            .ok_or(ReaderError::Declined("Gemini stats timestamp"))?;
         let hint = object
             .get("model")
             .and_then(Value::as_str)
@@ -180,7 +180,7 @@ impl GeminiReader {
         }
         let model = model_hint
             .filter(|value| valid_identity(value))
-            .ok_or(ReaderError::Unsupported("Gemini stats model"))?;
+            .ok_or(ReaderError::Declined("Gemini stats model"))?;
         let tokens = stats.get("tokens").unwrap_or(stats);
         let tokens = tokens.as_object().ok_or(ReaderError::InvalidRecord)?;
         let usage = normalize_stats_tokens(stats, tokens)?;
@@ -208,7 +208,7 @@ impl GeminiReader {
             .as_ref()
             .is_some_and(|key| key.len() > MAX_IDENTITY_BYTES)
         {
-            return Err(ReaderError::Unsupported("Gemini message identity"));
+            return Err(ReaderError::Declined("Gemini message identity"));
         }
         let identity_bytes = dedup_key.as_ref().map_or(0, String::len);
         self.retained_identity_bytes = self

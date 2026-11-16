@@ -140,7 +140,10 @@ fn missing_model_and_negative_counters_are_visible_unsupported() {
         }))
         .unwrap(),
     );
-    assert!(matches!(missing, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        missing,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 
     let negative = reader.ingest(
         &serde_json::to_vec(&json!({

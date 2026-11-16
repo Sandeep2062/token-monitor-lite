@@ -123,11 +123,11 @@ impl VibeReader {
 
         let model = resolve_model(meta);
         if model.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Vibe model identity"));
+            return Err(ReaderError::Declined("Vibe model identity"));
         }
         let dedup_key = format!("vibe:{}", self.key.session);
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Vibe identity"));
+            return Err(ReaderError::Declined("Vibe identity"));
         }
         let workspace_label = origin_directory(meta).and_then(workspace_label);
         let title = meta

@@ -91,7 +91,7 @@ pub fn normalize_record(record: &OpenCodeRecord<'_>) -> Result<Option<ResponseUs
     match object.get("role") {
         None | Some(Value::Null) => {}
         Some(role) if role.as_str() == Some("assistant") => {}
-        Some(_) => return Err(ReaderError::Unsupported("OpenCode assistant role")),
+        Some(_) => return Err(ReaderError::Declined("OpenCode assistant role")),
     }
     let tokens = match object.get("tokens") {
         None | Some(Value::Null) => return Ok(None),
@@ -105,22 +105,22 @@ pub fn normalize_record(record: &OpenCodeRecord<'_>) -> Result<Option<ResponseUs
     let reasoning = optional_u64(tokens, "reasoning")?;
     let output = inclusive_output
         .checked_sub(reasoning)
-        .ok_or(ReaderError::Unsupported("OpenCode reasoning/output"))?;
+        .ok_or(ReaderError::Declined("OpenCode reasoning/output"))?;
     let cache = match tokens.get("cache") {
         Some(Value::Object(cache)) => cache,
         Some(Value::Null) | None => {
-            return Err(ReaderError::Unsupported("OpenCode token cache"));
+            return Err(ReaderError::Declined("OpenCode token cache"));
         }
         Some(_) => return Err(ReaderError::InvalidRecord),
     };
     let cache_read = required_u64(cache, "read")
-        .map_err(|_| ReaderError::Unsupported("OpenCode cache read/write"))?;
+        .map_err(|_| ReaderError::Declined("OpenCode cache read/write"))?;
     let cache_write = required_u64(cache, "write")
-        .map_err(|_| ReaderError::Unsupported("OpenCode cache read/write"))?;
+        .map_err(|_| ReaderError::Declined("OpenCode cache read/write"))?;
     let timestamp_ms = resolve_timestamp(object, record.fallback_timestamp_ms)?;
     let identity = format!("opencode:{}:{}", record.session_id, record.message_id);
     if identity.len() > MAX_IDENTITY_BYTES {
-        return Err(ReaderError::Unsupported("OpenCode message identity"));
+        return Err(ReaderError::Declined("OpenCode message identity"));
     }
     Ok(Some(ResponseUsage {
         key: SessionKey::new("opencode", record.session_id),
@@ -161,7 +161,7 @@ fn resolve_model(object: &Map<String, Value>) -> Result<&str, ReaderError> {
         .and_then(|model| model.get("id"))
         .and_then(Value::as_str)
         .filter(|value| valid_identity(value))
-        .ok_or(ReaderError::Unsupported("OpenCode message model"))
+        .ok_or(ReaderError::Declined("OpenCode message model"))
 }
 
 fn resolve_provider(object: &Map<String, Value>) -> Result<Option<String>, ReaderError> {
@@ -194,7 +194,7 @@ fn resolve_timestamp(
     }
     fallback
         .filter(|timestamp| *timestamp >= 0)
-        .ok_or(ReaderError::Unsupported("OpenCode message timestamp"))
+        .ok_or(ReaderError::Declined("OpenCode message timestamp"))
 }
 
 fn number_to_ms(value: &Value) -> Result<i64, ReaderError> {

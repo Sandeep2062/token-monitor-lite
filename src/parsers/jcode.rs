@@ -135,7 +135,7 @@ impl JcodeReader {
                 .unwrap_or_else(|| format!("snapshot:{ordinal}"));
             let dedup_key = format!("jcode:{}:{message_id}", self.key.session);
             if dedup_key.len() > MAX_IDENTITY_BYTES {
-                return Err(ReaderError::Unsupported("Jcode identity"));
+                return Err(ReaderError::Declined("Jcode identity"));
             }
 
             let explicit_timestamp = message

@@ -53,7 +53,7 @@ impl MuseReader {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|model| !model.is_empty())
-            .ok_or(ReaderError::Unsupported("Muse event model"))?;
+            .ok_or(ReaderError::Declined("Muse event model"))?;
         let reported_input = counter(usage, "input_tokens")?;
         let reported_output = counter(usage, "output_tokens")?;
         let cache_read = counter(usage, "cache_read_tokens")?

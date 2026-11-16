@@ -384,7 +384,7 @@ fn a_seeded_header_without_a_tagged_cut_is_a_visible_failure() {
     // the whole copied prefix is worse than refusing the transcript.
     assert_eq!(
         reader.finish(),
-        Err(ReaderError::Unsupported("DSH seeded fork boundary"))
+        Err(ReaderError::Declined("DSH seeded fork boundary"))
     );
 }
 

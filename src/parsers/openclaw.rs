@@ -192,7 +192,7 @@ impl OpenClawReader {
             .and_then(non_empty);
         let model = message_model
             .or(self.current_model.as_deref())
-            .ok_or(ReaderError::Unsupported("OpenClaw assistant model"))?
+            .ok_or(ReaderError::Declined("OpenClaw assistant model"))?
             .to_owned();
         if !valid_identity(&model) {
             return Err(ReaderError::InvalidRecord);
@@ -217,7 +217,7 @@ impl OpenClawReader {
         let timestamp = message_timestamp
             .or(row_created_at_ms)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("OpenClaw assistant timestamp"))?;
+            .ok_or(ReaderError::Declined("OpenClaw assistant timestamp"))?;
         let tokens = self.counts(usage)?;
         if tokens.input == 0
             && tokens.output == 0
@@ -241,7 +241,7 @@ impl OpenClawReader {
             });
         if let Some(identity) = identity.as_ref() {
             if identity.len() > MAX_IDENTITY_BYTES {
-                return Err(ReaderError::Unsupported("OpenClaw event identity"));
+                return Err(ReaderError::Declined("OpenClaw event identity"));
             }
             self.retained_identity_bytes = self
                 .retained_identity_bytes

@@ -189,7 +189,7 @@ fn a_missing_timestamp_without_a_fallback_is_visible_unsupported() {
         &document(r#"{"input_token_count":5,"output_token_count":1}"#),
     )
     .unwrap_err();
-    assert_eq!(error, ReaderError::Unsupported("Kiro turn timestamp"));
+    assert_eq!(error, ReaderError::Declined("Kiro turn timestamp"));
 }
 
 #[test]

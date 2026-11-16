@@ -29,6 +29,22 @@ fn messages(log: &str) -> Vec<token_monitor_lite::parsers::ResponseUsage> {
     reader.snapshot()
 }
 
+/// The epoch milliseconds of a naive wall clock in the host's own zone.
+///
+/// A log header carries no zone designator, so the only defensible reading is
+/// the zone of the machine that wrote it. Tests must therefore compute the
+/// expected value in the local zone rather than hardcoding a UTC instant, or
+/// they only pass on a host that happens to run at UTC.
+fn local_wall_clock_ms(text: &str) -> i64 {
+    use chrono::TimeZone;
+    let naive = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").unwrap();
+    match chrono::Local.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(local) => local.timestamp_millis(),
+        chrono::LocalResult::Ambiguous(earlier, _) => earlier.timestamp_millis(),
+        chrono::LocalResult::None => naive.and_utc().timestamp_millis(),
+    }
+}
+
 #[test]
 fn a_pretty_printed_usage_object_is_found_across_lines() {
     // The whole point of the balanced scan: this object is not on one line.
@@ -160,17 +176,26 @@ fn a_model_in_the_response_body_is_not_taken_for_the_record_model() {
                \"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n";
     let found = messages(log);
     assert_eq!(found[0].model, "real-model");
-    // 2026-07-09 11:00:00 UTC, not the 2020 date inside the answer.
-    assert_eq!(found[0].timestamp_ms, 1_783_594_800_000);
+    // The real header's wall clock, not the 2020 date inside the answer.
+    assert_eq!(
+        found[0].timestamp_ms,
+        local_wall_clock_ms("2026-07-09 11:00:00")
+    );
 }
 
 #[test]
-fn the_log_header_is_the_timestamp_source_and_is_utc() {
-    // Documented deviation: naive headers are read as UTC here, while the
-    // pinned reader resolves them in the host's local zone.
+fn the_log_header_is_the_timestamp_source_and_is_read_in_the_host_zone() {
+    // A naive header is the writing host's wall clock, so it is resolved in
+    // the local zone. Reading it as UTC instead would shift every record by the
+    // host's offset and move records across midnight, corrupting day buckets.
     let log = record("chatcmpl-j", "m", 10, 5);
     let found = messages(&log);
-    assert_eq!(found[0].timestamp_ms, 1_783_594_800_000);
+    assert_eq!(
+        found[0].timestamp_ms,
+        local_wall_clock_ms("2026-07-09 11:00:00")
+    );
+    // Record ordering is unaffected by the zone either way.
+    assert!(found[0].timestamp_ms > 0);
 }
 
 #[test]

@@ -118,7 +118,7 @@ impl BuddyReader {
             .and_then(Value::as_i64)
             .filter(|timestamp| *timestamp >= 0)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Tencent Buddy record timestamp"))?;
+            .ok_or(ReaderError::Declined("Tencent Buddy record timestamp"))?;
 
         let record_id = provider_data
             .and_then(|provider| {
@@ -134,7 +134,7 @@ impl BuddyReader {
             None => format!("{}:{session}:line:{}", self.client, self.ordinal),
         };
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Tencent Buddy record identity"));
+            return Err(ReaderError::Declined("Tencent Buddy record identity"));
         }
         self.ordinal += 1;
 

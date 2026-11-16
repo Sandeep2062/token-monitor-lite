@@ -222,14 +222,14 @@ fn normalize_sdk_record(
                 .and_then(crate::parsers::timestamps::parse_timestamp_value)
         })
         .or(fallback_timestamp_ms)
-        .ok_or(ReaderError::Unsupported("Proma record timestamp"))?;
+        .ok_or(ReaderError::Declined("Proma record timestamp"))?;
     let identity = format!(
         "proma:sdk:{}:{}",
         text(body, "id").unwrap_or_default(),
         ordinal
     );
     if identity.len() > MAX_IDENTITY_BYTES {
-        return Err(ReaderError::Unsupported("Proma message identity"));
+        return Err(ReaderError::Declined("Proma message identity"));
     }
     Ok(Some(ResponseUsage {
         key: SessionKey::new(CLIENT, &session),
@@ -253,7 +253,7 @@ fn counter(usage: &Map<String, Value>, key: &str) -> Result<u64, ReaderError> {
         None | Some(Value::Null) => Ok(0),
         Some(value) => match value.as_i64() {
             Some(number) if number >= 0 => Ok(number as u64),
-            _ => Err(ReaderError::Unsupported("Proma counter")),
+            _ => Err(ReaderError::Declined("Proma counter")),
         },
     }
 }

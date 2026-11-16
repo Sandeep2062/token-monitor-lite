@@ -183,12 +183,12 @@ fn normalize_turn(
     let cache_write = positive_counter(turn, "cache_write_input_token_count")?;
     let timestamp_ms = match turn.get("end_timestamp") {
         Some(value) => crate::parsers::timestamps::parse_timestamp_value(value)
-            .ok_or(ReaderError::Unsupported("Kiro turn timestamp"))?,
-        None => fallback_timestamp_ms.ok_or(ReaderError::Unsupported("Kiro turn timestamp"))?,
+            .ok_or(ReaderError::Declined("Kiro turn timestamp"))?,
+        None => fallback_timestamp_ms.ok_or(ReaderError::Declined("Kiro turn timestamp"))?,
     };
     let identity = format!("{session}:{index}");
     if identity.len() > MAX_IDENTITY_BYTES {
-        return Err(ReaderError::Unsupported("Kiro turn identity"));
+        return Err(ReaderError::Declined("Kiro turn identity"));
     }
     Ok(Some(ResponseUsage {
         key: SessionKey::new(CLIENT, session),

@@ -60,9 +60,11 @@ impl SourceHealthStatus {
                 Self::SourceBusy
             }
             SourceError::Io(_) => Self::ReadFailed,
-            SourceError::Reader(ReaderError::InvalidRecord | ReaderError::InvalidTimestamp) => {
-                Self::DecodingFailed
-            }
+            SourceError::Reader(
+                ReaderError::InvalidRecord
+                | ReaderError::InvalidTimestamp
+                | ReaderError::Declined(_),
+            ) => Self::DecodingFailed,
             SourceError::Reader(ReaderError::Unsupported(_)) => Self::Unsupported,
             SourceError::Reader(ReaderError::Capacity(_)) => Self::CapacityExceeded,
             SourceError::Reader(ReaderError::Overflow) => Self::CanonicalizationFailed,
@@ -89,6 +91,13 @@ pub struct SourceHealth {
     pub format: SourceFormat,
     pub status: SourceHealthStatus,
     pub source_generation: Option<u64>,
+    /// Records the last published generation skipped because the reader could
+    /// not interpret them. Non-zero means the totals are complete for every
+    /// record that parsed and short by this many records that did not.
+    pub declined_records: u32,
+    /// The last published generation was read through a tail window, so the
+    /// totals cover the retained window rather than all history.
+    pub truncated_head: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -495,6 +504,8 @@ impl RuntimeSource {
             format: self.spec.format,
             status: self.status,
             source_generation: self.ledger_generation,
+            declined_records: self.reader.declined_records(),
+            truncated_head: self.reader.truncated_head(),
         }
     }
 }
@@ -840,6 +851,8 @@ impl WorkerState {
                         format: source.format,
                         status: SourceHealthStatus::Retained,
                         source_generation: Some(source.generation),
+                        declined_records: 0,
+                        truncated_head: false,
                     },
                 )
             })

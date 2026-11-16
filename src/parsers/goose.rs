@@ -77,14 +77,14 @@ impl GooseReader {
         }
         let summed = input.checked_add(output).ok_or(ReaderError::Overflow)?;
         if total != 0 && total != summed {
-            return Err(ReaderError::Unsupported("Goose unclassified remainder"));
+            return Err(ReaderError::Declined("Goose unclassified remainder"));
         }
         let timestamp = parse_created_at(row.created_at)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Unsupported("Goose session timestamp"))?;
+            .ok_or(ReaderError::Declined("Goose session timestamp"))?;
         let identity = format!("goose:{}", row.id);
         if identity.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Goose session identity"));
+            return Err(ReaderError::Declined("Goose session identity"));
         }
         self.retained_identity_bytes = self
             .retained_identity_bytes

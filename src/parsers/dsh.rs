@@ -257,7 +257,7 @@ impl DshReader {
             tokens.input, tokens.output, tokens.cache_read, tokens.cache_write, tokens.reasoning
         );
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("DSH identity"));
+            return Err(ReaderError::Declined("DSH identity"));
         }
         if !self.seen.insert(dedup_key.clone()) {
             return Ok(());
@@ -335,7 +335,7 @@ impl DshReader {
                 // A seeded session with no readable cut cannot distinguish
                 // inherited usage from its own, so it contributes nothing
                 // rather than charging the whole copied prefix to the child.
-                None => return Err(ReaderError::Unsupported("DSH seeded fork boundary")),
+                None => return Err(ReaderError::Declined("DSH seeded fork boundary")),
             }
         } else {
             ForkBoundary::None

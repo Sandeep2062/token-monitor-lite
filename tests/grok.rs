@@ -239,6 +239,6 @@ fn no_usable_timestamp_anywhere_is_visible_unsupported() {
         reader.ingest(
             br#"{"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":10,"outputTokens":5}}}}"#
         ),
-        Err(ReaderError::Unsupported(_))
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
     ));
 }

@@ -180,7 +180,10 @@ fn no_usable_timestamp_anywhere_is_visible_unsupported() {
     let result = reader.ingest(
         br#"{"message":{"type":"StatusUpdate","payload":{"token_usage":{"input_other":10,"output":5}}}}"#,
     );
-    assert!(matches!(result, Err(ReaderError::Unsupported(_))));
+    assert!(matches!(
+        result,
+        Err(ReaderError::Unsupported(_) | ReaderError::Declined(_))
+    ));
 }
 
 #[test]

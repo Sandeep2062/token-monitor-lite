@@ -61,7 +61,7 @@ impl ReasonixReader {
             Some(cache_miss) if cache_miss != 0 => cache_miss,
             _ => prompt
                 .checked_sub(cache_read)
-                .ok_or(ReaderError::Unsupported("Reasonix cache exceeds prompt"))?,
+                .ok_or(ReaderError::Declined("Reasonix cache exceeds prompt"))?,
         };
         let reasoning = reasoning_reported.min(completion);
         let tokens = TokenCounts {
@@ -78,7 +78,7 @@ impl ReasonixReader {
             Some((provider, model)) if !provider.trim().is_empty() && !model.trim().is_empty() => {
                 (Some(provider.trim().to_owned()), model.trim())
             }
-            Some(_) => return Err(ReaderError::Unsupported("Reasonix model reference")),
+            Some(_) => return Err(ReaderError::Declined("Reasonix model reference")),
             None => (None, model_ref),
         };
         if !super::tencent_buddy::valid_identity(model) {

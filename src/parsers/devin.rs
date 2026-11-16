@@ -151,7 +151,7 @@ impl DevinReader {
             None => format!("devin-cli:{}:row:{}", row.session_id, row.row_id),
         };
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Unsupported("Devin identity"));
+            return Err(ReaderError::Declined("Devin identity"));
         }
         // A raw working directory is an absolute path, which the storage layer
         // refuses in every runtime identity column; only its final component
