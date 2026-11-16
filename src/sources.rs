@@ -34,6 +34,7 @@ use crate::parsers::{
     mux::MuxReader,
     omp::OmpReader,
     openclaw::OpenClawReader,
+    opencodereview::OpenCodeReviewReader,
     pi::PiReader,
     prime_agent::PrimeAgentReader,
     proma::PromaReader,
@@ -77,6 +78,7 @@ pub enum SourceFormat {
     JunieJsonl,
     AugmentJson,
     GjcJsonl,
+    OpenCodeReviewJsonl,
     AntigravityJsonl,
     QwenJsonl,
     ReasonixJsonl,
@@ -138,6 +140,7 @@ impl SourceFormat {
             Self::JunieJsonl => "junie",
             Self::AugmentJson => "augment",
             Self::GjcJsonl => "gjc",
+            Self::OpenCodeReviewJsonl => "opencodereview",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
             Self::ReasonixJsonl => "reasonix",
@@ -193,6 +196,7 @@ impl SourceFormat {
             Self::JunieJsonl => "junie-jsonl",
             Self::AugmentJson => "augment-json",
             Self::GjcJsonl => "gjc-jsonl",
+            Self::OpenCodeReviewJsonl => "opencodereview-jsonl",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
             Self::ReasonixJsonl => "reasonix-jsonl",
@@ -252,6 +256,7 @@ impl SourceFormat {
             "junie-jsonl" => Some(Self::JunieJsonl),
             "augment-json" => Some(Self::AugmentJson),
             "gjc-jsonl" => Some(Self::GjcJsonl),
+            "opencodereview-jsonl" => Some(Self::OpenCodeReviewJsonl),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -515,6 +520,7 @@ enum ResponseReader {
     Junie(Box<JunieReader>),
     Augment(Box<AugmentReader>),
     Gjc(Box<GjcReader>),
+    OpenCodeReview(Box<OpenCodeReviewReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
     Reasonix(Box<ReasonixReader>),
@@ -558,6 +564,7 @@ impl ResponseReader {
             Self::Junie(reader) => reader.ingest(record),
             Self::Augment(reader) => reader.ingest(record),
             Self::Gjc(reader) => reader.ingest(record),
+            Self::OpenCodeReview(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
             Self::Reasonix(reader) => reader.ingest(record),
@@ -601,6 +608,7 @@ impl ResponseReader {
             Self::Junie(reader) => reader.snapshot(),
             Self::Augment(reader) => reader.snapshot(),
             Self::Gjc(reader) => reader.snapshot(),
+            Self::OpenCodeReview(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
             Self::Reasonix(reader) => reader.snapshot(),
@@ -641,6 +649,7 @@ impl ResponseReader {
             | Self::Junie(_)
             | Self::Augment(_)
             | Self::Gjc(_)
+            | Self::OpenCodeReview(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
             | Self::Reasonix(_)
@@ -714,6 +723,7 @@ impl ResponseReader {
             Self::Junie(reader) => reader.has_supported_usage(),
             Self::Augment(reader) => reader.has_supported_usage(),
             Self::Gjc(reader) => reader.has_supported_usage(),
+            Self::OpenCodeReview(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
             Self::Reasonix(reader) => reader.has_supported_usage(),
@@ -1211,6 +1221,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Gjc(Box::new(
                     GjcReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::OpenCodeReviewJsonl => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::OpenCodeReview(Box::new(
+                    OpenCodeReviewReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::AntigravityJsonl => {

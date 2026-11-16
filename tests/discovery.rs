@@ -292,6 +292,39 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn opencodereview_sessions_are_discovered_by_stem() {
+    let tree = Tree::new();
+    let body = br#"{"type":"session_start","cwd":"/work/repo"}
+{"type":"llm_response","model":"claude-sonnet-4","timestamp":"2026-07-09T11:00:00.000Z","usage":{"prompt_tokens":100,"completion_tokens":20}}
+"#;
+    tree.file(
+        ".opencodereview/sessions/-work-repo/session-abc.jsonl",
+        body,
+    );
+    tree.file(
+        ".opencodereview/sessions/-work-other/session-def.jsonl",
+        body,
+    );
+
+    let report = discover(&tree.paths(&["opencodereview"])).unwrap();
+    assert_eq!(report.sources.len(), 2);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::OpenCodeReviewJsonl)
+    );
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::OpenCodeReviewJsonl)
+    );
+}
+
+#[test]
 fn gjc_sessions_are_discovered_including_depth_two_children() {
     let tree = Tree::new();
     let body = br#"{"type":"session","id":"gjc-1","timestamp":"2026-07-09T11:00:00.000Z","cwd":"/work/pi"}

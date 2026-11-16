@@ -43,6 +43,7 @@ const SUPPORTED_CLIENTS: &[&str] = &[
     "junie",
     "augment",
     "gjc",
+    "opencodereview",
     "workbuddy",
 ];
 const COMMAND_CAPACITY: usize = 8;
@@ -1170,6 +1171,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::JunieJsonl => "junie",
         SourceFormat::AugmentJson => "augment",
         SourceFormat::GjcJsonl => "gjc",
+        SourceFormat::OpenCodeReviewJsonl => "opencodereview",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",
         SourceFormat::ReasonixJsonl => "reasonix",

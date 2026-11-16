@@ -462,6 +462,24 @@ gajae-code (`gjc`) writes JSONL sessions at `~/.gjc/agent/sessions/<project-slug
 | Missing `provider` | supported | No provider hint at all rather than an invented `gjc` pseudo-provider that no pricing row can match. | As above. |
 | Malformed JSON on a line | visible unsupported | Declined record. | Prior committed generation remains active. |
 
+## OpenCodeReview matrix
+
+OpenCodeReview stores sessions as JSONL at `~/.opencodereview/sessions/<encoded-repo-path>/<session-id>.jsonl`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `{"type":"session_start"}` with `cwd` | supported, emits nothing | Names the workspace; the first one seen wins. | Session is the file stem. |
+| `{"type":"llm_response"}` with non-zero `usage` | supported | One observation from `prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_write_tokens`. | As above. |
+| `llm_response` whose usage totals zero | ignored non-usage | Not an observation. | No source slot. |
+| Any other `type` | ignored non-usage | Skipped. | No source slot. |
+| Recorded `timestamp` plus `duration_ms` | supported | The timestamp is the response's **end**, so the start is back-calculated from the elapsed time. | As above. |
+| No recorded `timestamp` | supported | The file mtime is used and is **not** back-anchored: subtracting a call duration from it would land on the wrong day. | As above. |
+| Replay of one call (same end timestamp, model, counts) | supported | Collapses to one observation — that is deliberate. | As above. |
+| Distinct calls with no recorded timestamp | supported | Separated by line number, because the mtime fallback is identical for every record and could not tell them apart; the line number derives from the file's contents, so a re-parse reproduces the same keys. | As above. |
+| `cwd` | supported | Only the final path component survives, as a label. A raw absolute path is refused in every runtime identity column, so `workspace_key` stays empty. | As above. |
+| Provider | no hint | The pinned reader falls back to an `opencodereview` pseudo-provider that no pricing row can match; none is emitted here. | As above. |
+| Malformed JSON on a relevant line | visible unsupported | Declined record. | Prior committed generation remains active. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.
