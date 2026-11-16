@@ -8,6 +8,7 @@ use crate::parsers::{
     ReaderError, ResponseUsage,
     amp::AmpReader,
     antigravity::AntigravityReader,
+    augment::AugmentReader,
     claude::ClaudeReader,
     cline::ClineReader,
     codebuddy::{CodeBuddyLogReader, CodeBuddyReader},
@@ -73,6 +74,7 @@ pub enum SourceFormat {
     KimchiJsonl,
     MuxJson,
     JunieJsonl,
+    AugmentJson,
     AntigravityJsonl,
     QwenJsonl,
     ReasonixJsonl,
@@ -132,6 +134,7 @@ impl SourceFormat {
             Self::KimchiJsonl => "kimchi",
             Self::MuxJson => "mux",
             Self::JunieJsonl => "junie",
+            Self::AugmentJson => "augment",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
             Self::ReasonixJsonl => "reasonix",
@@ -185,6 +188,7 @@ impl SourceFormat {
             Self::KimchiJsonl => "kimchi-jsonl",
             Self::MuxJson => "mux-json",
             Self::JunieJsonl => "junie-jsonl",
+            Self::AugmentJson => "augment-json",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
             Self::ReasonixJsonl => "reasonix-jsonl",
@@ -242,6 +246,7 @@ impl SourceFormat {
             "kimchi-jsonl" => Some(Self::KimchiJsonl),
             "mux-json" => Some(Self::MuxJson),
             "junie-jsonl" => Some(Self::JunieJsonl),
+            "augment-json" => Some(Self::AugmentJson),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -503,6 +508,7 @@ enum ResponseReader {
     Kimchi(Box<KimchiReader>),
     Mux(Box<MuxReader>),
     Junie(Box<JunieReader>),
+    Augment(Box<AugmentReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
     Reasonix(Box<ReasonixReader>),
@@ -544,6 +550,7 @@ impl ResponseReader {
             Self::Kimchi(reader) => reader.ingest(record),
             Self::Mux(reader) => reader.ingest(record),
             Self::Junie(reader) => reader.ingest(record),
+            Self::Augment(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
             Self::Reasonix(reader) => reader.ingest(record),
@@ -585,6 +592,7 @@ impl ResponseReader {
             Self::Kimchi(reader) => reader.snapshot(),
             Self::Mux(reader) => reader.snapshot(),
             Self::Junie(reader) => reader.snapshot(),
+            Self::Augment(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
             Self::Reasonix(reader) => reader.snapshot(),
@@ -623,6 +631,7 @@ impl ResponseReader {
             | Self::Kimchi(_)
             | Self::Mux(_)
             | Self::Junie(_)
+            | Self::Augment(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
             | Self::Reasonix(_)
@@ -694,6 +703,7 @@ impl ResponseReader {
             Self::Kimchi(reader) => reader.has_supported_usage(),
             Self::Mux(reader) => reader.has_supported_usage(),
             Self::Junie(reader) => reader.has_supported_usage(),
+            Self::Augment(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
             Self::Reasonix(reader) => reader.has_supported_usage(),
@@ -1179,6 +1189,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::Junie(Box::new(
                     JunieReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::AugmentJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Augment(Box::new(
+                    AugmentReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::AntigravityJsonl => {

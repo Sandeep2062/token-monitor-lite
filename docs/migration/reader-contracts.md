@@ -424,6 +424,24 @@ Junie stores local sessions under `~/.junie/sessions/<session-id>/events.jsonl`.
 | Replayed identical event | supported | Collapses: the dedup suffix is the row's position **within its event**, not a file-global counter, so a replay reproduces the same key while distinct rows in one event stay distinct. | As above. |
 | Malformed JSON on a relevant line | visible unsupported | Declined record. | Prior committed generation remains active. |
 
+## Augment Code matrix
+
+Auggie writes one session snapshot per session at `~/.augment/sessions/<sessionId>.json`. Each completed turn exposes an `exchange` whose `responseNodes[]` may carry a `tokenUsage` block, and one observation is emitted per completed turn.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Turn with `completed: true`, an `exchange`, and a non-empty usage node | supported | One observation from its counters. | Session is the snapshot's `sessionId`, else the file stem. |
+| Turn with `completed: false`, or with no `completed` flag | ignored non-usage | Snapshots retain aborted and in-progress turns that already carry a partial usage, so an unflagged turn is not counted either. | No source slot. |
+| Several usage nodes in one turn | supported | The **last** non-empty one wins; summing repeated cumulative values would double-count. | As above. |
+| `cacheReadInputTokens` / `cacheCreationInputTokens` | supported | Reported as independent buckets, never subtracted from `input`: Auggie uses Anthropic-style split accounting. | As above. |
+| Turn with no `exchange`, or no non-empty usage node | ignored non-usage | Nothing to attribute. | No source slot. |
+| `exchange.modelId` | supported | Wins; a missing or blank value falls back to `agentState.modelId`, then `unknown`. | As above. |
+| `finishedAt` | supported | The observation is anchored at the turn's **end** — the schema has no start or duration, so duration-based metrics stay empty. Missing or unparseable falls back to the file mtime. | As above. |
+| Cost | never claimed | Reports nothing rather than a zero: the pinned reader emits `cost = 0` so downstream pricing can estimate public list prices from the model id. Augment credits and `subAgentCostUsd` are ignored. | As above. |
+| Provider | no hint | Auggie records no vendor, so none is emitted rather than a pseudo-provider `augment` key that no pricing table can match. | As above. |
+| Turn identity | supported | The exchange's `requestId`, else the turn's `sequenceId`, else the turn's position — so a re-read collapses while distinct turns stay distinct. | As above. |
+| Malformed JSON | visible unsupported | Discard the candidate. | Prior committed generation remains active. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

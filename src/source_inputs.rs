@@ -656,6 +656,7 @@ pub enum InputAdapterStatus {
     PrimeAgentJsonl,
     JcodeJson,
     MuxJson,
+    AugmentJson,
     GooseSqlite,
     HermesSqlite,
     OpenClawSqlite,
@@ -792,6 +793,7 @@ pub enum SourceInput {
     PrimeAgent(OrdinaryJsonlInput),
     Jcode(Box<DocumentInput>),
     Mux(Box<DocumentInput>),
+    Augment(Box<DocumentInput>),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
@@ -908,6 +910,7 @@ impl SourceInput {
             }),
             SourceFormat::JcodeJson => Self::jcode(path),
             SourceFormat::MuxJson => Self::mux(path),
+            SourceFormat::AugmentJson => Self::augment(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -999,6 +1002,14 @@ impl SourceInput {
         })
     }
 
+    pub(crate) fn augment(path: PathBuf) -> Self {
+        Self::Augment(Box::new(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+            window: None,
+        }))
+    }
+
     pub(crate) fn mux(path: PathBuf) -> Self {
         Self::Mux(Box::new(DocumentInput {
             path,
@@ -1068,6 +1079,7 @@ impl SourceInput {
             Self::PrimeAgent(_) => InputAdapterStatus::PrimeAgentJsonl,
             Self::Jcode(_) => InputAdapterStatus::JcodeJson,
             Self::Mux(_) => InputAdapterStatus::MuxJson,
+            Self::Augment(_) => InputAdapterStatus::AugmentJson,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
@@ -1113,6 +1125,7 @@ impl SourceInput {
             Self::PrimeAgent(input) => input.cursor.reset(),
             Self::Jcode(input) => input.reset(),
             Self::Mux(input) => input.reset(),
+            Self::Augment(input) => input.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
@@ -1158,6 +1171,7 @@ impl SourceInput {
             Self::PrimeAgent(input) => input.cursor.is_current(&input.path),
             Self::Jcode(input) => input.is_current(),
             Self::Mux(input) => input.is_current(),
+            Self::Augment(input) => input.is_current(),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
@@ -1227,6 +1241,7 @@ impl SourceInput {
             | Self::Vibe(_)
             | Self::Jcode(_)
             | Self::Mux(_)
+            | Self::Augment(_)
             | Self::PrimeAgent(_)
             | Self::Kimi(_)
             | Self::CommandCode(_)
@@ -1256,6 +1271,7 @@ impl SourceInput {
             Self::PrimeAgent(input) => Some(&input.path),
             Self::Jcode(input) => Some(&input.path),
             Self::Mux(input) => Some(&input.path),
+            Self::Augment(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
@@ -1336,6 +1352,7 @@ impl SourceInput {
             Self::Vibe(input) => input.read_batch(),
             Self::Jcode(input) => input.read_batch(),
             Self::Mux(input) => input.read_batch(),
+            Self::Augment(input) => input.read_batch(),
             Self::PrimeAgent(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {

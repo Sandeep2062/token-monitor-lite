@@ -292,6 +292,29 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn augment_session_snapshots_are_discovered_by_stem() {
+    let tree = Tree::new();
+    tree.file(
+        ".augment/sessions/aug-1.json",
+        br#"{"sessionId":"augment-session-1","agentState":{"modelId":"m"},"chatHistory":[{"finishedAt":"2026-07-09T11:00:00.000Z","completed":true,"exchange":{"modelId":"claude-sonnet-4","requestId":"req-1","responseNodes":[{"tokenUsage":{"inputTokens":100,"outputTokens":20}}]}}]}"#,
+    );
+    // A non-JSON sibling is not admitted.
+    tree.file(".augment/sessions/notes.txt", b"hello\n");
+
+    let report = discover(&tree.paths(&["augment"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::AugmentJson);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::AugmentJson)
+    );
+}
+
+#[test]
 fn junie_session_events_are_discovered_under_the_session_directory() {
     let tree = Tree::new();
     let body = br#"{"kind":"UserPromptEvent","timestampMs":1785594800000}

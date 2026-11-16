@@ -838,6 +838,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "kimchi",
         "mux",
         "junie",
+        "augment",
         "workbuddy",
         "zed",
     ]
@@ -1031,6 +1032,7 @@ fn client_label(client: &str) -> &'static str {
         "kimchi" => "Kimchi Coding",
         "mux" => "Mux",
         "junie" => "Junie",
+        "augment" => "Augment Code",
         "workbuddy" => "WorkBuddy",
         "zed" => "Zed",
         "mixed" => "Session archive",
@@ -1515,6 +1517,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::KimchiJsonl => "Kimchi Coding",
         SourceFormat::MuxJson => "Mux",
         SourceFormat::JunieJsonl => "Junie",
+        SourceFormat::AugmentJson => "Augment Code",
         SourceFormat::AntigravityJsonl | SourceFormat::AntigravitySqlite => "Antigravity",
         SourceFormat::QwenJsonl => "Qwen",
         SourceFormat::ReasonixJsonl => "Reasonix",

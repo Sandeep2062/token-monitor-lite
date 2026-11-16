@@ -2,6 +2,7 @@
 
 pub mod amp;
 pub mod antigravity;
+pub mod augment;
 pub mod catpaw;
 pub mod cherrystudio;
 pub mod claude;

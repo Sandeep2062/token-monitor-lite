@@ -2867,6 +2867,59 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "augment" {
+            // Auggie writes one session snapshot per session at
+            // `~/.augment/sessions/<sessionId>.json`.
+            let root = join_many(inputs.platform, &inputs.home, &[".augment", "sessions"]);
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.retain(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::AugmentJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "augment",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::AugmentJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::AugmentJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "junie" {
             // Junie stores local sessions under
             // `~/.junie/sessions/<session-id>/events.jsonl`.
@@ -4061,6 +4114,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::MuxJson => None,
                 // Junie is handled above: its session is the containing directory.
                 SourceFormat::JunieJsonl => None,
+                // Augment is handled above: its session is the file stem.
+                SourceFormat::AugmentJson => None,
                 // OpenClaw's session is the transcript's file stem, which the
                 // caller already knows; the event stream carries no session id.
                 SourceFormat::OpenClawJsonl => None,
@@ -4194,6 +4249,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                     .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
                     .map(str::to_owned)
             })
+            .ok_or(());
+    }
+    // `~/.augment/sessions/<sessionId>.json`: the snapshot names its session,
+    // so the caller falls back to the file stem when it is blank.
+    if format == SourceFormat::AugmentJson {
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
             .ok_or(());
     }
     // `~/.junie/sessions/<session-id>/events.jsonl`: the session is the
