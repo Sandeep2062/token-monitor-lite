@@ -841,6 +841,7 @@ fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<Se
         "augment",
         "gjc",
         "opencodereview",
+        "trae",
         "workbuddy",
         "zed",
     ]
@@ -1037,6 +1038,7 @@ fn client_label(client: &str) -> &'static str {
         "augment" => "Augment Code",
         "gjc" => "gajae-code",
         "opencodereview" => "OpenCodeReview",
+        "trae" => "Trae",
         "workbuddy" => "WorkBuddy",
         "zed" => "Zed",
         "mixed" => "Session archive",
@@ -1524,6 +1526,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::AugmentJson => "Augment Code",
         SourceFormat::GjcJsonl => "gajae-code",
         SourceFormat::OpenCodeReviewJsonl => "OpenCodeReview",
+        SourceFormat::TraeJson => "Trae",
         SourceFormat::AntigravityJsonl | SourceFormat::AntigravitySqlite => "Antigravity",
         SourceFormat::QwenJsonl => "Qwen",
         SourceFormat::ReasonixJsonl => "Reasonix",

@@ -292,6 +292,27 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn trae_usage_cache_dumps_are_discovered() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/tokscale/trae-cache/sessions/usage-1.json",
+        br#"[{"model_name":"GPT-5.4","session_id":"s1","usage_time":1776000000,"dollar_float":0.5,"extra_info":{"input_token":1000,"output_token":500}}]"#,
+    );
+
+    let report = discover(&tree.paths(&["trae"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::TraeJson);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::TraeJson)
+    );
+}
+
+#[test]
 fn opencodereview_sessions_are_discovered_by_stem() {
     let tree = Tree::new();
     let body = br#"{"type":"session_start","cwd":"/work/repo"}

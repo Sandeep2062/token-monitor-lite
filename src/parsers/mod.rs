@@ -47,6 +47,7 @@ pub mod reasonix;
 pub mod senpi;
 pub mod tencent_buddy;
 pub mod timestamps;
+pub mod trae;
 pub mod unsloth;
 pub mod workbuddy;
 pub mod zcode;

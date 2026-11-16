@@ -42,6 +42,7 @@ use crate::parsers::{
     qwen::QwenReader,
     reasonix::ReasonixReader,
     senpi::SenpiReader,
+    trae::TraeReader,
     workbuddy::WorkBuddyReader,
     zcode::ZcodeReader,
 };
@@ -79,6 +80,7 @@ pub enum SourceFormat {
     AugmentJson,
     GjcJsonl,
     OpenCodeReviewJsonl,
+    TraeJson,
     AntigravityJsonl,
     QwenJsonl,
     ReasonixJsonl,
@@ -141,6 +143,7 @@ impl SourceFormat {
             Self::AugmentJson => "augment",
             Self::GjcJsonl => "gjc",
             Self::OpenCodeReviewJsonl => "opencodereview",
+            Self::TraeJson => "trae",
             Self::AntigravityJsonl => "antigravity",
             Self::QwenJsonl => "qwen",
             Self::ReasonixJsonl => "reasonix",
@@ -197,6 +200,7 @@ impl SourceFormat {
             Self::AugmentJson => "augment-json",
             Self::GjcJsonl => "gjc-jsonl",
             Self::OpenCodeReviewJsonl => "opencodereview-jsonl",
+            Self::TraeJson => "trae-json",
             Self::AntigravityJsonl => "antigravity-jsonl",
             Self::QwenJsonl => "qwen-jsonl",
             Self::ReasonixJsonl => "reasonix-jsonl",
@@ -257,6 +261,7 @@ impl SourceFormat {
             "augment-json" => Some(Self::AugmentJson),
             "gjc-jsonl" => Some(Self::GjcJsonl),
             "opencodereview-jsonl" => Some(Self::OpenCodeReviewJsonl),
+            "trae-json" => Some(Self::TraeJson),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -521,6 +526,7 @@ enum ResponseReader {
     Augment(Box<AugmentReader>),
     Gjc(Box<GjcReader>),
     OpenCodeReview(Box<OpenCodeReviewReader>),
+    Trae(Box<TraeReader>),
     Antigravity(Box<AntigravityReader>),
     Qwen(Box<QwenReader>),
     Reasonix(Box<ReasonixReader>),
@@ -565,6 +571,7 @@ impl ResponseReader {
             Self::Augment(reader) => reader.ingest(record),
             Self::Gjc(reader) => reader.ingest(record),
             Self::OpenCodeReview(reader) => reader.ingest(record),
+            Self::Trae(reader) => reader.ingest(record),
             Self::Antigravity(reader) => reader.ingest(record),
             Self::Qwen(reader) => reader.ingest(record),
             Self::Reasonix(reader) => reader.ingest(record),
@@ -609,6 +616,7 @@ impl ResponseReader {
             Self::Augment(reader) => reader.snapshot(),
             Self::Gjc(reader) => reader.snapshot(),
             Self::OpenCodeReview(reader) => reader.snapshot(),
+            Self::Trae(reader) => reader.snapshot(),
             Self::Antigravity(reader) => reader.snapshot(),
             Self::Qwen(reader) => reader.snapshot(),
             Self::Reasonix(reader) => reader.snapshot(),
@@ -650,6 +658,7 @@ impl ResponseReader {
             | Self::Augment(_)
             | Self::Gjc(_)
             | Self::OpenCodeReview(_)
+            | Self::Trae(_)
             | Self::Antigravity(_)
             | Self::Qwen(_)
             | Self::Reasonix(_)
@@ -724,6 +733,7 @@ impl ResponseReader {
             Self::Augment(reader) => reader.has_supported_usage(),
             Self::Gjc(reader) => reader.has_supported_usage(),
             Self::OpenCodeReview(reader) => reader.has_supported_usage(),
+            Self::Trae(reader) => reader.has_supported_usage(),
             Self::Antigravity(reader) => reader.has_supported_usage(),
             Self::Qwen(reader) => reader.has_supported_usage(),
             Self::Reasonix(reader) => reader.has_supported_usage(),
@@ -1227,6 +1237,12 @@ impl SourceReader {
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
                 ResponseReader::OpenCodeReview(Box::new(
                     OpenCodeReviewReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ))
+            }
+            SourceFormat::TraeJson => {
+                let fallback = self.input.source_path().and_then(file_mtime_ms);
+                ResponseReader::Trae(Box::new(
+                    TraeReader::new(&self.key.session).with_fallback_timestamp(fallback),
                 ))
             }
             SourceFormat::AntigravityJsonl => {

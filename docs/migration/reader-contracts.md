@@ -480,6 +480,24 @@ OpenCodeReview stores sessions as JSONL at `~/.opencodereview/sessions/<encoded-
 | Provider | no hint | The pinned reader falls back to an `opencodereview` pseudo-provider that no pricing row can match; none is emitted here. | As above. |
 | Malformed JSON on a relevant line | visible unsupported | Declined record. | Prior committed generation remains active. |
 
+## Trae matrix
+
+Trae's usage-API cache is an array of session objects dumped under `trae-cache/sessions/*.json`. The API returns exact token counts, so nothing is estimated.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Session object with an id, a positive `usage_time` and non-zero counters | supported | One observation from `extra_info`'s four counters. | Session is the record's `session_id`. |
+| `session_id` absent or blank | dropped | Not defaulted: every id-less record would collide on one dedup key. | No source slot. |
+| `usage_time` absent, zero or negative | dropped | Not defaulted: it would land the observation at epoch 0. | No source slot. |
+| `usage_time` whose ×1000 overflows `i64` | rejected | The cache is untrusted; the multiply is checked, so a crafted value near `i64::MAX` cannot panic in debug or wrap negative in release. | No source slot. |
+| Every counter zero | ignored non-usage | Not an observation. | No source slot. |
+| Empty `model_name` with a `mode` (Auto) | supported | Bucketed under `trae-<mode>` so the cost is attributed instead of vanishing into an empty model cell. | As above. |
+| Empty `model_name` and no `mode` | supported | `trae-unknown`. | As above. |
+| Display name | supported | Mapped to a tokenizer-style id where the table knows it (`GPT-5.3 Codex` → `gpt-5.3-codex`); an unknown name passes through unchanged rather than being guessed at. | As above. |
+| `dollar_float` positive | supported, cost reported | Carried as source-reported USD. | As above. |
+| `dollar_float` absent or zero | supported, unpriced | Reports nothing. | As above. |
+| Non-array cache, or malformed JSON | visible unsupported | Nothing to attribute, or the candidate is discarded. | Prior committed generation remains active. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.

@@ -24,6 +24,7 @@
     {"id":"augment","label":"Augment Code"},
     {"id":"gjc","label":"gajae-code"},
     {"id":"opencodereview","label":"OpenCodeReview"},
+    {"id":"trae","label":"Trae"},
     {"id":"goose","label":"Goose"},
     {"id":"zed","label":"Zed"},
     {"id":"kilo","label":"Kilo"},

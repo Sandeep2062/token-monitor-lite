@@ -2969,6 +2969,58 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "trae" {
+            // Trae's usage-API dump lands in the collector cache directory, the
+            // same convention the cursor and antigravity `*-cache` lanes use.
+            let root = join_many(
+                inputs.platform,
+                &tokscale_config_dir(inputs),
+                &["trae-cache", "sessions"],
+            );
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_source_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::TraeJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "trae",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::TraeJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::TraeJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "augment" {
             // Auggie writes one session snapshot per session at
             // `~/.augment/sessions/<sessionId>.json`.
@@ -4218,6 +4270,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::JunieJsonl => None,
                 // Augment is handled above: its session is the file stem.
                 SourceFormat::AugmentJson => None,
+                // trae is handled above.
+                SourceFormat::TraeJson => None,
                 // opencodereview is handled above.
                 SourceFormat::OpenCodeReviewJsonl => None,
                 // gjc is handled above.
@@ -4368,6 +4422,15 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
     }
     if format == SourceFormat::OpenCodeReviewJsonl {
         // `OpenCodeReview JSONL sessions at `~/.opencodereview/sessions/<encoded-repo>/<session>.jsonl`.`: the file stem names the session.
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    if format == SourceFormat::TraeJson {
+        // `Trae usage-API cache dumps at `~/.local/share/trae-cache/sessions/*.json`.`: the record names its session; the stem is the fallback.
         return path
             .file_stem()
             .and_then(|stem| stem.to_str())
