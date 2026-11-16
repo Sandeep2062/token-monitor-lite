@@ -29,6 +29,14 @@ if (Test-Path -LiteralPath 'packaging') {
         $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')
     } | Where-Object { $_ -notin $Files })
 }
+# `tests/reconciliation.rs` reads the migration inventory and reader contracts,
+# so the docs tree is a test input rather than prose: without it the
+# reconciliation suite fails on the remote snapshot for a missing file.
+if (Test-Path -LiteralPath 'docs') {
+    $Files += @(Get-ChildItem -Path 'docs' -Recurse -File | ForEach-Object {
+        $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')
+    } | Where-Object { $_ -notin $Files })
+}
 $Entries = foreach ($File in $Files) {
     @{ path = $File; sha256 = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLower(); bytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PWD $File))) }
 }
