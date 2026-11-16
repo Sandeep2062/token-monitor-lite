@@ -1,0 +1,14 @@
+# Rust sources and scripts are stored and checked out with LF endings.
+#
+# Several test files embed multi-line SQL inside ordinary Rust string literals,
+# where the newline is string *content*. A CR there is a compile error ("bare CR
+# not allowed in string"), so an autocrlf=true checkout of those files does not
+# build. Pinning eol=lf for these types keeps the working tree identical to the
+# index on every platform.
+*.rs text eol=lf
+*.toml text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
