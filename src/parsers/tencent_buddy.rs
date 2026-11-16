@@ -400,9 +400,7 @@ pub(crate) fn normalize_usage(
             if cache_read > 0 && total == inclusive && inclusive != exclusive {
                 reported_input
                     .checked_sub(cache_read)
-                    .ok_or(ReaderError::Unsupported(
-                        "Tencent Buddy cache exceeds input",
-                    ))?
+                    .ok_or(ReaderError::Declined("Tencent Buddy cache exceeds input"))?
             } else {
                 reported_input
             }

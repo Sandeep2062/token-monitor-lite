@@ -416,7 +416,7 @@ fn aliased_u64(block: &Map<String, Value>, keys: &[&str]) -> Result<Option<u64>,
 fn non_negative(value: Option<i64>, what: &'static str) -> Result<u64, ReaderError> {
     match value {
         None => Ok(0),
-        Some(value) if value < 0 => Err(ReaderError::Unsupported(what)),
+        Some(value) if value < 0 => Err(ReaderError::Declined(what)),
         Some(value) => Ok(value as u64),
     }
 }

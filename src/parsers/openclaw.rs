@@ -277,9 +277,7 @@ impl OpenClawReader {
         let cache_write = counter(usage, "cacheWrite")?;
         let reasoning = counter(usage, "reasoningTokens")?;
         if reasoning > output {
-            return Err(ReaderError::Unsupported(
-                "OpenClaw reasoning exceeds output",
-            ));
+            return Err(ReaderError::Declined("OpenClaw reasoning exceeds output"));
         }
         Ok(TokenCounts {
             input,

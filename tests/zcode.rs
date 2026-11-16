@@ -316,12 +316,12 @@ fn a_sqlite_row_with_no_tokens_is_not_usage() {
 }
 
 #[test]
-fn a_negative_sqlite_counter_is_visible_unsupported() {
+fn a_negative_sqlite_counter_declines_the_row() {
     let mut input = usage_row("usage_negative");
     input.input = Some(-1);
     assert_eq!(
         normalize_row(&input).unwrap_err(),
-        ReaderError::Unsupported("ZCode input")
+        ReaderError::Declined("ZCode input")
     );
 }
 
