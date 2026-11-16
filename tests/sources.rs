@@ -328,20 +328,18 @@ fn a_declined_record_is_quarantined_and_the_rest_of_the_source_still_publishes()
     let source = Source::new(&bytes);
     let mut reader = SourceReader::new(source.0.clone(), SourceFormat::ClaudeCli, "a");
 
-    let mut published = None;
-    loop {
+    let published = loop {
         let step = reader.step().unwrap();
         match step.progress {
             SourceProgress::Pending => {}
             SourceProgress::Published { delta } => {
-                published = Some((delta.input, step.declined_records));
-                break;
+                break (delta.input, step.declined_records);
             }
             SourceProgress::Unchanged => panic!("expected a publication"),
         }
-    }
+    };
     // Both interpretable records are counted; the declined one is not.
-    assert_eq!(published, Some((18, 1)));
+    assert_eq!(published, (18, 1));
     let snapshot = reader.last_good().unwrap();
     assert_eq!(snapshot.rows.len(), 2);
     assert_eq!(snapshot.totals.input, 18);
@@ -442,21 +440,17 @@ fn an_unbounded_log_is_read_through_a_tail_window_and_says_so() {
     fs::write(&path, &log).unwrap();
 
     let mut reader = SourceReader::new(path.clone(), SourceFormat::LmstudioLog, "log");
-    let mut published = None;
-    loop {
+    let published = loop {
         let step = reader.step().unwrap();
         match step.progress {
             SourceProgress::Pending => {}
-            SourceProgress::Published { delta } => {
-                published = Some(delta.input);
-                break;
-            }
+            SourceProgress::Published { delta } => break delta.input,
             SourceProgress::Unchanged => panic!("expected a publication"),
         }
-    }
+    };
     // Only the record inside the window is counted, and the truncation is
     // reported rather than silently dropping the older record.
-    assert_eq!(published, Some(7));
+    assert_eq!(published, 7);
     assert!(reader.truncated_head());
     assert_eq!(reader.last_good().unwrap().rows.len(), 1);
     fs::remove_file(&path).unwrap();

@@ -137,7 +137,7 @@ impl KiroReader {
                 workspace_label.as_deref(),
                 self.fallback_timestamp_ms,
             )? {
-                TurnOutcome::Emitted(usage) => self.push(usage)?,
+                TurnOutcome::Emitted(usage) => self.push(*usage)?,
                 // Real work with no recorded size. Counted, not dropped
                 // silently: the source's totals are short by these turns.
                 TurnOutcome::Unmeasured => {
@@ -178,7 +178,9 @@ impl KiroReader {
 
 /// What one `user_turn_metadatas` entry produced.
 enum TurnOutcome {
-    Emitted(ResponseUsage),
+    /// Boxed because `ResponseUsage` is several times the size of the other
+    /// variant, so every `Unmeasured` turn would otherwise carry that footprint.
+    Emitted(Box<ResponseUsage>),
     /// The turn is real but its counters are all zero or absent, which Kiro
     /// writes for the Auto agent to mean "not measured".
     Unmeasured,
@@ -216,7 +218,7 @@ fn normalize_turn(
     if identity.len() > MAX_IDENTITY_BYTES {
         return Err(ReaderError::Declined("Kiro turn identity"));
     }
-    Ok(TurnOutcome::Emitted(ResponseUsage {
+    Ok(TurnOutcome::Emitted(Box::new(ResponseUsage {
         key: SessionKey::new(CLIENT, session),
         model: model.to_owned(),
         tokens: TokenCounts {
@@ -236,7 +238,7 @@ fn normalize_turn(
         workspace_label: workspace.map(str::to_owned),
         title: None,
         cost: credit_cost(turn)?,
-    }))
+    })))
 }
 
 /// A provider-reported cost from the turn's `metering_usage` credit entries.
