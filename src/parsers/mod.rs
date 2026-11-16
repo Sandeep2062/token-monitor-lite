@@ -22,6 +22,7 @@ pub mod hermes;
 pub mod jcode;
 pub mod jsonl;
 pub mod kilo;
+pub mod kimchi;
 pub mod kimi;
 pub mod kiro;
 pub mod lmstudio;

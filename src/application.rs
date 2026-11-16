@@ -38,6 +38,7 @@ const SUPPORTED_CLIENTS: &[&str] = &[
     "opencode",
     "pi",
     "senpi",
+    "kimchi",
     "workbuddy",
 ];
 const COMMAND_CAPACITY: usize = 8;
@@ -1160,6 +1161,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::PiJsonl => "pi",
         SourceFormat::OmpJsonl => "omp",
         SourceFormat::SenpiJsonl => "senpi",
+        SourceFormat::KimchiJsonl => "kimchi",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",
         SourceFormat::ReasonixJsonl => "reasonix",

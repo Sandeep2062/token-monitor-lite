@@ -292,6 +292,27 @@ fn qodercn_database(path: &Path) {
 }
 
 #[test]
+fn kimchi_sessions_are_discovered_in_the_pi_format() {
+    let tree = Tree::new();
+    let body = br#"{"type":"session","version":3,"id":"kimchi-1","timestamp":"2026-08-01T00:00:00.000Z","cwd":"/tmp/kimchi-project"}
+{"type":"message","id":"msg_001","timestamp":"2026-08-01T00:00:01.000Z","message":{"role":"assistant","model":"kimi-k2.6","provider":"kimchi-dev","usage":{"input":9441,"output":131,"cacheRead":50}}}
+"#;
+    tree.file(".kimchi/agent/sessions/kimchi-1.jsonl", body);
+    // A Pi-format session for another client must not be attributed to kimchi.
+    tree.file(".pi/agent/sessions/pi-1.jsonl", body);
+
+    let report = discover(&tree.paths(&["kimchi"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::KimchiJsonl);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(disabled
+        .sources
+        .iter()
+        .all(|source| source.format != SourceFormat::KimchiJsonl));
+}
+
+#[test]
 fn jcode_session_snapshots_are_discovered_under_the_sessions_role() {
     let tree = Tree::new();
     tree.file(

@@ -1606,6 +1606,16 @@ fn mcode_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     roots
 }
 
+/// Kimchi's agent directory, honouring its own override variable.
+fn kimchi_agent_dir(inputs: &HostPaths) -> PathBuf {
+    inputs
+        .env_paths
+        .get("KIMCHI_CODING_AGENT_DIR")
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .cloned()
+        .unwrap_or_else(|| join_many(inputs.platform, &inputs.home, &[".kimchi", "agent"]))
+}
+
 fn senpi_session_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     match inputs
@@ -3305,6 +3315,18 @@ fn discover_sources_with_id(
                 SourceFormat::SenpiJsonl,
                 senpi_session_roots(inputs),
             ),
+            // Kimchi writes the Pi record format under its own agent
+            // directory, so it is discovered and read exactly like senpi/omp
+            // and only the client id differs.
+            "kimchi" => (
+                "kimchi",
+                SourceFormat::KimchiJsonl,
+                vec![join_many(
+                    inputs.platform,
+                    &kimchi_agent_dir(inputs),
+                    &["sessions"],
+                )],
+            ),
             "antigravity" => (
                 "antigravity",
                 SourceFormat::AntigravityJsonl,
@@ -3904,6 +3926,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::PiJsonl
                 | SourceFormat::OmpJsonl
                 | SourceFormat::SenpiJsonl
+                | SourceFormat::KimchiJsonl
                 | SourceFormat::CommandCodeJsonl
                 | SourceFormat::PrimeAgentJsonl => {
                     if value.get("type").and_then(Value::as_str) == Some("session") {

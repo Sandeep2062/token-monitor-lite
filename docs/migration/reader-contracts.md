@@ -375,6 +375,19 @@ Cache accounting is decided from the **message-local** usage shape, never from t
 | Sibling journal (`*.journal.jsonl`) | visible unsupported | Not read. Merging it means appending the unsaved suffix, replacing a snapshot entry in place when the journal repeats its id, and re-scoping the billing provider per append batch — a cross-file merge this per-source contract cannot perform. The snapshot alone is self-contained. | No source slot. |
 | `is_turn_start`, `message_count`, provider canonicalization | not implemented | No such fields on this codebase's observation; `provider_key` is reported verbatim as the billing hint. | No source slot. |
 
+## Kimchi matrix
+
+Kimchi Coding writes the Pi append-only JSONL record format under its own agent directory (`~/.kimchi/agent/sessions/`, or `$KIMCHI_CODING_AGENT_DIR`). Because the format is Pi's, the extraction is shared: this client is `PiReader` under the `kimchi` id, the same relationship `omp` and `senpi` have.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Pi `session` header | supported | Names the session, so the id comes from the record rather than the path. | Session is the header's `id`. |
+| `title` line before the header | tolerated | Skipped; the header may follow. | As above. |
+| `message` entry with `message.usage` | supported | One observation carrying the message's model and provider. | As above. |
+| `model_change` entry | supported | Sets the model for later model-less usage entries. | As above. |
+| Assistant `message` with no `usage` | visible unsupported | The Pi format requires it, so a malformed record is reported rather than skipped. | Prior committed generation remains active. |
+| Dedup key prefix | supported | `kimchi:` rather than `pi:`. A shared prefix would let one client's row suppress the other's on a machine running both. | As above. |
+
 ## DSH matrix
 
 DeepSeek Harness writes one append-only JSONL transcript per session under `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.jsonl` (`<DSH_HOME>` defaults to `~/.dsh`). The `.zstd` suffix marks the physical encoding only: a backend configured with `compression: none` writes the same rows to a plain `session.jsonl`, so the input layer probes the zstd frame magic rather than trusting the name. The session id comes from the containing directory, because the file itself is always `session.jsonl`.
