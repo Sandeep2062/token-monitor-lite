@@ -49,6 +49,16 @@ Pricing and costs, limits/accounts, session detail/relationships/live activity/t
 
 See [`docs/migration/inventory.md`](docs/migration/inventory.md) for the complete evidence and parity ledger.
 
+### Readers that are deliberately out of scope
+
+Three upstream client lanes have no byte-slice reader here, and they are excluded on purpose rather than approximated:
+
+- **Perch** has no local usage format. `~/.perch` holds only MCP configuration, background-task JSON and log files, and its `cli-agents/sessions.json` is empty; the desktop application keeps conversation and usage state in browser-side IndexedDB against `app.perchai.app`. Reading it would mean parsing a LevelDB blob or calling an undocumented authenticated endpoint, so no reader is provided.
+- **Aside** documents no storage path in its upstream reference and is not installed on the development host. Inventing a root would produce a reader that silently discovers nothing.
+- **Hindsight** is an HTTP API rather than a file. A reader would introduce the first network and credential boundary into a reader layer that is otherwise pure byte slices.
+
+A `perch`, `aside`, or `hindsight` source therefore stays absent from discovery instead of appearing as a permanently empty client. Adding any of them is a separate piece of work with its own security review.
+
 ## Remote verification
 
 All compilation and tests are intentionally offloaded to `pixvault-vm`:
@@ -57,6 +67,17 @@ All compilation and tests are intentionally offloaded to `pixvault-vm`:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\remote-core-test.ps1 -Mode desktop-verify
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\remote-core-test.ps1 -Mode verify
 ```
+
+When that host is unreachable, the same checks run locally with the pinned toolchain, which is what `rust-toolchain.toml` and the `.gitattributes` LF policy exist to make reproducible:
+
+```powershell
+cargo +1.99.1-x86_64-pc-windows-gnu fmt --all -- --check
+cargo +1.99.1-x86_64-pc-windows-gnu clippy --locked --no-default-features --all-targets -- -D warnings
+cargo +1.99.1-x86_64-pc-windows-gnu test --locked --no-default-features --no-fail-fast
+cargo +1.99.1-x86_64-pc-windows-gnu build --locked --no-default-features --release
+```
+
+Use the pinned toolchain, not `+stable`: the unpinned `stable` on the development host is clippy 0.1.100, which reports lints the 1.99.1 pin does not, and it would make a green local run meaningless against the gate.
 
 The first command runs formatting, all-feature check/test/strict Clippy, and a release desktop build. The second preserves the `--no-default-features` headless boundary. Both use isolated, content-hashed source snapshots, at most two Cargo jobs, and a shared bounded target under the remote `evidence/` root.
 
