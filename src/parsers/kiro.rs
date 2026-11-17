@@ -84,8 +84,12 @@ impl KiroReader {
         let value: Value =
             serde_json::from_slice(document).map_err(|_| ReaderError::InvalidRecord)?;
         let root = value.as_object().ok_or(ReaderError::InvalidRecord)?;
+        // The CLI session document names `session_id`; the same state stored
+        // inside `data.sqlite3` names `conversation_id` and has no session id,
+        // so the two spellings are accepted as one identity.
         let session = root
             .get("session_id")
+            .or_else(|| root.get("conversation_id"))
             .and_then(Value::as_str)
             .filter(|value| valid_identity(value))
             .unwrap_or(&self.fallback_session)
@@ -101,6 +105,7 @@ impl KiroReader {
             .get("rts_model_state")
             .and_then(Value::as_object)
             .and_then(|model| model.get("model_info"))
+            .or_else(|| root.get("model_info"))
             .and_then(Value::as_object)
             .and_then(|info| info.get("model_id"))
             .and_then(Value::as_str)
@@ -119,6 +124,7 @@ impl KiroReader {
             .and_then(workspace_label_from_cwd);
         let turns = state
             .get("conversation_metadata")
+            .or_else(|| root.get("conversation_metadata"))
             .and_then(Value::as_object)
             .and_then(|metadata| metadata.get("user_turn_metadatas"))
             .and_then(Value::as_array);
@@ -200,15 +206,19 @@ fn normalize_turn(
     workspace: Option<&str>,
     fallback_timestamp_ms: Option<i64>,
 ) -> Result<TurnOutcome, ReaderError> {
-    let input = positive_counter(turn, "input_token_count")?;
-    let output = positive_counter(turn, "output_token_count")?;
+    let input = positive_counter(turn, &["input_token_count", "input_tokens"])?;
+    let output = positive_counter(turn, &["output_token_count", "output_tokens"])?;
     // A negative counter is a rejection even when another counter would make
     // the turn non-empty, because the row is then not interpretable.
     if input == 0 && output == 0 {
         return Ok(TurnOutcome::Unmeasured);
     }
-    let cache_read = positive_counter(turn, "cache_read_input_token_count")?;
-    let cache_write = positive_counter(turn, "cache_write_input_token_count")?;
+    let cache_read =
+        positive_counter(turn, &["cache_read_input_token_count", "cache_read_tokens"])?;
+    let cache_write = positive_counter(
+        turn,
+        &["cache_write_input_token_count", "cache_write_tokens"],
+    )?;
     let timestamp_ms = match turn.get("end_timestamp") {
         Some(value) => crate::parsers::timestamps::parse_timestamp_value(value)
             .ok_or(ReaderError::Declined("Kiro turn timestamp"))?,
@@ -287,8 +297,8 @@ fn credit_cost(turn: &Map<String, Value>) -> Result<CostStatus, ReaderError> {
 ///
 /// Kiro persists `0` for the Auto agent, which means "not measured" rather than
 /// "no tokens", so zero is treated as absent. A negative value is not clamped.
-fn positive_counter(turn: &Map<String, Value>, key: &str) -> Result<u64, ReaderError> {
-    let Some(value) = turn.get(key) else {
+fn positive_counter(turn: &Map<String, Value>, keys: &[&str]) -> Result<u64, ReaderError> {
+    let Some(value) = keys.iter().find_map(|key| turn.get(*key)) else {
         return Ok(0);
     };
     if value.is_null() {

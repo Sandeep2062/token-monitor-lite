@@ -17,6 +17,7 @@ use crate::parsers::{
     commandcode::CommandCodeReader,
     copilot::CopilotReader,
     copilot_chat::CopilotChatReader,
+    copilot_cli::CopilotCliReader,
     cursor::CursorReader,
     droid::DroidReader,
     dsh::DshReader,
@@ -125,6 +126,8 @@ pub enum SourceFormat {
     ClineTaskJson,
     KiloTaskJson,
     CopilotChatSessionJsonl,
+    CopilotCliJsonl,
+    KiroSqlite,
 }
 
 impl SourceFormat {
@@ -189,6 +192,8 @@ impl SourceFormat {
             Self::ClineTaskJson => "cline",
             Self::KiloTaskJson => "kilo",
             Self::CopilotChatSessionJsonl => "copilot",
+            Self::CopilotCliJsonl => "copilot",
+            Self::KiroSqlite => "kiro",
         }
     }
 
@@ -257,6 +262,8 @@ impl SourceFormat {
             Self::ClineTaskJson => "cline-task-json",
             Self::KiloTaskJson => "kilo-task-json",
             Self::CopilotChatSessionJsonl => "copilot-chat-session-jsonl",
+            Self::CopilotCliJsonl => "copilot-cli-jsonl",
+            Self::KiroSqlite => "kiro-sqlite",
         }
     }
 
@@ -293,6 +300,8 @@ impl SourceFormat {
             "cline-task-json" => Some(Self::ClineTaskJson),
             "kilo-task-json" => Some(Self::KiloTaskJson),
             "copilot-chat-session-jsonl" => Some(Self::CopilotChatSessionJsonl),
+            "copilot-cli-jsonl" => Some(Self::CopilotCliJsonl),
+            "kiro-sqlite" => Some(Self::KiroSqlite),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -350,6 +359,7 @@ impl SourceFormat {
                 | Self::ZedSqlite
                 | Self::WorkBuddySqlite
                 | Self::AntigravitySqlite
+                | Self::KiroSqlite
         )
     }
 }
@@ -573,6 +583,7 @@ enum ResponseReader {
     Dsh(Box<DshReader>),
     TaskLog(Box<RooCodeReader>),
     CopilotChat(Box<CopilotChatReader>),
+    CopilotCli(Box<CopilotCliReader>),
 }
 
 impl ResponseReader {
@@ -622,6 +633,7 @@ impl ResponseReader {
             Self::Dsh(reader) => reader.ingest(record),
             Self::TaskLog(reader) => reader.ingest(record),
             Self::CopilotChat(reader) => reader.ingest(record),
+            Self::CopilotCli(reader) => reader.ingest(record),
         }
     }
 
@@ -629,6 +641,7 @@ impl ResponseReader {
         match self {
             Self::TaskLog(reader) => reader.snapshot(),
             Self::CopilotChat(reader) => reader.snapshot(),
+            Self::CopilotCli(reader) => reader.snapshot(),
             Self::Claude(reader) => reader.snapshot(),
             Self::Codex(reader) => reader.snapshot(),
             Self::Gemini(reader) => reader.snapshot(),
@@ -719,7 +732,8 @@ impl ResponseReader {
             | Self::Vibe(_)
             | Self::Jcode(_)
             | Self::TaskLog(_)
-            | Self::CopilotChat(_) => Ok(()),
+            | Self::CopilotChat(_)
+            | Self::CopilotCli(_) => Ok(()),
         }
     }
 
@@ -767,6 +781,7 @@ impl ResponseReader {
             Self::Jcode(reader) => reader.has_supported_usage(),
             Self::TaskLog(reader) => reader.has_supported_usage(),
             Self::CopilotChat(reader) => reader.has_supported_usage(),
+            Self::CopilotCli(reader) => reader.has_supported_usage(),
             Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
@@ -1400,6 +1415,9 @@ impl SourceReader {
             SourceFormat::CopilotChatSessionJsonl => {
                 ResponseReader::CopilotChat(Box::new(CopilotChatReader::new(&self.key.session)))
             }
+            SourceFormat::CopilotCliJsonl => {
+                ResponseReader::CopilotCli(Box::new(CopilotCliReader::new(&self.key.session)))
+            }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite
             | SourceFormat::OpenCodeSqlite
@@ -1414,6 +1432,7 @@ impl SourceReader {
             | SourceFormat::QodercnSqlite
             | SourceFormat::GooseSqlite
             | SourceFormat::HermesSqlite
+            | SourceFormat::KiroSqlite
             | SourceFormat::OpenClawSqlite
             | SourceFormat::ZedSqlite
             | SourceFormat::WorkBuddySqlite
@@ -1443,6 +1462,7 @@ impl SourceReader {
             crate::source_inputs::SqliteInputData::Devin(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Goose(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Hermes(rows) => (rows, Arc::from([])),
+            crate::source_inputs::SqliteInputData::KiroSqlite(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::OpenClaw(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::Zed(rows) => (rows, Arc::from([])),
             crate::source_inputs::SqliteInputData::WorkBuddySqlite(rows) => (rows, Arc::from([])),

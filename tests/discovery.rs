@@ -693,6 +693,100 @@ fn copilot_session_without_counters_is_not_admitted() {
 }
 
 #[test]
+fn kiro_reads_the_cli_sqlite_conversation_store() {
+    let tree = Tree::new();
+    let path = tree.file(".local/share/kiro-cli/data.sqlite3", b"");
+    let path = path.to_path_buf();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE conversations_v2 (
+                 key TEXT NOT NULL,
+                 conversation_id TEXT NOT NULL,
+                 value TEXT NOT NULL,
+                 created_at INTEGER,
+                 updated_at INTEGER,
+                 PRIMARY KEY (key, conversation_id)
+             );",
+        )
+        .unwrap();
+    let value = r#"{"conversation_id":"conv-1","cwd":"/work/project",
+        "session_state":{"rts_model_state":{"model_info":{"model_id":"auto"}},
+        "conversation_metadata":{"user_turn_metadatas":[
+          {"input_token_count":120,"output_token_count":30,
+           "cache_read_input_token_count":2,"cache_write_input_token_count":1,
+           "end_timestamp":"2026-11-09T10:00:00Z"}]}}}"#;
+    connection
+        .execute(
+            "INSERT INTO conversations_v2 (key, conversation_id, value, created_at, updated_at)
+             VALUES ('/work/project', 'conv-1', ?1, 0, 0)",
+            [value],
+        )
+        .unwrap();
+    drop(connection);
+
+    let report = discover(&tree.paths(&["kiro"])).unwrap();
+    let sqlite = report
+        .sources
+        .iter()
+        .find(|source| source.format == SourceFormat::KiroSqlite)
+        .expect("sqlite lane admitted");
+    assert_eq!(sqlite.session, "kiro");
+}
+
+#[test]
+fn kiro_legacy_sqlite_table_is_not_admitted() {
+    let tree = Tree::new();
+    let file = tree.file(".local/share/kiro-cli/data.sqlite3", b"");
+    let path = file.to_path_buf();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE conversations (key TEXT, value TEXT);
+             INSERT INTO conversations (key, value) VALUES ('/w', '{}');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let report = discover(&tree.paths(&["kiro"])).unwrap();
+    assert!(
+        !report
+            .sources
+            .iter()
+            .any(|source| source.format == SourceFormat::KiroSqlite)
+    );
+}
+
+#[test]
+fn copilot_reads_the_cli_session_state_log() {
+    let tree = Tree::new();
+    tree.file(
+        ".copilot/session-state/2b227434/events.jsonl",
+        br#"{"type":"assistant.turn_start","timestamp":"2026-10-24T15:36:45.000Z"}
+{"type":"session.usage_record","timestamp":"2026-10-24T15:36:45.326Z","data":{"usage":{"model":"gpt-5.6-luna","inputTokens":20347,"outputTokens":61,"cacheReadTokens":0,"cacheWriteTokens":20344,"reasoningTokens":40,"cost":1.0,"accounting":{"sourceSessionId":"2b227434","sequence":1}}}}
+"#,
+    );
+
+    let report = discover(&tree.paths(&["copilot"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::CopilotCliJsonl);
+    assert_eq!(report.sources[0].session, "2b227434");
+}
+
+#[test]
+fn copilot_cli_session_without_usage_is_not_admitted() {
+    let tree = Tree::new();
+    tree.file(
+        ".copilot/session-state/empty/events.jsonl",
+        br#"{"type":"assistant.turn_start","timestamp":"2026-10-24T15:36:45.000Z"}
+"#,
+    );
+
+    let report = discover(&tree.paths(&["copilot"])).unwrap();
+    assert!(report.sources.is_empty());
+}
+
+#[test]
 fn jcode_attaches_the_sibling_journal_as_a_companion() {
     let tree = Tree::new();
     tree.file(

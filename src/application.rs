@@ -1183,6 +1183,8 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::ClineTaskJson => "cline",
         SourceFormat::KiloTaskJson => "kilo",
         SourceFormat::CopilotChatSessionJsonl => "copilot",
+        SourceFormat::CopilotCliJsonl => "copilot",
+        SourceFormat::KiroSqlite => "kiro",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",
         SourceFormat::ReasonixJsonl => "reasonix",

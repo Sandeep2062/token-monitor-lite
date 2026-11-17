@@ -15,6 +15,7 @@ use crate::parsers::jsonl::{
     JsonlCursor, JsonlFramer, MAX_BATCH_BYTES, MAX_RECORD_BYTES, SourceStamp,
 };
 use crate::parsers::kilo::KiloReader;
+use crate::parsers::kiro::KiroReader;
 use crate::parsers::mimo::{self, MimoReader};
 use crate::parsers::openclaw::OpenClawReader;
 use crate::parsers::opencode::{
@@ -617,6 +618,24 @@ impl HermesAdapter {
     }
 }
 
+pub struct KiroSqliteAdapter {
+    path: PathBuf,
+}
+
+impl KiroSqliteAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_kiro_sqlite(&self.path)
+    }
+}
+
 pub struct OpenClawAdapter {
     path: PathBuf,
 }
@@ -654,6 +673,7 @@ pub enum InputAdapterStatus {
     AmpJson,
     DroidJson,
     KiroJson,
+    KiroSqlite,
     PromaJsonl,
     CopilotJsonl,
     CodeBuddyLog,
@@ -706,6 +726,7 @@ pub(crate) enum SqliteInputData {
     Devin(Arc<[ResponseUsage]>),
     Goose(Arc<[ResponseUsage]>),
     Hermes(Arc<[ResponseUsage]>),
+    KiroSqlite(Arc<[ResponseUsage]>),
     OpenClaw(Arc<[ResponseUsage]>),
     Zed(Arc<[ResponseUsage]>),
     WorkBuddySqlite(Arc<[ResponseUsage]>),
@@ -851,6 +872,7 @@ pub enum SourceInput {
     Devin(DevinAdapter),
     Goose(GooseAdapter),
     Hermes(HermesAdapter),
+    KiroSqlite(KiroSqliteAdapter),
     OpenClaw(OpenClawAdapter),
     Zed(ZedAdapter),
     WorkBuddySqlite(WorkBuddySqliteAdapter),
@@ -885,6 +907,7 @@ impl SourceInput {
             SourceFormat::DevinSqlite => Self::Devin(DevinAdapter::new(path)),
             SourceFormat::GooseSqlite => Self::Goose(GooseAdapter::new(path)),
             SourceFormat::HermesSqlite => Self::Hermes(HermesAdapter::new(path)),
+            SourceFormat::KiroSqlite => Self::KiroSqlite(KiroSqliteAdapter::new(path)),
             SourceFormat::OpenClawSqlite => Self::OpenClaw(OpenClawAdapter::new(path)),
             SourceFormat::ZedSqlite => Self::Zed(ZedAdapter::new(path)),
             SourceFormat::WorkBuddySqlite => {
@@ -956,7 +979,9 @@ impl SourceInput {
             | SourceFormat::KiloTaskJson => Self::roocode(path),
             // The chat-session log is line-delimited: one operation per line,
             // which is what lets a long session be read incrementally.
-            SourceFormat::CopilotChatSessionJsonl => Self::ordinary_jsonl(path),
+            SourceFormat::CopilotChatSessionJsonl | SourceFormat::CopilotCliJsonl => {
+                Self::ordinary_jsonl(path)
+            }
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -1193,6 +1218,7 @@ impl SourceInput {
             Self::Devin(_) => InputAdapterStatus::DevinSqlite,
             Self::Goose(_) => InputAdapterStatus::GooseSqlite,
             Self::Hermes(_) => InputAdapterStatus::HermesSqlite,
+            Self::KiroSqlite(_) => InputAdapterStatus::KiroSqlite,
             Self::OpenClaw(_) => InputAdapterStatus::OpenClawSqlite,
             Self::Zed(_) => InputAdapterStatus::ZedSqlite,
             Self::WorkBuddySqlite(_) => InputAdapterStatus::WorkBuddySqlite,
@@ -1245,6 +1271,7 @@ impl SourceInput {
             | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::KiroSqlite(_)
             | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
@@ -1297,6 +1324,7 @@ impl SourceInput {
             | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::KiroSqlite(_)
             | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
@@ -1324,6 +1352,7 @@ impl SourceInput {
             Self::Devin(adapter) => Ok(Some(SqliteInputData::Devin(adapter.read()?))),
             Self::Goose(adapter) => Ok(Some(SqliteInputData::Goose(adapter.read()?))),
             Self::Hermes(adapter) => Ok(Some(SqliteInputData::Hermes(adapter.read()?))),
+            Self::KiroSqlite(adapter) => Ok(Some(SqliteInputData::KiroSqlite(adapter.read()?))),
             Self::OpenClaw(adapter) => Ok(Some(SqliteInputData::OpenClaw(adapter.read()?))),
             Self::Zed(adapter) => Ok(Some(SqliteInputData::Zed(adapter.read()?))),
             Self::WorkBuddySqlite(adapter) => {
@@ -1411,6 +1440,7 @@ impl SourceInput {
             Self::Devin(adapter) => Some(adapter.path()),
             Self::Goose(adapter) => Some(adapter.path()),
             Self::Hermes(adapter) => Some(adapter.path()),
+            Self::KiroSqlite(adapter) => Some(adapter.path()),
             Self::OpenClaw(adapter) => Some(adapter.path()),
             Self::Zed(adapter) => Some(adapter.path()),
             Self::WorkBuddySqlite(adapter) => Some(adapter.path()),
@@ -1562,6 +1592,7 @@ impl SourceInput {
             | Self::Devin(_)
             | Self::Goose(_)
             | Self::Hermes(_)
+            | Self::KiroSqlite(_)
             | Self::OpenClaw(_)
             | Self::Zed(_)
             | Self::WorkBuddySqlite(_)
@@ -2937,6 +2968,68 @@ fn read_hermes(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
         snapshot.verify(path)?;
         Ok(Arc::from(reader.snapshot()))
     })
+}
+
+/// Read Kiro's SQLite conversation store.
+///
+/// `conversations_v2` holds one row per conversation: `key` is the working
+/// directory, `conversation_id` the conversation, and `value` a JSON blob whose
+/// `session_state` is the **same document shape** the CLI writes to
+/// `~/.kiro/sessions/cli/<session>.json`. The verified CLI parser therefore
+/// reads it unchanged, with the row's `conversation_id` standing in for the
+/// session id and `updated_at` as the timestamp fallback.
+///
+/// Only explicit per-turn counters produce rows. Kiro's Auto agent persists zero
+/// counters, and this reader does **not** estimate from
+/// `context_usage_percentage`: an estimate is indistinguishable from a measured
+/// count downstream. A conversation with no counters therefore contributes
+/// nothing, which is a visible shortfall rather than a fabricated total.
+fn read_kiro_sqlite(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+    // The legacy `conversations` table is `(key, value)` with no per-conversation
+    // identity column, so its rows cannot be attributed to a session. It is a
+    // visible unsupported shape rather than a silent zero.
+    if table_columns(&transaction, "conversations_v2")?.is_none() {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    require_columns(
+        &transaction,
+        "conversations_v2",
+        &["key", "conversation_id", "value", "updated_at"],
+    )?;
+    let modified = source_modified_ms(path);
+    let mut responses: Vec<ResponseUsage> = Vec::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut statement = transaction.prepare(
+            "SELECT conversation_id, value, updated_at FROM conversations_v2
+             ORDER BY key, conversation_id LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = statement.query(params![SQLITE_PAGE_ROWS, offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            page_rows += 1;
+            let conversation_id: String = row.get(0)?;
+            let value: Option<String> = row.get(1)?;
+            let updated_at: Option<i64> = row.get(2)?;
+            let Some(value) = value else { continue };
+            let mut reader =
+                KiroReader::new(conversation_id).with_fallback_timestamp(updated_at.or(modified));
+            // A blob that is not a Kiro session state carries no usage.
+            if reader.ingest(value.as_bytes()).is_err() {
+                continue;
+            }
+            responses.extend(reader.snapshot());
+        }
+        if page_rows < SQLITE_PAGE_ROWS as usize {
+            break;
+        }
+        offset += SQLITE_PAGE_ROWS;
+    }
+    drop(transaction);
+    snapshot.verify(path)?;
+    Ok(Arc::from(responses))
 }
 
 fn read_hermes_rows(

@@ -7,9 +7,10 @@ use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
     AntigravitySqliteAdapter, BbAdapter, CatpawAdapter, CherrystudioAdapter,
     CodexLocalUsageAdapter, DevinAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
-    MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, QodercnAdapter,
-    SessionArchiveAdapter, SourceInput, SqliteSourceError, UnslothAdapter, WorkBuddySqliteAdapter,
-    ZcodeAdapter, ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    KiroSqliteAdapter, MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter,
+    QodercnAdapter, SessionArchiveAdapter, SourceInput, SqliteSourceError, UnslothAdapter,
+    WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter, has_zstd_suffix, is_compressed_source_path,
+    is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -942,6 +943,7 @@ fn vscode_user_roots(inputs: &HostPaths) -> Vec<PathBuf> {
 /// Collect `<root>/<taskId>/ui_messages.json` for the Cline family.
 fn collect_task_log_candidates(
     root: &Path,
+    file_name: &str,
     depth: usize,
     inspected: &mut usize,
     candidates: &mut Vec<PathBuf>,
@@ -979,10 +981,10 @@ fn collect_task_log_candidates(
         if !child_metadata.file_type().is_dir() {
             continue;
         }
-        // Only the task's own message log is usage. `api_conversation_history`
-        // is the provider-facing conversation and carries no counters, and the
-        // sibling metadata files carry none either.
-        let candidate = child.join("ui_messages.json");
+        // Only one file in a task or session directory is usage. For the Cline
+        // family that is the message log; `api_conversation_history` is the
+        // provider-facing conversation and carries no counters.
+        let candidate = child.join(file_name);
         match fs::symlink_metadata(&candidate) {
             Ok(metadata) if metadata.file_type().is_file() => {
                 *inspected += 1;
@@ -2131,6 +2133,7 @@ fn discover_sources_with_id(
                     .join("tasks");
                 collect_task_log_candidates(
                     &root,
+                    "ui_messages.json",
                     0,
                     &mut inspected,
                     &mut candidates,
@@ -3595,6 +3598,59 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "copilot" {
+            // The Copilot CLI's own session log: one directory per session with
+            // an `events.jsonl`, in which `session.usage_record` carries the
+            // authoritative counters.
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            collect_task_log_candidates(
+                &inputs.home.join(".copilot").join("session-state"),
+                "events.jsonl",
+                0,
+                &mut inspected,
+                &mut candidates,
+                &mut overflow,
+            )?;
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::CopilotCliJsonl,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "copilot",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::CopilotCliJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::CopilotCliJsonl,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+        }
         if client == "augment" {
             // Auggie writes one session snapshot per session at
             // `~/.augment/sessions/<sessionId>.json`.
@@ -4146,6 +4202,66 @@ fn discover_sources_with_id(
                 }
             }
             continue;
+        }
+        if client == "kiro" {
+            // The CLI's SQLite conversation store beside the session files.
+            // Reading it is not double counting: aggregation drops a database
+            // conversation already reported from a session file.
+            let mut roots = Vec::new();
+            let data_base = inputs
+                .xdg_data_home
+                .clone()
+                .unwrap_or_else(|| join_many(inputs.platform, &inputs.home, &[".local", "share"]));
+            roots.push(join_many(
+                inputs.platform,
+                &data_base,
+                &["kiro-cli", "data.sqlite3"],
+            ));
+            roots.push(join(
+                inputs.platform,
+                &inputs.home,
+                "Library/Application Support/kiro-cli/data.sqlite3",
+            ));
+            if let Some(app_data) = inputs.app_data.as_deref() {
+                roots.push(join_many(
+                    inputs.platform,
+                    app_data,
+                    &["kiro-cli", "data.sqlite3"],
+                ));
+            }
+            for (ordinal, path) in roots.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                if !metadata.file_type().is_file() {
+                    continue;
+                }
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                match KiroSqliteAdapter::new(&path).read() {
+                    Ok(rows) if !rows.is_empty() => {
+                        let source_id = source_id_for(SourceFormat::KiroSqlite, &path);
+                        if admitted_ids.insert(source_id) {
+                            sources.push(DiscoveredSource {
+                                source_id,
+                                format: SourceFormat::KiroSqlite,
+                                session: "kiro".to_owned(),
+                                path,
+                            });
+                        } else {
+                            notices.push(DiscoveryNotice::SourceIdentityCollision);
+                        }
+                    }
+                    _ => notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "kiro",
+                        ordinal,
+                    }),
+                }
+            }
         }
         let (client_id, format, roots) = match client.as_str() {
             "claude" => (
@@ -4769,7 +4885,20 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .map(str::to_owned)
             .ok_or(());
     }
-    if format == SourceFormat::CopilotChatSessionJsonl {
+    if format == SourceFormat::CopilotCliJsonl {
+        // `session-state/<sessionId>/events.jsonl`.
+        return path
+            .parent()
+            .and_then(|directory| directory.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    if matches!(
+        format,
+        SourceFormat::CopilotChatSessionJsonl | SourceFormat::CopilotCliJsonl
+    ) {
         // `<sessionId>.jsonl`: the session id is the file stem, and the
         // workspace hash above it is not part of the session identity.
         return path
@@ -4818,7 +4947,9 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
                 SourceFormat::RooCodeJson
                 | SourceFormat::ClineTaskJson
                 | SourceFormat::KiloTaskJson
-                | SourceFormat::CopilotChatSessionJsonl => None,
+                | SourceFormat::CopilotChatSessionJsonl
+                | SourceFormat::CopilotCliJsonl
+                | SourceFormat::KiroSqlite => None,
                 SourceFormat::BbSqlite => None,
                 SourceFormat::CodebuffJson => None,
                 SourceFormat::FreebuffJson => None,

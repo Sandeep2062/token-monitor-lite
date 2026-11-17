@@ -59,11 +59,10 @@ Token Monitor 0.88.0 is cloned into `token-monitor/` as a **reference only** —
 
 Known remaining differences from `SOURCE_MARKERS`, left for whoever picks this up:
 
-- **`kiro`'s `globalStorage/kiro.kiroagent`** lane is the only `SOURCE_MARKERS` root still without a reader. Its shape is not documented anywhere in the reference and Kiro is not installed on the development host, so a reader would be a guess; see the note below.
-- **`kiro`'s `~/.local/share/kiro-cli/data.sqlite3`** lane, a second store beside the `~/.kiro/sessions` tree it already reads.
+- **`kiro`'s `globalStorage/kiro.kiroagent`** lane is the only `SOURCE_MARKERS` root still without a reader. No published source documents the store's shape and Kiro is not installed on the development host, so a reader would be a guess.
 - Two extra `openclaw` homes and `kimi`'s `.kimi-code` lane **were** missing and have been fixed; see commit `5289a56`.
 
-The other three `globalStorage` lanes are **implemented**. The Cline-family task log is read for `roocode`, `cline` and `kilo`, and Copilot's chat-session operation log is read from both `workspaceStorage/*/chatSessions` and `globalStorage/emptyWindowChatSessions`. None of them needed cross-file grouping after all — each is a single file per task or per session.
+Every other `SOURCE_MARKERS` root is now read. The Cline-family task log is read for `roocode`, `cline` and `kilo`; Copilot contributes three lanes (OTel JSONL, the VS Code chat-session operation log, and the CLI's `session-state` event log); and `kiro-cli/data.sqlite3` is read alongside the `~/.kiro/sessions` tree, with database conversations already reported from a session file dropped so the two cannot double count.
 
 ### Readers that are deliberately out of scope
 

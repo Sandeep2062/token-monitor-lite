@@ -216,6 +216,31 @@ VS Code stores each chat session as an append-only operation log: `<User>/worksp
 | `session-store.db` (`sessions`, `turns`) | not read | Text only, no counters. | No source slot. |
 | Operation before the document, or unknown `kind` | ignored | Nothing to place it against. | No ownership change. |
 
+## Copilot CLI session matrix
+
+The Copilot CLI appends one event log per session at `<home>/.copilot/session-state/<sessionId>/events.jsonl`. The billed event is `session.usage_record`.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `session.usage_record` with counters | supported | `inputTokens` is **gross** (`input + cache_read + cache_write`, checked against the record's own `tokenDetails`); cache is subtracted once. `outputTokens` is already disjoint from `reasoningTokens`, so reasoning is not subtracted from output. Model is `model`, timestamp is the event's ISO-8601 `timestamp`. | The `session-state` directory name; the row identity is `accounting.sourceSessionId` + `accounting.sequence`, so a fork cannot collide with its parent. |
+| `cost` | not a cost | A constant premium-request count, and `tokenDetails` prices are GitHub AI Units. No currency amount is reported. | — |
+| `session.usage_checkpoint` | ignored | Session totals (`totalNanoAiu`, `totalPremiumRequests`), not a call. Counting it would double count. | No ownership change. |
+| Any other event (`assistant.message`, `tool.execution_*`, hooks) | ignored non-usage | Conversation plumbing, no billing counters. | No ownership change. |
+| A record whose counters are all zero | ignored non-usage | Bills nothing, so a zero row would be indistinguishable from a measured one. | No ownership change. |
+| Cache read + cache write greater than `inputTokens` | declined record | Refused rather than clamped. | Prior rows retained; `declined_records` increments. |
+| `~/.copilot/otel` **and** `session-state` both present | known limitation | The two lanes describe the same calls with no shared identifier — this one keys on `accounting.usageId`, the OTel lane on `gen_ai.response.id` — so cross-lane merging cannot join them and enabling both double counts. | Documented rather than silently guessed at. |
+
+## Kiro SQLite matrix
+
+`kiro-cli/data.sqlite3` holds one row per conversation in `conversations_v2` (`key` is the working directory, `conversation_id` the conversation, `value` a JSON blob). The blob's `session_state` is the **same document shape** the CLI writes to a session file, so the verified CLI parser reads it unchanged.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `conversations_v2` row whose `value` carries explicit per-turn counters | supported | Same normalization as the CLI session document. Counter spellings `input_token_count`/`input_tokens` and `cache_*_input_token_count`/`cache_*_tokens` are both accepted; each name is unambiguous, so this cannot invent a count. Timestamp falls back to the row's `updated_at`. | `conversation_id`, with `updated_at` as the timestamp fallback. A conversation already reported from a session file is dropped so the two lanes cannot double count. |
+| `conversations` (legacy) | unsupported | `(key, value)` with no per-conversation identity, so its rows cannot be attributed to a session. Visible unsupported, not a silent zero. | No source slot. |
+| A turn with zero counters (the Auto agent) | unmeasured | Not estimated from `context_usage_percentage`: an estimate is indistinguishable from a measured count downstream. Reported as a shortfall, never fabricated. | No ownership change. |
+| `globalStorage/kiro.kiroagent` snapshots | not implemented | No published source documents this store's shape and Kiro is not installed on the development host, so a reader would be a guess. | No source slot. |
+
 ## Amp thread matrix
 
 Amp threads live under `<XDG_DATA_HOME or home/.local/share>/amp/threads` and the tokscale sync cache `<TOKSCALE_CONFIG_DIR or home/.config/tokscale>/amp-cache/threads`. The native reader treats the usage ledger as authoritative when it yields token rows and otherwise falls back to assistant per-message usage. It does not merge the two sources.

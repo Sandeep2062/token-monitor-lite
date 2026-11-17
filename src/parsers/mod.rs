@@ -14,6 +14,7 @@ pub mod codex;
 pub mod commandcode;
 pub mod copilot;
 pub mod copilot_chat;
+pub mod copilot_cli;
 pub mod cursor;
 pub mod devin;
 pub mod droid;

@@ -148,9 +148,11 @@ fn every_parser_module_is_reachable_from_a_catalog_client() {
         expected.insert(alias.to_owned());
     }
     // A second reader for a client whose original module keeps the primary
-    // name. Copilot is read both from its OTel JSONL trace (`copilot`) and from
-    // VS Code's chat-session operation log (`copilot_chat`).
+    // name. Copilot is read from three lanes: its OTel JSONL trace (`copilot`),
+    // VS Code's chat-session operation log (`copilot_chat`), and the CLI's
+    // session-state event log (`copilot_cli`).
     expected.insert("copilot_chat".to_owned());
+    expected.insert("copilot_cli".to_owned());
 
     let declared = read("src/parsers/mod.rs");
     let declared_modules: BTreeSet<String> = declared

@@ -659,6 +659,61 @@ fn supplemental_ledger_rows_for_native_threads_are_ignored() {
 }
 
 #[test]
+fn kiro_sqlite_conversations_already_read_from_a_session_file_are_ignored() {
+    let mut ledger = CanonicalLedger::new(timezone("UTC"));
+    let mut native = (*source(
+        "kiro-session.json",
+        1,
+        vec![usage(
+            "kiro",
+            "conv-native",
+            "auto",
+            "2026-11-09T10:00:00Z",
+            10,
+            Some("conv-native:0"),
+        )],
+    ))
+    .clone();
+    native.format = SourceFormat::KiroJson;
+    ledger.replace_source(Arc::new(native)).unwrap();
+
+    let mut database = (*source(
+        "data.sqlite3",
+        1,
+        vec![
+            // The same conversation the session file already reported. Its
+            // timestamp differs deliberately: if the database row were admitted
+            // it would conflict on a shared identity, so this test fails loudly
+            // rather than double counting.
+            usage(
+                "kiro",
+                "conv-native",
+                "auto",
+                "2026-11-09T10:00:01Z",
+                10,
+                Some("conv-native:0"),
+            ),
+            // A conversation with no session file is the reason the lane exists.
+            usage(
+                "kiro",
+                "conv-db-only",
+                "auto",
+                "2026-11-09T10:00:02Z",
+                7,
+                Some("conv-db-only:0"),
+            ),
+        ],
+    ))
+    .clone();
+    database.format = SourceFormat::KiroSqlite;
+    ledger.replace_source(Arc::new(database)).unwrap();
+
+    let snapshot = ledger.last_good();
+    assert_eq!(snapshot.totals.input, 17);
+    assert_eq!(snapshot.session_models.len(), 2);
+}
+
+#[test]
 fn source_capacity_failure_keeps_last_good() {
     let mut ledger = CanonicalLedger::new(timezone("UTC"));
     for index in 0..MAX_SOURCES {

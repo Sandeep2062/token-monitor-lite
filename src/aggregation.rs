@@ -388,6 +388,13 @@ fn aggregate_sources(
         .collect();
     let mut canonical: Vec<CanonicalRow> = Vec::with_capacity(observed_rows);
     let mut stable: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let native_kiro_sessions: BTreeSet<String> = sources
+        .values()
+        .filter(|source| source.format == SourceFormat::KiroJson)
+        .flat_map(|source| source.rows.iter())
+        .filter(|row| row.key.client == "kiro")
+        .map(|row| row.key.session.clone())
+        .collect();
     let native_codex_sessions: BTreeSet<String> = sources
         .values()
         .filter(|source| source.format == SourceFormat::CodexCli)
@@ -404,6 +411,15 @@ fn aggregate_sources(
             // an exact native rollout is ignored, never added.
             if source.format == SourceFormat::CodexLocalUsageSqlite
                 && native_codex_sessions.contains(&usage.key.session)
+            {
+                continue;
+            }
+            // The same relationship for Kiro: `data.sqlite3` holds the very
+            // conversations the CLI session files describe, and the files carry
+            // the richer document. A conversation already reported from a file
+            // is not counted again from the database.
+            if source.format == SourceFormat::KiroSqlite
+                && native_kiro_sessions.contains(&usage.key.session)
             {
                 continue;
             }

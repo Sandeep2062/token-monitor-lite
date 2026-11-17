@@ -181,8 +181,11 @@ Implemented, in `tests/source_inputs.rs`, `tests/jcode.rs` and `tests/discovery.
    **done for `cline`, `kilo` and `copilot`, and none of them needed this.** The Cline
    family's task log is one file per task, so `src/parsers/roocode.rs` serves `roocode`,
    `cline` and `kilo` with the client as a parameter. Copilot's chat session is one
-   operation log per session, read by `src/parsers/copilot_chat.rs`. `kiro`'s lane has no
-   verifiable shape and stays unread.
+   operation log per session (`src/parsers/copilot_chat.rs`) and its CLI session state is
+   one event log per session (`src/parsers/copilot_cli.rs`). `kiro`'s
+   `globalStorage/kiro.kiroagent` lane has no documented shape and stays unread, but its
+   SQLite store is now read and needs **no** grouping either — its conversations are
+   dropped when a session file already reported them.
 4. `prime-agent` fork reversal — the hardest of them, because the pairing is a
    relationship between two *sources* rather than two files in one directory, so it may
    need identity matching beyond what `companions` expresses.

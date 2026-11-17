@@ -1512,6 +1512,8 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::ClineTaskJson => "Cline",
         SourceFormat::KiloTaskJson => "Kilo Code",
         SourceFormat::CopilotChatSessionJsonl => "Copilot Chat",
+        SourceFormat::CopilotCliJsonl => "Copilot CLI",
+        SourceFormat::KiroSqlite => "Kiro",
         SourceFormat::DroidJson => "Droid",
         SourceFormat::KimiJsonl => "Kimi CLI",
         SourceFormat::CommandCodeJsonl => "Command Code",
