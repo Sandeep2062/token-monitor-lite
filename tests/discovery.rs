@@ -1925,6 +1925,43 @@ fn goose_database_uses_the_first_existing_or_authoritative_override() {
 }
 
 #[test]
+fn openclaw_reads_the_renamed_home_directories() {
+    // The tool was renamed twice; an older install keeps its history under a
+    // previous home directory, and missing it would silently drop that usage.
+    for home in [".openclaw", ".clawdbot", ".moltbot", ".moldbot"] {
+        let tree = Tree::new();
+        tree.file(
+            &format!("{home}/agents/main/sessions/sess-a.jsonl"),
+            br#"{"type":"message","id":"m1","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":100,"output":50},"timestamp":1700000000000}}
+"#,
+        );
+
+        let report = discover(&tree.paths(&["openclaw"])).unwrap();
+        assert_eq!(report.sources.len(), 1, "home {home}");
+    }
+}
+
+#[test]
+fn kimi_reads_the_coding_build_home() {
+    let tree = Tree::new();
+    tree.file(
+        ".kimi-code/sessions/group-a/session-a/wire.jsonl",
+        br#"{"type":"metadata","protocol_version":"1.3"}
+{"timestamp":1770983426.0,"message":{"type":"StatusUpdate","payload":{"token_usage":{"input_other":10,"output":5},"message_id":"m1"}}}
+"#,
+    );
+
+    let report = discover(&tree.paths(&["kimi"])).unwrap();
+    assert!(
+        report
+            .sources
+            .iter()
+            .any(|source| source.format == SourceFormat::KimiJsonl),
+        "the .kimi-code lane must be discovered"
+    );
+}
+
+#[test]
 fn openclaw_transcripts_and_agent_stores_are_discovered_under_agents() {
     let tree = Tree::new();
     tree.file(

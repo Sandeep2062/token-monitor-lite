@@ -3600,11 +3600,21 @@ fn discover_sources_with_id(
             continue;
         }
         if client == "openclaw" {
-            let root = join_many(inputs.platform, &inputs.home, &[".openclaw", "agents"]);
+            // The tool has been renamed twice, so an older install keeps its
+            // history under the previous home directory. All four are read.
             let mut candidates = Vec::new();
             let mut inspected = 0;
             let mut overflow = false;
-            collect_openclaw_candidates(&root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            for home in [".openclaw", ".clawdbot", ".moltbot", ".moldbot"] {
+                let root = join_many(inputs.platform, &inputs.home, &[home, "agents"]);
+                collect_openclaw_candidates(
+                    &root,
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
             if overflow {
                 notices.push(DiscoveryNotice::SourceScanLimitReached);
                 continue;
@@ -3926,11 +3936,12 @@ fn discover_sources_with_id(
             "kimi" => (
                 "kimi",
                 SourceFormat::KimiJsonl,
-                vec![join_many(
-                    inputs.platform,
-                    &inputs.home,
-                    &[".kimi", "sessions"],
-                )],
+                vec![
+                    join_many(inputs.platform, &inputs.home, &[".kimi", "sessions"]),
+                    // The coding-focused build keeps its sessions in a
+                    // sibling home directory.
+                    join_many(inputs.platform, &inputs.home, &[".kimi-code", "sessions"]),
+                ],
             ),
             _ => {
                 notices.push(DiscoveryNotice::UnsupportedClient {
