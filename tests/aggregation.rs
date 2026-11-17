@@ -714,6 +714,159 @@ fn kiro_sqlite_conversations_already_read_from_a_session_file_are_ignored() {
 }
 
 #[test]
+fn antigravity_database_rows_yield_to_the_cache_lane() {
+    // Antigravity describes one conversation in two stores with different
+    // counters, so counting both would conflict. The normalized cache wins
+    // because it is the lane that knows when each call happened.
+    let mut ledger = CanonicalLedger::new(timezone("UTC"));
+    let mut cache = (*source(
+        "antigravity-cache.jsonl",
+        1,
+        vec![
+            usage(
+                "antigravity",
+                "conv-1",
+                "gemini",
+                "2026-11-09T10:00:00Z",
+                10,
+                Some("antigravity:conv-1:r1"),
+            ),
+            usage(
+                "antigravity",
+                "conv-2",
+                "gemini",
+                "2026-11-09T10:00:01Z",
+                5,
+                Some("antigravity:conv-2:r1"),
+            ),
+        ],
+    ))
+    .clone();
+    cache.format = SourceFormat::AntigravityJsonl;
+    ledger.replace_source(Arc::new(cache)).unwrap();
+
+    let mut database = (*source(
+        "conversations.db",
+        1,
+        vec![
+            // Same conversation and identity as the cache row, different
+            // counters and timestamp: admitting it would conflict.
+            usage(
+                "antigravity",
+                "conv-1",
+                "gemini",
+                "2026-11-09T11:00:00Z",
+                99,
+                Some("antigravity:conv-1:r1"),
+            ),
+            // A conversation only the database knows about is still counted.
+            usage(
+                "antigravity",
+                "conv-3",
+                "gemini",
+                "2026-11-09T11:00:01Z",
+                7,
+                Some("antigravity:conv-3:r1"),
+            ),
+        ],
+    ))
+    .clone();
+    database.format = SourceFormat::AntigravitySqlite;
+    ledger.replace_source(Arc::new(database)).unwrap();
+
+    let snapshot = ledger.last_good();
+    assert_eq!(snapshot.totals.input, 10 + 5 + 7);
+    assert_eq!(snapshot.session_models.len(), 3);
+}
+
+#[test]
+fn codex_copied_cumulative_totals_coalesce_into_one_observation() {
+    // A forked rollout copies its parent's running totals into its own file,
+    // under the parent's scope, at a later time and tagged to the subagent.
+    // That is one observation, not two.
+    let mut ledger = CanonicalLedger::new(timezone("UTC"));
+    let key = "codex:token_count-total:thread-parent:openai:gpt-5:50:0:0:0";
+
+    let mut parent_row = usage(
+        "codex",
+        "thread-parent",
+        "gpt-5",
+        "2026-11-09T10:00:00Z",
+        50,
+        Some(key),
+    );
+    parent_row.agent = Some("Codex".to_owned());
+    let mut parent = (*source("rollout-parent.jsonl", 1, vec![parent_row])).clone();
+    parent.format = SourceFormat::CodexCli;
+    ledger.replace_source(Arc::new(parent)).unwrap();
+
+    let mut copied_row = usage(
+        "codex",
+        "thread-fork",
+        "gpt-5",
+        "2026-11-09T10:05:00Z",
+        50,
+        Some(key),
+    );
+    copied_row.agent = Some("Codex Subagent".to_owned());
+    let mut fork = (*source("rollout-fork.jsonl", 1, vec![copied_row])).clone();
+    fork.format = SourceFormat::CodexCli;
+    ledger.replace_source(Arc::new(fork)).unwrap();
+
+    let snapshot = ledger.last_good();
+    assert_eq!(snapshot.totals.input, 50);
+    assert_eq!(snapshot.session_models.len(), 1);
+    // The owning session and the earlier time are kept.
+    assert_eq!(snapshot.session_models[0].key.session, "thread-parent");
+    assert_eq!(
+        snapshot.session_models[0].first_seen_ms,
+        timestamp("2026-11-09T10:00:00Z")
+    );
+}
+
+#[test]
+fn an_identity_with_different_counters_is_still_a_conflict() {
+    // The cumulative-total tolerance must not become a general excuse to merge
+    // rows that disagree about how many tokens were used.
+    let mut ledger = CanonicalLedger::new(timezone("UTC"));
+    let key = "codex:token_count-total:thread-a:openai:gpt-5:50:0:0:0";
+    let mut first = (*source(
+        "first.jsonl",
+        1,
+        vec![usage(
+            "codex",
+            "thread-a",
+            "gpt-5",
+            "2026-11-09T10:00:00Z",
+            50,
+            Some(key),
+        )],
+    ))
+    .clone();
+    first.format = SourceFormat::CodexCli;
+    ledger.replace_source(Arc::new(first)).unwrap();
+
+    let mut second = (*source(
+        "second.jsonl",
+        1,
+        vec![usage(
+            "codex",
+            "thread-a",
+            "gpt-5",
+            "2026-11-09T10:00:00Z",
+            51,
+            Some(key),
+        )],
+    ))
+    .clone();
+    second.format = SourceFormat::CodexCli;
+    assert_eq!(
+        ledger.replace_source(Arc::new(second)).unwrap_err(),
+        AggregationError::ConflictingOverlap
+    );
+}
+
+#[test]
 fn source_capacity_failure_keeps_last_good() {
     let mut ledger = CanonicalLedger::new(timezone("UTC"));
     for index in 0..MAX_SOURCES {

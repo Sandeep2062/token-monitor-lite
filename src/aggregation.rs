@@ -388,6 +388,21 @@ fn aggregate_sources(
         .collect();
     let mut canonical: Vec<CanonicalRow> = Vec::with_capacity(observed_rows);
     let mut stable: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // Antigravity describes the same conversations twice: a normalized usage
+    // cache (`antigravity-cache`, one JSONL per session with real per-record
+    // timestamps) and the native conversation database (`conversations/<id>.db`,
+    // whose per-step timestamps the native reader does not implement). They
+    // carry the same response identities with different counters, so both
+    // cannot be counted. The cache lane wins because it is the one that knows
+    // when each call happened, and the choice is made here rather than by
+    // whichever source happened to be committed first.
+    let antigravity_cache_sessions: BTreeSet<String> = sources
+        .values()
+        .filter(|source| source.format == SourceFormat::AntigravityJsonl)
+        .flat_map(|source| source.rows.iter())
+        .filter(|row| row.key.client == "antigravity")
+        .map(|row| row.key.session.clone())
+        .collect();
     let native_kiro_sessions: BTreeSet<String> = sources
         .values()
         .filter(|source| source.format == SourceFormat::KiroJson)
@@ -420,6 +435,14 @@ fn aggregate_sources(
             // is not counted again from the database.
             if source.format == SourceFormat::KiroSqlite
                 && native_kiro_sessions.contains(&usage.key.session)
+            {
+                continue;
+            }
+            // The Antigravity database row for a conversation the normalized
+            // cache already reported is the same call described a second time,
+            // with the worse timestamp, so it is dropped rather than conflicts.
+            if source.format == SourceFormat::AntigravitySqlite
+                && antigravity_cache_sessions.contains(&usage.key.session)
             {
                 continue;
             }
@@ -610,15 +633,55 @@ fn canonical_identity(source_id: SourceId, ordinal: usize, usage: &ResponseUsage
     )
 }
 
+/// Whether an identity denotes a running total rather than one request.
+///
+/// A cumulative-total identity deliberately leaves the time out of the key, so
+/// two rows carrying it are the same observation even when their timestamps
+/// differ.
+fn is_cumulative_total(identity: &Option<String>) -> bool {
+    identity
+        .as_deref()
+        .is_some_and(|identity| identity.starts_with("codex:token_count-total:"))
+}
+
 fn merge_overlap(
     existing: &mut ResponseUsage,
     candidate: &ResponseUsage,
 ) -> Result<(), AggregationError> {
     if existing.key.client != "claude" {
-        if existing != candidate {
-            return Err(AggregationError::ConflictingOverlap);
+        if existing == candidate {
+            return Ok(());
         }
-        return Ok(());
+        // A cumulative-total identity encodes the scope and the full counter
+        // tuple on purpose and leaves the time out of the key: the same totals
+        // observed again is the same observation, not a second call. Codex
+        // writes exactly that when a forked rollout copies its parent's history,
+        // and the copy carries a later timestamp than the record it copied. The
+        // earliest time is the observation's time, and the choice is
+        // deterministic regardless of source order.
+        if is_cumulative_total(&existing.dedup_key) && is_cumulative_total(&candidate.dedup_key) {
+            let mut left = existing.clone();
+            let mut right = candidate.clone();
+            // The identity already proves the scope and the counters match. A
+            // forked rollout copies its parent's totals into a file of its own,
+            // so the only legitimate differences are when the copy was written,
+            // which session's file carried it, and which agent took the copy.
+            left.timestamp_ms = 0;
+            right.timestamp_ms = 0;
+            left.key.session.clear();
+            right.key.session.clear();
+            left.agent = None;
+            right.agent = None;
+            if left == right {
+                // Keep the observation that happened first, which is the row in
+                // the session that owns the totals.
+                if candidate.timestamp_ms < existing.timestamp_ms {
+                    *existing = candidate.clone();
+                }
+                return Ok(());
+            }
+        }
+        return Err(AggregationError::ConflictingOverlap);
     }
 
     if existing.key.client != candidate.key.client

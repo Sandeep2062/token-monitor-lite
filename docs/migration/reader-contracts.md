@@ -97,6 +97,7 @@ Opaque source IDs, never lexical paths, order provenance. Paths exist only in di
 | Supported headless Codex rollout | supported | Same state machine, with `Codex Headless` agent attribution retained outside secret/runtime content. | Declared session/thread. |
 | Non-usage `response_item`/`event_msg` kinds (messages, function calls/results, notices, plan updates) | ignored non-usage | May update only explicitly listed turn/activity gates; prompts, output, cwd, and tool content are never persisted. | No usage row. |
 | Supplemental ledger row proven to duplicate native rollout usage | ignored non-usage | Mark native-backed overlap; do not add it. | Exact native thread/response identity required. |
+| Copied cumulative-total row in a forked rollout: same scope and counters, later timestamp, carrying session, or `Codex Subagent` agent | supported, coalesced | A cumulative-total identity deliberately omits time, so rows that agree on scope and every counter are one observation. They collapse to the earliest observation, keeping that row's owning session and agent. | Counters, model, provider, service tier or cost disagreeing is still a visible conflict; the tolerance never merges rows that disagree about usage. |
 | Cost-only, unknown usage-like, malformed/inconsistent counter, unresolved model, unsupported fork/record, invalid UTF-8/JSON, oversized record, or cap breach | declined record, or visible unsupported on a cap/framing breach | An uninterpretable record is skipped and counted; a cap or framing breach still rejects the whole candidate. | Prior committed generation remains active. |
 
 ## OpenCode SQLite matrix
@@ -913,6 +914,8 @@ Pi, OMP and Senpi share one JSONL record layout under distinct roots: `<home>/.p
 | MiniMax Code | Captured `mcode exec --output-format stream-json` JSONL under `.minimax`/`.minimax-*`/`.mavis`/`.mavis-*`, `MINIMAX_DATA_DIR`/`MAVIS_DATA_DIR`, and the tokscale headless `mcode` roots | Assistant usage is buffered by turn and emitted only with a model-bearing `exec.result`; `exec.completed.result` supplies its own usage. Envelope identity is `session:turn:index:tokens`. | A capture with no model-bearing final result, local configuration guessing, desktop store inference, cost. |
 
 All five readers reject negative or non-integral counters, malformed required fields, missing explicit timestamps where the pinned reader requires one, and zero-token rows are ignored. File-mtime fallback applies only to Qwen, Muse and MiniMax Code, matching the pinned readers.
+
+Antigravity is the one client here that describes the same conversations in two stores, and the two disagree: the cache carries real per-record timestamps, while the native `conversations/*.db` lane decodes the same `responseId` identities with different counters and falls back to the file mtime because step timestamps are not implemented. Both cannot be counted, and which one committed first is not a decision. Aggregation therefore drops a database row for a conversation the cache already reported. A conversation only the database knows is still counted. Verified against a live host: 317 cache-backed conversations, zero aggregation conflicts, where the same host previously rejected the database lane for 24,424 colliding identities.
 
 ## Zed threads matrix
 
