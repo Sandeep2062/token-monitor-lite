@@ -239,7 +239,30 @@ The Copilot CLI appends one event log per session at `<home>/.copilot/session-st
 | `conversations_v2` row whose `value` carries explicit per-turn counters | supported | Same normalization as the CLI session document. Counter spellings `input_token_count`/`input_tokens` and `cache_*_input_token_count`/`cache_*_tokens` are both accepted; each name is unambiguous, so this cannot invent a count. Timestamp falls back to the row's `updated_at`. | `conversation_id`, with `updated_at` as the timestamp fallback. A conversation already reported from a session file is dropped so the two lanes cannot double count. |
 | `conversations` (legacy) | unsupported | `(key, value)` with no per-conversation identity, so its rows cannot be attributed to a session. Visible unsupported, not a silent zero. | No source slot. |
 | A turn with zero counters (the Auto agent) | unmeasured | Not estimated from `context_usage_percentage`: an estimate is indistinguishable from a measured count downstream. Reported as a shortfall, never fabricated. | No ownership change. |
-| `globalStorage/kiro.kiroagent` snapshots | not implemented | No published source documents this store's shape and Kiro is not installed on the development host, so a reader would be a guess. | No source slot. |
+| `globalStorage/kiro.kiroagent` snapshots | not implemented | Nothing published documents this store's shape and Kiro is not installed here; a reader would be a guess. See the credit-only note below. | No source slot. |
+
+### Kiro's two credit-only lanes, not implemented on purpose
+
+Kiro writes two further stores, and both report **credits**, not tokens:
+
+```
+~/.kiro/sessions/<workspace-key>/sess_<uuid>/session.json   status, createdAt, modelId, workspacePaths
+~/.kiro/sessions/<workspace-key>/sess_<uuid>/messages.jsonl  one record per turn
+```
+
+The usage record is a `usage_summary` turn:
+
+```json
+{"payload":{"type":"usage_summary",
+  "promptTurnSummaries":[{"unit":"credit","unitPlural":"credits","usage":18.5044}],
+  "elapsedTime":387160,"status":"success"}}
+```
+
+The pre-1.0 mirror is `globalStorage/kiro.kiroagent/<ws-hash>/<session-hash>/<execution-hash>`, whose `usageSummary[]` carries the same kind of per-response metering entry alongside `chatSessionId`, `startTime`/`endTime` and `status`.
+
+Neither store contains a single token counter. This reader's model is token-first: a row's `cost` is an annotation on a measured size. Emitting these turns would therefore produce rows with a real cost and **zero tokens**, which is indistinguishable from a measured zero in the token totals — the exact silent under-report this codebase refuses to create. They are left unread until there is a decision about how a cost-only observation should be represented, rather than guessed at here.
+
+Two secondary reasons the schemas above are deliberately not acted on yet: no Kiro install exists on this development host, so neither shape has been checked against a real file; and the window layout below `~/.kiro/sessions` overlaps the `cli/` tree this reader already reads, so a new lane needs the same "already reported from a session file" guard the SQLite lane uses.
 
 ## Amp thread matrix
 

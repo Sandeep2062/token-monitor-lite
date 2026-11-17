@@ -22,6 +22,12 @@
 //! is still a source in its own right, so the usage is counted once, from the
 //! file that actually recorded it.
 //!
+//! Because the aggregate is never emitted, nothing is double counted and there
+//! is nothing to reverse. The residual limitation is the opposite one: a child
+//! whose artifacts have been deleted while the parent's aggregate survives is
+//! not counted at all. That is a visible shortfall, preferred over reversing an
+//! aggregate this reader does not emit.
+//!
 //! # Delegation
 //!
 //! [`PiReader`] owns the format: the `title` header tolerance, the `session`

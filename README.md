@@ -59,10 +59,10 @@ Token Monitor 0.88.0 is cloned into `token-monitor/` as a **reference only** —
 
 Known remaining differences from `SOURCE_MARKERS`, left for whoever picks this up:
 
-- **`kiro`'s `globalStorage/kiro.kiroagent`** lane is the only `SOURCE_MARKERS` root still without a reader. No published source documents the store's shape and Kiro is not installed on the development host, so a reader would be a guess.
+- **`kiro`'s two credit-only stores**: the IDE/`--v3` window at `~/.kiro/sessions/<workspace>/sess_<uuid>/` and the pre-1.0 mirror under `globalStorage/kiro.kiroagent`. Both report **credits and no token counts** — the turn record is `{"payload":{"type":"usage_summary","promptTurnSummaries":[{"unit":"credit","usage":18.5}]}}`. A row with a real cost and zero tokens is indistinguishable from a measured zero in the token totals, so these are left unread rather than half-reported. The exact schemas are written down in [`docs/migration/reader-contracts.md`](docs/migration/reader-contracts.md) for whoever decides how a cost-only observation should be represented.
 - Two extra `openclaw` homes and `kimi`'s `.kimi-code` lane **were** missing and have been fixed; see commit `5289a56`.
 
-Every other `SOURCE_MARKERS` root is now read. The Cline-family task log is read for `roocode`, `cline` and `kilo`; Copilot contributes three lanes (OTel JSONL, the VS Code chat-session operation log, and the CLI's `session-state` event log); and `kiro-cli/data.sqlite3` is read alongside the `~/.kiro/sessions` tree, with database conversations already reported from a session file dropped so the two cannot double count.
+Every other `SOURCE_MARKERS` root is now read. The Cline-family task log is read for `roocode`, `cline` and `kilo`; Copilot contributes three lanes (OTel JSONL, the VS Code chat-session operation log, and the CLI's `session-state` event log); and `kiro-cli/data.sqlite3` is read alongside the `~/.kiro/sessions/cli` tree, with database conversations already reported from a session file dropped so the two cannot double count.
 
 ### Readers that are deliberately out of scope
 
@@ -82,7 +82,7 @@ A source may own more than one file. `MonitoredSource::companions` names files r
 
 **Roo Code does not need it**, despite an earlier note here claiming otherwise. Its `api_conversation_history.json` is an Anthropic `MessageParam[]` with no token counters at all, so all of its usage is in `ui_messages.json` and it is an ordinary single-file reader.
 
-One client still needs the capability: **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so reversing the aggregate means matching two *sources* rather than two files in one directory.
+**Prime Agent does not need it either**, despite an earlier note here saying it was the one remaining case. The pinned reader reverses a parent's `child_usage_attributed` aggregate so the copied parent can be deduplicated against the child's own transcript. This reader never emits that aggregate — it is skipped — and the child's transcript is a source in its own right, so the usage is already counted exactly once. Reversing an aggregate we do not emit would be strictly worse. The residual limitation is the opposite one: if a child's artifacts are deleted while the parent's aggregate survives, that usage is not counted; it is recorded in `src/parsers/prime_agent.rs`.
 
 The mechanism and the three ordering rules that make it work are written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md).
 

@@ -1,9 +1,11 @@
 # Source groups: a source that owns more than one file
 
 Status: **implemented for `jcode`.** `MonitoredSource::companions`, `GroupedInput`
-and the keyed merge in `JcodeReader` are in place and tested. `roocode` turned out
-**not** to need this at all — see the correction below. The VS Code `globalStorage`
-lanes and Prime Agent's fork reversal are still open — see the last section.
+and the keyed merge in `JcodeReader` are in place and tested. Everything else this
+document once planned for turned out **not** to need it: `roocode` and the VS Code
+`globalStorage` lanes are single-file readers, and Prime Agent's fork reversal is
+unnecessary because the aggregate it reverses is never emitted here. See the
+corrections below and the last section.
 
 ## Correction: Roo Code is single-file
 
@@ -186,9 +188,13 @@ Implemented, in `tests/source_inputs.rs`, `tests/jcode.rs` and `tests/discovery.
    `globalStorage/kiro.kiroagent` lane has no documented shape and stays unread, but its
    SQLite store is now read and needs **no** grouping either — its conversations are
    dropped when a session file already reported them.
-4. `prime-agent` fork reversal — the hardest of them, because the pairing is a
-   relationship between two *sources* rather than two files in one directory, so it may
-   need identity matching beyond what `companions` expresses.
+4. `prime-agent` fork reversal — **not needed, and this document was wrong to plan for it.**
+   The pinned reader reverses a parent's `child_usage_attributed` aggregate so the copied
+   parent can be deduplicated against the child's own transcript. This codebase never emits
+   that aggregate: `PrimeAgentReader` skips it and the child's own transcript is a source in
+   its own right, so the usage is already counted exactly once. Reversing an aggregate that
+   is never emitted would be strictly worse. The residual limitation is the opposite one: a
+   child whose artifacts were deleted while the parent's aggregate survives is not counted.
 
 ## Deliberately not included
 
