@@ -229,6 +229,7 @@ The Copilot CLI appends one event log per session at `<home>/.copilot/session-st
 | A record whose counters are all zero | ignored non-usage | Bills nothing, so a zero row would be indistinguishable from a measured one. | No ownership change. |
 | Cache read + cache write greater than `inputTokens` | declined record | Refused rather than clamped. | Prior rows retained; `declined_records` increments. |
 | `~/.copilot/otel` **and** `session-state` both present | known limitation | The two lanes describe the same calls with no shared identifier — this one keys on `accounting.usageId`, the OTel lane on `gen_ai.response.id` — so cross-lane merging cannot join them and enabling both double counts. | Documented rather than silently guessed at. |
+| Chat-session lane and this lane | disjoint, checked | On the development host the two Copilot stores share no session id at all: 7 `session-state` directories against 51 `chatSessions` files, zero in common, and none of the 7 `accounting.sourceSessionId` values appears among the chat-session ids. The CLI and the editor write separate sessions, so the two lanes do not overlap. | Checked rather than assumed; the OTel exporter is the only lane that can. |
 
 ## Kiro SQLite matrix
 
