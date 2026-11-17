@@ -49,14 +49,28 @@ Pricing and costs, limits/accounts, session detail/relationships/live activity/t
 
 See [`docs/migration/inventory.md`](docs/migration/inventory.md) for the complete evidence and parity ledger.
 
+### Upstream parity
+
+Token Monitor 0.88.0 is cloned into `token-monitor/` as a **reference only** — it is not a build dependency, it is not vendored, and it is expected to be deleted once the migration is finished. Parity against it is:
+
+- **Every one of the 42 tracked clients in `clientCatalog.js` has a reader here.** Verified against `clientSourceRegistration.js`, which is upstream's authoritative `SOURCE_MARKERS` root table, not against a list copied by hand.
+- **Ten extra clients are present** that upstream does not track: `kimchi`, `mux`, `junie`, `augment`, `gjc`, `codebuff`, `freebuff`, `opencodereview`, `trae`, `bb`. These are parser modules shipped in the pinned tokscale reference but never added to Token Monitor's catalog. They are exposed here because the reader contract, the reconciliation test and the catalog must agree — a parser with no catalog entry fails that test.
+- The same is true of `crush`, `warp`, `aside`, `hindsight` and `roocode`: they are **not upstream clients**. Their absence is a catalog decision upstream made, not a gap here.
+
+Known remaining differences from `SOURCE_MARKERS`, left for whoever picks this up:
+
+- The **VS Code `globalStorage` lanes** for `cline`, `kilo`, `copilot` and `kiro` (for example `…/globalStorage/saoudrizwan.claude-dev/tasks`). These are not extra copies of a root already read — they hold task-log directories rather than session files, so they need a task-log reader rather than another path. `roocode` needs the same reader, which is why it stays out too.
+- **`kiro`'s `~/.local/share/kiro-cli/data.sqlite3`** lane, a second store beside the `~/.kiro/sessions` tree it already reads.
+- Two extra `openclaw` homes and `kimi`'s `.kimi-code` lane **were** missing and have been fixed; see commit `5289a56`.
+
 ### Readers that are deliberately out of scope
 
-Six upstream client lanes have no byte-slice reader here, and they are excluded on purpose rather than approximated:
+Six further lanes have no byte-slice reader, and are excluded on purpose rather than approximated:
 
 - **Perch** has no local usage format. `~/.perch` holds only MCP configuration, background-task JSON and log files, and its `cli-agents/sessions.json` is empty; the desktop application keeps conversation and usage state in browser-side IndexedDB against `app.perchai.app`. Reading it would mean parsing a LevelDB blob or calling an undocumented authenticated endpoint, so no reader is provided.
-- **Aside**, **Crush** and **Warp** document no discovery root in their upstream reference. Aside is not installed on the development host, and Crush and Warp name a database or cache file (`crush.db`, a usage cache) without saying where it lives. Inventing a root would produce a reader that silently discovers nothing, which is worse than an absent one. Crush is additionally **cost-only** — it has reliable session cost but no trustworthy per-message token columns, so a token report would read zero by design.
+- **Aside**, **Crush** and **Warp** document no discovery root in their reference. Aside is not installed on the development host, and Crush and Warp name a database or cache file (`crush.db`, a usage cache) without saying where it lives. Inventing a root would produce a reader that silently discovers nothing, which is worse than an absent one. Crush is additionally **cost-only** — it has reliable session cost but no trustworthy per-message token columns, so a token report would read zero by design.
 - **Hindsight** is an HTTP API rather than a file. A reader would introduce the first network and credential boundary into a reader layer that is otherwise pure byte slices.
-- **Roo Code** is not blocked on a root but on the read contract: each task is spread across `ui_messages.json` **and** `api_conversation_history.json`, so reading it needs the cross-file source grouping described below.
+- **Roo Code** is blocked on the read contract rather than a root: each task is spread across `ui_messages.json` **and** `api_conversation_history.json`, so reading it needs the cross-file source grouping described below.
 
 A `perch`, `aside`, `crush`, `hindsight`, `roocode` or `warp` source therefore stays absent from discovery instead of appearing as a permanently empty client. Adding any of them is a separate piece of work with its own security review.
 
@@ -67,7 +81,7 @@ Two implemented clients would report more with a cross-file capability that the 
 - **jcode** pairs each session snapshot with a sibling `*.journal.jsonl`. The journal appends the unsaved suffix of a session and can *replace* a snapshot message with a corrected one, so a merge would have to be keyed by message identity with the journal winning.
 - **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so detecting the pairing and reversing the aggregate requires reading both.
 
-Both need the same change — a source that owns a group of files — which is a change to discovery, the source model, and the persistence format. It is scoped as its own work rather than folded into reader additions.
+Both need the same change — a source that owns a group of files — which is a change to discovery, the source model, and the persistence format. It is scoped as its own work rather than folded into reader additions, and it is the one piece that also unblocks Roo Code and the VS Code `globalStorage` lanes.
 
 ## Remote verification
 
