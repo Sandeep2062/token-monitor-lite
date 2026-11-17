@@ -178,9 +178,11 @@ Implemented, in `tests/source_inputs.rs`, `tests/jcode.rs` and `tests/discovery.
 2. **`roocode` — done, but not this way.** It is a single-file reader; see the correction
    at the top.
 3. The VS Code `globalStorage` task lanes for `cline`, `kilo`, `copilot` and `kiro` —
-   `kilo`'s task root holds the same Roo task-log shape, so it can reuse
-   `src/parsers/roocode.rs` with its own client id. `copilot` and `kiro` keep different
-   stores there and need their own readers.
+   **done for `cline`, `kilo` and `copilot`, and none of them needed this.** The Cline
+   family's task log is one file per task, so `src/parsers/roocode.rs` serves `roocode`,
+   `cline` and `kilo` with the client as a parameter. Copilot's chat session is one
+   operation log per session, read by `src/parsers/copilot_chat.rs`. `kiro`'s lane has no
+   verifiable shape and stays unread.
 4. `prime-agent` fork reversal — the hardest of them, because the pairing is a
    relationship between two *sources* rather than two files in one directory, so it may
    need identity matching beyond what `companions` expresses.

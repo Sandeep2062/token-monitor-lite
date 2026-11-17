@@ -147,6 +147,10 @@ fn every_parser_module_is_reachable_from_a_catalog_client() {
     for alias in ["codebuddy", "workbuddy", "omp", "senpi"] {
         expected.insert(alias.to_owned());
     }
+    // A second reader for a client whose original module keeps the primary
+    // name. Copilot is read both from its OTel JSONL trace (`copilot`) and from
+    // VS Code's chat-session operation log (`copilot_chat`).
+    expected.insert("copilot_chat".to_owned());
 
     let declared = read("src/parsers/mod.rs");
     let declared_modules: BTreeSet<String> = declared

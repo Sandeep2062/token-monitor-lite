@@ -13,6 +13,7 @@ pub mod codebuff;
 pub mod codex;
 pub mod commandcode;
 pub mod copilot;
+pub mod copilot_chat;
 pub mod cursor;
 pub mod devin;
 pub mod droid;

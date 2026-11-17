@@ -1,9 +1,17 @@
-//! Roo Code task-log usage, read from the VS Code `globalStorage` task tree.
+//! Task-log usage for the Cline family, read from the VS Code `globalStorage`
+//! task tree.
 //!
-//! Roo Code (publisher `RooVeterinaryInc`, extension `roo-cline`) writes one
-//! directory per task under
-//! `…/User/globalStorage/rooveterinaryinc.roo-cline/tasks/<taskId>/`. Two files
-//! are involved, and only one of them carries usage:
+//! Three clients write the same on-disk shape, because Roo Code and Kilo Code
+//! are forks of Cline:
+//!
+//! | client | root under `…/User/globalStorage` |
+//! | --- | --- |
+//! | `roocode` | `rooveterinaryinc.roo-cline/tasks` |
+//! | `cline` | `saoudrizwan.claude-dev/tasks` |
+//! | `kilo` | `kilocode.kilo-code/tasks` |
+//!
+//! Each keeps one directory per task at `<root>/<taskId>/`. Two files are
+//! involved, and only one of them carries usage:
 //!
 //! - `api_conversation_history.json` is an Anthropic `MessageParam[]` — the
 //!   provider-facing conversation. It has **no token counters at all**, so it
@@ -16,6 +24,11 @@
 //! So this is a **single-file** reader. The earlier "two files per task" note
 //! was wrong about which file carries usage; see
 //! `docs/migration/source-groups.md`.
+//!
+//! The shape is verified against Roo Code (`tests/roocode.rs`). `cline` and
+//! `kilo` reuse it on the strength of the fork lineage, and because the failure
+//! mode of a wrong assumption here is *no rows* rather than wrong rows: a
+//! payload without the expected counters is skipped.
 //!
 //! # Accounting
 //!
@@ -45,14 +58,17 @@ use crate::accounting::{SessionKey, TokenCounts};
 use serde_json::Value;
 
 pub const CLIENT: &str = "roocode";
+pub const CLINE_CLIENT: &str = "cline";
+pub const KILO_CLIENT: &str = "kilo";
 pub const UNKNOWN_MODEL: &str = "unknown";
 
 pub const MAX_RESPONSES: usize = 16_384;
 const MAX_IDENTITY_BYTES: usize = 4_096;
 const MAX_RETAINED_IDENTITY_BYTES: usize = 8 * 1024 * 1024;
 
-/// One Roo Code task's `ui_messages.json`.
+/// One task's `ui_messages.json`.
 pub struct RooCodeReader {
+    client: &'static str,
     session: String,
     fallback_timestamp_ms: Option<i64>,
     responses: Vec<ResponseUsage>,
@@ -61,7 +77,12 @@ pub struct RooCodeReader {
 
 impl RooCodeReader {
     pub fn new(session: impl Into<String>) -> Self {
+        Self::with_client(CLIENT, session)
+    }
+
+    pub fn with_client(client: &'static str, session: impl Into<String>) -> Self {
         Self {
+            client,
             session: session.into(),
             fallback_timestamp_ms: None,
             responses: Vec::new(),
@@ -79,7 +100,7 @@ impl RooCodeReader {
             serde_json::from_slice(document).map_err(|_| ReaderError::InvalidRecord)?;
         let messages = root
             .as_array()
-            .ok_or(ReaderError::Unsupported("Roo Code ui_messages"))?;
+            .ok_or(ReaderError::Unsupported("task-log ui_messages"))?;
         for (ordinal, message) in messages.iter().enumerate() {
             self.ingest_message(message, ordinal)?;
         }
@@ -100,7 +121,7 @@ impl RooCodeReader {
             return Ok(());
         };
         let Ok(payload) = serde_json::from_str::<Value>(text) else {
-            return Err(ReaderError::Declined("Roo Code request payload"));
+            return Err(ReaderError::Declined("task-log request payload"));
         };
         let Some(payload) = payload.as_object() else {
             return Ok(());
@@ -117,7 +138,7 @@ impl RooCodeReader {
         // reader refuses rather than clamps.
         let input = reported_input
             .checked_sub(cached)
-            .ok_or(ReaderError::Declined("Roo Code cache/input"))?;
+            .ok_or(ReaderError::Declined("task-log cache/input"))?;
         if reported_input == 0 && output == 0 && cached == 0 {
             return Ok(());
         }
@@ -126,22 +147,22 @@ impl RooCodeReader {
             .get("ts")
             .and_then(Value::as_i64)
             .or(self.fallback_timestamp_ms)
-            .ok_or(ReaderError::Declined("Roo Code message timestamp"))?;
-        let dedup_key = format!("roocode:{}:{timestamp_ms}:{ordinal}", self.session);
+            .ok_or(ReaderError::Declined("task-log message timestamp"))?;
+        let dedup_key = format!("{}:{}:{timestamp_ms}:{ordinal}", self.client, self.session);
         if dedup_key.len() > MAX_IDENTITY_BYTES {
-            return Err(ReaderError::Declined("Roo Code identity"));
+            return Err(ReaderError::Declined("task-log identity"));
         }
         self.retained_identity_bytes = self
             .retained_identity_bytes
             .checked_add(dedup_key.len())
             .filter(|bytes| *bytes <= MAX_RETAINED_IDENTITY_BYTES)
-            .ok_or(ReaderError::Capacity("Roo Code identities"))?;
+            .ok_or(ReaderError::Capacity("task-log identities"))?;
         if self.responses.len() == MAX_RESPONSES {
-            return Err(ReaderError::Capacity("Roo Code responses"));
+            return Err(ReaderError::Capacity("task-log responses"));
         }
 
         self.responses.push(ResponseUsage {
-            key: SessionKey::new(CLIENT, &self.session),
+            key: SessionKey::new(self.client, &self.session),
             model: UNKNOWN_MODEL.to_owned(),
             tokens: TokenCounts {
                 input,
@@ -159,8 +180,8 @@ impl RooCodeReader {
             workspace_key: None,
             workspace_label: None,
             title: None,
-            // Roo records a cost, so spend is exact even though the model — and
-            // therefore the price — is not resolvable here.
+            // The task log records a cost, so spend is exact even though the
+            // model — and therefore the price — is not resolvable here.
             cost: cost(payload.get("cost")),
         });
         Ok(())

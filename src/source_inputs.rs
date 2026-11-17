@@ -951,7 +951,12 @@ impl SourceInput {
             SourceFormat::CodebuffJson => Self::codebuff(path),
             SourceFormat::FreebuffJson => Self::freebuff(path),
             SourceFormat::TraeJson => Self::trae(path),
-            SourceFormat::RooCodeJson => Self::roocode(path),
+            SourceFormat::RooCodeJson
+            | SourceFormat::ClineTaskJson
+            | SourceFormat::KiloTaskJson => Self::roocode(path),
+            // The chat-session log is line-delimited: one operation per line,
+            // which is what lets a long session be read incrementally.
+            SourceFormat::CopilotChatSessionJsonl => Self::ordinary_jsonl(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path

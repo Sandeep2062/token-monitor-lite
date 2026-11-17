@@ -166,15 +166,23 @@ The supported source is Cline CLI/Desktop's shared `~/.cline/data/sessions/<sess
 | Cache read + cache write greater than `inputTokens` | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader saturating-subtracts and can under-count; the native reader refuses that shape. | Prior rows retained; `declined_records` increments. |
 | Assistant with metrics but no resolvable model | visible unsupported | No fabricated `unknown` model. | Prior committed generation remains active. |
 | Invalid JSON, missing `messages`, non-object message/metrics, negative/fractional counter, or invalid timestamp | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
-| VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | ignored (Cline) | Cline itself is read from its CLI session tree, not its task logs. The task-log shape is read under the separate `roocode` client instead — see the Roo Code matrix. | No source slot for Cline. |
+| VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | supported under its own client | Cline's CLI session tree is read here; its IDE task log is read by the task-log matrix below under the `cline` client. | Separate source, separate slot. |
 
-## Roo Code task-log matrix
+## Task-log matrix (Cline family)
 
-Roo Code (`RooVeterinaryInc.roo-cline`) keeps one directory per task under the VS Code extension's `globalStorage`: `<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/`. Two files sit in it and only one carries usage.
+Three clients write the same on-disk shape, because Roo Code and Kilo Code are forks of Cline.
+
+| client | root under `…/User/globalStorage` |
+|---|---|
+| `roocode` | `rooveterinaryinc.roo-cline/tasks` |
+| `cline` | `saoudrizwan.claude-dev/tasks` |
+| `kilo` | `kilocode.kilo-code/tasks` |
+
+Each keeps one directory per task at `<root>/<taskId>/`. Two files sit in it and only one carries usage.
 
 `ui_messages.json` is `ClineMessage[]`. A completed API request is a `say: "api_req_started"` message whose `text` is a **JSON string** holding `tokensIn`, `tokensOut`, `cacheWrites`, `cacheReads` and `cost`.
 
-`api_conversation_history.json` is an Anthropic `MessageParam[]` — the provider-facing conversation. It has no counters, so it is not read. This is why Roo Code is a **single-file** source and does not need cross-file grouping.
+`api_conversation_history.json` is an Anthropic `MessageParam[]` — the provider-facing conversation. It has no counters, so it is not read. This is why every client in this family is a **single-file** source and does not need cross-file grouping.
 
 | Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
 |---|---|---|---|
@@ -185,6 +193,28 @@ Roo Code (`RooVeterinaryInc.roo-cline`) keeps one directory per task under the V
 | `api_conversation_history.json` | not read | No token counters exist in it. | Contributes nothing; not a source. |
 | Model resolution | not implemented | The model lives in Roo's provider profile settings, not the task directory, so rows carry `unknown` and `cost` carries the spend. | No fabricated model name. |
 | `condense_context` cost rows, subtask task-stack linkage | not implemented | No source slot. | — |
+
+## Copilot chat-session matrix
+
+VS Code stores each chat session as an append-only operation log: `<User>/workspaceStorage/<hash>/chatSessions/<sessionId>.jsonl`, and empty-window sessions at `<User>/globalStorage/emptyWindowChatSessions/<sessionId>.jsonl`.
+
+| `kind` | meaning |
+|---|---|
+| `0` | the initial document — `v` is the whole object |
+| `1` | set the value at the path `k` |
+| `2` | **append** the elements of `v` to the array at `k` |
+
+`kind: 2` being append rather than replace is the entire format. A request is appended when it starts and its counters arrive later as `kind: 1` leaf writes at `["requests", <index>, "promptTokens"]`. A reader that treated `kind: 2` as a replacement sees every later patch out of range and reads nothing.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| Completed request with `promptTokens`/`completionTokens` | supported | Input = `promptTokens`, output = `completionTokens`, model = `modelId` (for example `copilot/auto`), timestamp = `timestamp`. Reasoning zero. | The file stem, so the workspace hash is not part of session identity. |
+| Appended request with no counters yet | ignored non-usage | Copilot appends the request before the stream produces usage, so an interrupted request contributes no row. | No ownership change. |
+| A request patched after it was appended | replace by identity | The row is replaced under its stable `requestId` key, not appended again. | One row per request. |
+| `promptTokenDetails` | ignored | A category breakdown (`System`, `User Context`), **not** a cache report. There is no cache split in this store, so input is taken whole with zero cache and cannot double-count. | — |
+| `copilotCredits` | not a cost | Credits are not money, so no cost is reported. | — |
+| `session-store.db` (`sessions`, `turns`) | not read | Text only, no counters. | No source slot. |
+| Operation before the document, or unknown `kind` | ignored | Nothing to place it against. | No ownership change. |
 
 ## Amp thread matrix
 

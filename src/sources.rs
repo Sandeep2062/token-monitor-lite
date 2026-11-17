@@ -16,6 +16,7 @@ use crate::parsers::{
     codex::CodexReader,
     commandcode::CommandCodeReader,
     copilot::CopilotReader,
+    copilot_chat::CopilotChatReader,
     cursor::CursorReader,
     droid::DroidReader,
     dsh::DshReader,
@@ -121,6 +122,9 @@ pub enum SourceFormat {
     HermesSqlite,
     OpenClawSqlite,
     RooCodeJson,
+    ClineTaskJson,
+    KiloTaskJson,
+    CopilotChatSessionJsonl,
 }
 
 impl SourceFormat {
@@ -182,6 +186,9 @@ impl SourceFormat {
             Self::HermesSqlite => "hermes",
             Self::OpenClawJsonl | Self::OpenClawSqlite => "openclaw",
             Self::RooCodeJson => "roocode",
+            Self::ClineTaskJson => "cline",
+            Self::KiloTaskJson => "kilo",
+            Self::CopilotChatSessionJsonl => "copilot",
         }
     }
 
@@ -247,6 +254,9 @@ impl SourceFormat {
             Self::HermesSqlite => "hermes-sqlite",
             Self::OpenClawSqlite => "openclaw-sqlite",
             Self::RooCodeJson => "roocode-json",
+            Self::ClineTaskJson => "cline-task-json",
+            Self::KiloTaskJson => "kilo-task-json",
+            Self::CopilotChatSessionJsonl => "copilot-chat-session-jsonl",
         }
     }
 
@@ -280,6 +290,9 @@ impl SourceFormat {
             "freebuff-json" => Some(Self::FreebuffJson),
             "trae-json" => Some(Self::TraeJson),
             "roocode-json" => Some(Self::RooCodeJson),
+            "cline-task-json" => Some(Self::ClineTaskJson),
+            "kilo-task-json" => Some(Self::KiloTaskJson),
+            "copilot-chat-session-jsonl" => Some(Self::CopilotChatSessionJsonl),
             "antigravity-jsonl" => Some(Self::AntigravityJsonl),
             "qwen-jsonl" => Some(Self::QwenJsonl),
             "reasonix-jsonl" => Some(Self::ReasonixJsonl),
@@ -558,7 +571,8 @@ enum ResponseReader {
     Zcode(Box<ZcodeReader>),
     Qodercn(Box<QodercnReader>),
     Dsh(Box<DshReader>),
-    RooCode(Box<RooCodeReader>),
+    TaskLog(Box<RooCodeReader>),
+    CopilotChat(Box<CopilotChatReader>),
 }
 
 impl ResponseReader {
@@ -606,13 +620,15 @@ impl ResponseReader {
             Self::Zcode(reader) => reader.ingest(record),
             Self::Qodercn(reader) => reader.ingest_record(record),
             Self::Dsh(reader) => reader.ingest(record),
-            Self::RooCode(reader) => reader.ingest(record),
+            Self::TaskLog(reader) => reader.ingest(record),
+            Self::CopilotChat(reader) => reader.ingest(record),
         }
     }
 
     fn snapshot(&self) -> Vec<ResponseUsage> {
         match self {
-            Self::RooCode(reader) => reader.snapshot(),
+            Self::TaskLog(reader) => reader.snapshot(),
+            Self::CopilotChat(reader) => reader.snapshot(),
             Self::Claude(reader) => reader.snapshot(),
             Self::Codex(reader) => reader.snapshot(),
             Self::Gemini(reader) => reader.snapshot(),
@@ -702,7 +718,8 @@ impl ResponseReader {
             | Self::Fx(_)
             | Self::Vibe(_)
             | Self::Jcode(_)
-            | Self::RooCode(_) => Ok(()),
+            | Self::TaskLog(_)
+            | Self::CopilotChat(_) => Ok(()),
         }
     }
 
@@ -748,7 +765,8 @@ impl ResponseReader {
             Self::Vibe(reader) => reader.has_supported_usage(),
             Self::PrimeAgent(reader) => reader.has_supported_usage(),
             Self::Jcode(reader) => reader.has_supported_usage(),
-            Self::RooCode(reader) => reader.has_supported_usage(),
+            Self::TaskLog(reader) => reader.has_supported_usage(),
+            Self::CopilotChat(reader) => reader.has_supported_usage(),
             Self::Proma(reader) => reader.has_supported_usage(),
             Self::Kimi(reader) => reader.has_supported_usage(),
             Self::CommandCode(reader) => reader.has_supported_usage(),
@@ -1368,13 +1386,19 @@ impl SourceReader {
             SourceFormat::DshJsonl => {
                 ResponseReader::Dsh(Box::new(DshReader::new(&self.key.session)))
             }
-            SourceFormat::RooCodeJson => {
+            SourceFormat::RooCodeJson
+            | SourceFormat::ClineTaskJson
+            | SourceFormat::KiloTaskJson => {
                 // `ui_messages.json` carries a per-message `ts`, so the file
                 // mtime is only a fallback for a record that omits one.
                 let fallback = self.input.source_path().and_then(file_mtime_ms);
-                ResponseReader::RooCode(Box::new(
-                    RooCodeReader::new(&self.key.session).with_fallback_timestamp(fallback),
+                ResponseReader::TaskLog(Box::new(
+                    RooCodeReader::with_client(self.format.client(), &self.key.session)
+                        .with_fallback_timestamp(fallback),
                 ))
+            }
+            SourceFormat::CopilotChatSessionJsonl => {
+                ResponseReader::CopilotChat(Box::new(CopilotChatReader::new(&self.key.session)))
             }
             SourceFormat::SessionArchiveSqlite
             | SourceFormat::CodexLocalUsageSqlite

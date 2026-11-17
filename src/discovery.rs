@@ -893,17 +893,13 @@ fn cline_cli_sessions_root(inputs: &HostPaths) -> Result<PathBuf, DiscoveryError
     ))
 }
 
-/// Every VS Code `globalStorage/<extension>/<subdir>` root for this host.
+/// Every VS Code `User` directory for this host.
 ///
-/// VS Code keeps extension state in a platform-specific root, and a remote or
-/// container session keeps a separate one, so a user can have the same
-/// extension's tasks in more than one place. Roots are returned whether or not
-/// they exist; the collector treats an absent root as empty.
-fn vscode_global_storage_roots(
-    inputs: &HostPaths,
-    extension: &str,
-    subdirectory: &str,
-) -> Vec<PathBuf> {
+/// VS Code keeps extension state under a platform-specific `User` directory, and
+/// a remote or container session keeps a separate one, so a user can have the
+/// same extension's state in more than one place. Paths are returned whether or
+/// not they exist; the collectors treat an absent root as empty.
+fn vscode_user_roots(inputs: &HostPaths) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut push = |base: Option<&Path>, user: &[&str]| {
         let Some(base) = base else {
@@ -913,9 +909,6 @@ fn vscode_global_storage_roots(
         for component in user {
             path.push(component);
         }
-        path.push("globalStorage");
-        path.push(extension);
-        path.push(subdirectory);
         roots.push(path);
     };
     match inputs.platform {
@@ -946,8 +939,8 @@ fn vscode_global_storage_roots(
     roots
 }
 
-/// Collect `<root>/<taskId>/ui_messages.json`.
-fn collect_roo_task_candidates(
+/// Collect `<root>/<taskId>/ui_messages.json` for the Cline family.
+fn collect_task_log_candidates(
     root: &Path,
     depth: usize,
     inspected: &mut usize,
@@ -1003,6 +996,108 @@ fn collect_roo_task_candidates(
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Collect `<root>/*.jsonl` for the empty-window chat session store.
+fn collect_copilot_chat_candidates(
+    root: &Path,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    collect_jsonl_children(root, inspected, candidates, overflow)
+}
+
+/// Collect `<workspaceStorage>/<workspace>/chatSessions/*.jsonl`.
+fn collect_copilot_workspace_candidates(
+    root: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > 1 {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(root)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let child_metadata = fs::symlink_metadata(&child)?;
+        if child_metadata.file_type().is_dir() {
+            collect_jsonl_children(&child.join("chatSessions"), inspected, candidates, overflow)?;
+            if *overflow {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collect the `*.jsonl` files directly inside `directory`.
+fn collect_jsonl_children(
+    directory: &Path,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let child_metadata = fs::symlink_metadata(&child)?;
+        if !child_metadata.file_type().is_file() {
+            continue;
+        }
+        if child
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+        {
+            candidates.push(child);
         }
     }
     Ok(())
@@ -2008,6 +2103,144 @@ fn discover_sources_with_id(
                 }
             }
             continue;
+        }
+        if matches!(client.as_str(), "roocode" | "cline" | "kilo") {
+            // Three forks of the same VS Code task log, one directory per task
+            // under the extension's `globalStorage`, with `ui_messages.json`
+            // the only file in it that carries usage.
+            let (extension, format, notice_client) = match client.as_str() {
+                "cline" => (
+                    "saoudrizwan.claude-dev",
+                    SourceFormat::ClineTaskJson,
+                    "cline",
+                ),
+                "kilo" => ("kilocode.kilo-code", SourceFormat::KiloTaskJson, "kilo"),
+                _ => (
+                    "rooveterinaryinc.roo-cline",
+                    SourceFormat::RooCodeJson,
+                    "roocode",
+                ),
+            };
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for user_root in vscode_user_roots(inputs) {
+                let root = user_root
+                    .join("globalStorage")
+                    .join(extension)
+                    .join("tasks");
+                collect_task_log_candidates(
+                    &root,
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    format,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: notice_client,
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(format, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+        }
+        if client == "copilot" {
+            // Copilot Chat sessions are operation logs, one per session: a
+            // workspace session under `workspaceStorage/<hash>/chatSessions`
+            // and an empty-window session under
+            // `globalStorage/emptyWindowChatSessions`.
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for user_root in vscode_user_roots(inputs) {
+                collect_copilot_chat_candidates(
+                    &user_root
+                        .join("globalStorage")
+                        .join("emptyWindowChatSessions"),
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+                collect_copilot_workspace_candidates(
+                    &user_root.join("workspaceStorage"),
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::CopilotChatSessionJsonl,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "copilot",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::CopilotChatSessionJsonl, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::CopilotChatSessionJsonl,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
         }
         if client == "cline" {
             let root = cline_cli_sessions_root(inputs)?;
@@ -3362,63 +3595,6 @@ fn discover_sources_with_id(
             }
             continue;
         }
-        if client == "roocode" {
-            // Roo Code keeps one directory per task under the VS Code
-            // extension's globalStorage, and `ui_messages.json` is the only
-            // file in it that carries usage.
-            let mut candidates = Vec::new();
-            let mut inspected = 0;
-            let mut overflow = false;
-            for root in vscode_global_storage_roots(inputs, "rooveterinaryinc.roo-cline", "tasks") {
-                collect_roo_task_candidates(
-                    &root,
-                    0,
-                    &mut inspected,
-                    &mut candidates,
-                    &mut overflow,
-                )?;
-            }
-            candidates.sort();
-            candidates.dedup();
-            for (ordinal, path) in candidates.into_iter().enumerate() {
-                let ordinal = ordinal + 1;
-                if sources.len() >= MAX_SOURCES {
-                    notices.push(DiscoveryNotice::SourceLimitReached);
-                    break;
-                }
-                let session = match validate_source(
-                    &path,
-                    SourceFormat::RooCodeJson,
-                    fs::symlink_metadata(&path)
-                        .map(|meta| meta.len())
-                        .unwrap_or(0),
-                ) {
-                    Ok(session) => session,
-                    Err(()) => {
-                        notices.push(DiscoveryNotice::SourceInvalid {
-                            client: "roocode",
-                            ordinal,
-                        });
-                        continue;
-                    }
-                };
-                let source_id = source_id_for(SourceFormat::RooCodeJson, &path);
-                if !admitted_ids.insert(source_id) {
-                    notices.push(DiscoveryNotice::SourceIdentityCollision);
-                    continue;
-                }
-                sources.push(DiscoveredSource {
-                    source_id,
-                    format: SourceFormat::RooCodeJson,
-                    session,
-                    path,
-                });
-            }
-            if overflow {
-                notices.push(DiscoveryNotice::SourceScanLimitReached);
-            }
-            continue;
-        }
         if client == "augment" {
             // Auggie writes one session snapshot per session at
             // `~/.augment/sessions/<sessionId>.json`.
@@ -4579,7 +4755,10 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         let session = crate::parsers::codebuff::session_from_path(path);
         return Ok(session);
     }
-    if format == SourceFormat::RooCodeJson {
+    if matches!(
+        format,
+        SourceFormat::RooCodeJson | SourceFormat::ClineTaskJson | SourceFormat::KiloTaskJson
+    ) {
         // `ui_messages.json` is a bare array with no task identity inside, so
         // the session is the task directory it sits in — `<tasks>/<taskId>/`.
         return path
@@ -4587,6 +4766,16 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
             .and_then(|directory| directory.file_name())
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
+    if format == SourceFormat::CopilotChatSessionJsonl {
+        // `<sessionId>.jsonl`: the session id is the file stem, and the
+        // workspace hash above it is not part of the session identity.
+        return path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty() && !stem.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or(());
     }
@@ -4625,8 +4814,11 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         for record in batch.records {
             let value: Value = serde_json::from_slice(&record).map_err(|_| ())?;
             let session = match format {
-                // Resolved from the task directory before this point.
-                SourceFormat::RooCodeJson => None,
+                // Resolved from the path before this point.
+                SourceFormat::RooCodeJson
+                | SourceFormat::ClineTaskJson
+                | SourceFormat::KiloTaskJson
+                | SourceFormat::CopilotChatSessionJsonl => None,
                 SourceFormat::BbSqlite => None,
                 SourceFormat::CodebuffJson => None,
                 SourceFormat::FreebuffJson => None,

@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 use token_monitor_lite::parsers::roocode::RooCodeReader;
-use token_monitor_lite::parsers::roocode::{CLIENT, UNKNOWN_MODEL};
+use token_monitor_lite::parsers::roocode::{CLIENT, CLINE_CLIENT, KILO_CLIENT, UNKNOWN_MODEL};
 use token_monitor_lite::parsers::{CostStatus, ReaderError};
 
 fn request(ts: i64, payload: Value) -> Value {
@@ -119,7 +119,7 @@ fn cache_greater_than_input_is_refused_rather_than_clamped() {
     .to_string();
     assert_eq!(
         reader.ingest(document.as_bytes()).expect_err("refused"),
-        ReaderError::Declined("Roo Code cache/input")
+        ReaderError::Declined("task-log cache/input")
     );
 }
 
@@ -130,7 +130,7 @@ fn a_non_array_document_is_visible_unsupported() {
         reader
             .ingest(br#"{"messages":[]}"#)
             .expect_err("unsupported"),
-        ReaderError::Unsupported("Roo Code ui_messages")
+        ReaderError::Unsupported("task-log ui_messages")
     );
 }
 
@@ -152,4 +152,30 @@ fn a_negative_counter_is_a_visible_rejection() {
         reader.ingest(document.as_bytes()).expect_err("negative"),
         ReaderError::InvalidRecord
     );
+}
+
+#[test]
+fn the_same_log_reads_under_the_cline_and_kilo_clients() {
+    // Cline and Kilo Code write the same task log; only the client id and the
+    // root differ, so the row must follow the configured client and not the
+    // module's default.
+    for client in [CLINE_CLIENT, KILO_CLIENT] {
+        let mut reader = RooCodeReader::with_client(client, "task-1");
+        let document = Value::Array(vec![request(
+            1_740_000_000_100,
+            json!({"tokensIn": 120, "tokensOut": 30, "cacheWrites": 1, "cacheReads": 2, "cost": 0.01}),
+        )])
+        .to_string();
+        reader.ingest(document.as_bytes()).expect("accepted");
+        let found = reader.snapshot();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].key.client, client);
+        assert_eq!(found[0].tokens.input, 117);
+        assert!(
+            found[0]
+                .dedup_key
+                .as_deref()
+                .is_some_and(|key| key.starts_with(&format!("{client}:")))
+        );
+    }
 }

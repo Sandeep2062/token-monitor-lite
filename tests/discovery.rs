@@ -620,6 +620,79 @@ fn roocode_task_without_a_message_log_is_not_admitted() {
 }
 
 #[test]
+fn cline_reads_its_task_message_log() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/task-c/ui_messages.json",
+        br#"[{"ts":1740000000100,"type":"say","say":"api_req_started","text":"{\"tokensIn\":10,\"tokensOut\":5}"}]"#,
+    );
+
+    let report = discover(&tree.paths(&["cline"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::ClineTaskJson);
+    assert_eq!(report.sources[0].session, "task-c");
+}
+
+#[test]
+fn kilo_reads_its_task_message_log() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/Code/User/globalStorage/kilocode.kilo-code/tasks/task-k/ui_messages.json",
+        br#"[{"ts":1740000000200,"type":"say","say":"api_req_started","text":"{\"tokensIn\":20,\"tokensOut\":6}"}]"#,
+    );
+
+    let report = discover(&tree.paths(&["kilo"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::KiloTaskJson);
+    assert_eq!(report.sources[0].session, "task-k");
+}
+
+#[test]
+fn copilot_reads_workspace_and_empty_window_chat_sessions() {
+    let tree = Tree::new();
+    let session = |id: &str, timestamp: i64| {
+        format!(
+            "{{\"kind\":0,\"k\":null,\"v\":{{\"version\":3}}}}\n{{\"kind\":2,\"k\":[\"requests\"],\"v\":[{{\"requestId\":\"{id}\",\"timestamp\":{timestamp},\"modelId\":\"copilot/auto\"}}]}}\n{{\"kind\":1,\"k\":[\"requests\",0,\"promptTokens\"],\"v\":100}}\n{{\"kind\":1,\"k\":[\"requests\",0,\"completionTokens\"],\"v\":10}}\n"
+        )
+    };
+    tree.file(
+        ".config/Code/User/workspaceStorage/abc123/chatSessions/session-a.jsonl",
+        session("r1", 1_740_000_000_000).as_bytes(),
+    );
+    tree.file(
+        ".config/Code/User/globalStorage/emptyWindowChatSessions/session-b.jsonl",
+        session("r2", 1_740_000_001_000).as_bytes(),
+    );
+
+    let report = discover(&tree.paths(&["copilot"])).unwrap();
+    let mut sessions: Vec<&str> = report
+        .sources
+        .iter()
+        .map(|source| source.session.as_str())
+        .collect();
+    sessions.sort();
+    assert_eq!(sessions, vec!["session-a", "session-b"]);
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.format == SourceFormat::CopilotChatSessionJsonl)
+    );
+}
+
+#[test]
+fn copilot_session_without_counters_is_not_admitted() {
+    let tree = Tree::new();
+    tree.file(
+        ".config/Code/User/workspaceStorage/abc123/chatSessions/empty.jsonl",
+        b"{\"kind\":0,\"k\":null,\"v\":{\"version\":3}}\n",
+    );
+
+    let report = discover(&tree.paths(&["copilot"])).unwrap();
+    assert!(report.sources.is_empty());
+}
+
+#[test]
 fn jcode_attaches_the_sibling_journal_as_a_companion() {
     let tree = Tree::new();
     tree.file(

@@ -59,9 +59,11 @@ Token Monitor 0.88.0 is cloned into `token-monitor/` as a **reference only** —
 
 Known remaining differences from `SOURCE_MARKERS`, left for whoever picks this up:
 
-- The **VS Code `globalStorage` lanes** for `cline`, `kilo`, `copilot` and `kiro`. `roocode` reads that tree natively now (`<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/ui_messages.json`), and `kilo`'s task root holds the same shape, so it can reuse that reader. `copilot` and `kiro` keep different stores there and need their own.
+- **`kiro`'s `globalStorage/kiro.kiroagent`** lane is the only `SOURCE_MARKERS` root still without a reader. Its shape is not documented anywhere in the reference and Kiro is not installed on the development host, so a reader would be a guess; see the note below.
 - **`kiro`'s `~/.local/share/kiro-cli/data.sqlite3`** lane, a second store beside the `~/.kiro/sessions` tree it already reads.
 - Two extra `openclaw` homes and `kimi`'s `.kimi-code` lane **were** missing and have been fixed; see commit `5289a56`.
+
+The other three `globalStorage` lanes are **implemented**. The Cline-family task log is read for `roocode`, `cline` and `kilo`, and Copilot's chat-session operation log is read from both `workspaceStorage/*/chatSessions` and `globalStorage/emptyWindowChatSessions`. None of them needed cross-file grouping after all — each is a single file per task or per session.
 
 ### Readers that are deliberately out of scope
 
@@ -83,7 +85,9 @@ A source may own more than one file. `MonitoredSource::companions` names files r
 
 One client still needs the capability: **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so reversing the aggregate means matching two *sources* rather than two files in one directory.
 
-The mechanism and the three ordering rules that make it work are written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md). It is also what unblocks the VS Code `globalStorage` task-log lanes for `cline`, `kilo`, `copilot` and `kiro`.
+The mechanism and the three ordering rules that make it work are written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md).
+
+The VS Code `globalStorage` lanes did **not** turn out to need it. Each task log or chat session is a single file, so they are ordinary single-file readers.
 
 ## Remote verification
 
