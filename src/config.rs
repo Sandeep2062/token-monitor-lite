@@ -102,6 +102,18 @@ impl Preferences {
             .collect()
     }
 
+    /// Whether closing the window should hide it instead of quitting.
+    ///
+    /// Native-owned, like the timezone: absent or unreadable means the window
+    /// close quits, which is the only behaviour that can never strand the app
+    /// behind an icon that is not there.
+    pub fn close_to_tray(&self) -> bool {
+        self.fields
+            .get("closeToTray")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
     /// Replace only the native-owned editable fields. Every other imported
     /// value, including unknown objects and explicit nulls, is retained.
     pub fn with_native_edits(
@@ -109,6 +121,7 @@ impl Preferences {
         enabled_clients: &[String],
         timezone: &str,
         selected_source_ids: &[String],
+        close_to_tray: bool,
     ) -> Result<Vec<u8>> {
         let mut fields = self.fields.clone();
         fields.insert(
@@ -116,6 +129,7 @@ impl Preferences {
             Value::String(enabled_clients.join(",")),
         );
         fields.insert("timezone".to_owned(), Value::String(timezone.to_owned()));
+        fields.insert("closeToTray".to_owned(), Value::Bool(close_to_tray));
         fields.insert(
             "nativeSourceIds".to_owned(),
             Value::Array(

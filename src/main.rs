@@ -1,5 +1,6 @@
 use anyhow::Result;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedPixelBuffer, VecModel};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,6 +9,7 @@ use token_monitor_lite::application::{
 };
 use token_monitor_lite::discovery::{HostPaths, resolve_paths};
 use token_monitor_lite::pricing::{self, PricingCatalog};
+use token_monitor_lite::tray;
 use token_monitor_lite::ui::{
     ImportReportRow, ModelRow, SessionRow, SettingsClientRow, SettingsSourceRow, SourceHealthRow,
     SourceSeverity, TrendRow, UiController, UiPresentation,
@@ -54,8 +56,71 @@ fn run(
             None
         }
     };
+    // Create the tray before the first presentation so a tray that could not be
+    // created is never advertised as a way back to a hidden window. It is only
+    // constructed where it can actually be shown: on Linux the backend connects
+    // to the session bus, and doing that without one holds up startup before the
+    // window is ever mapped.
+    let tray_capable = tray::tray_capable();
+    let tray = if tray_capable {
+        TrayIcon::new().ok().map(std::rc::Rc::new)
+    } else {
+        None
+    };
+    let tray_capable = tray.is_some();
+    initial_controller.set_tray_available(tray_capable);
     let controller = Arc::new(Mutex::new(initial_controller));
     apply_presentation(&window, presentation(&controller));
+    let tray_state = RefCell::new(None::<(String, String, String)>);
+    if let Some(tray_handle) = tray.as_ref() {
+        let tray = tray_handle.as_ref();
+        // Without a status-notifier host the icon cannot be shown, so do not ask
+        // the backend to register one: nothing may depend on an invisible icon.
+        tray.set_shown(tray_capable);
+        sync_tray(tray, &tray_state, &presentation(&controller));
+        {
+            let weak = window.as_weak();
+            tray.on_open_window(move || {
+                if let Some(window) = weak.upgrade() {
+                    let _ = window.show();
+                }
+            });
+        }
+        {
+            let weak = window.as_weak();
+            tray.on_toggle_window(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                if window.window().is_visible() {
+                    let _ = window.hide();
+                } else {
+                    let _ = window.show();
+                }
+            });
+        }
+        {
+            let application = application.clone();
+            let weak = window.as_weak();
+            let controller = controller.clone();
+            tray.on_refresh_now(move || {
+                if let Some(application) = application.as_ref()
+                    && let Err(error) = application.submit(ApplicationCommand::Refresh)
+                {
+                    show_submit_error(&weak, &controller, error);
+                }
+            });
+        }
+        {
+            let weak_tray = std::rc::Rc::downgrade(tray_handle);
+            tray.on_quit_app(move || {
+                if let Some(tray) = weak_tray.upgrade() {
+                    tray.set_shown(false);
+                }
+                let _ = slint::quit_event_loop();
+            });
+        }
+    }
     let pricing_handle = update_root.as_ref().map(|root| {
         let weak = window.as_weak();
         let controller = controller.clone();
@@ -74,6 +139,7 @@ fn run(
     });
 
     let delivery_timer = slint::Timer::default();
+    let tray_for_timer = tray.clone();
     if let Some(application) = application.clone() {
         let weak = window.as_weak();
         let controller = controller.clone();
@@ -87,10 +153,35 @@ fn run(
                     })
                 });
                 if changed && let Some(window) = weak.upgrade() {
-                    apply_presentation(&window, presentation(&controller));
+                    let presentation = presentation(&controller);
+                    apply_presentation(&window, presentation.clone());
+                    if let Some(tray) = tray_for_timer.as_ref() {
+                        sync_tray(tray.as_ref(), &tray_state, &presentation);
+                    }
                 }
             },
         );
+    }
+
+    {
+        let application = application.clone();
+        let weak_tray = tray.as_ref().map(std::rc::Rc::downgrade);
+        window.window().on_close_requested(move || {
+            let hides_to_tray = tray_capable
+                && application.as_ref().is_some_and(|application| {
+                    application
+                        .snapshot()
+                        .is_ok_and(|snapshot| snapshot.settings.close_to_tray)
+                });
+            if hides_to_tray {
+                return CloseRequestResponse::HideWindow;
+            }
+            if let Some(tray) = weak_tray.as_ref().and_then(std::rc::Weak::upgrade) {
+                tray.set_shown(false);
+            }
+            let _ = slint::quit_event_loop();
+            CloseRequestResponse::HideWindow
+        });
     }
 
     {
@@ -235,6 +326,18 @@ fn run(
     {
         let weak = window.as_weak();
         let controller = controller.clone();
+        window.on_settings_close_to_tray_changed(move |close_to_tray| {
+            if let Ok(mut controller) = controller.lock() {
+                controller.set_settings_close_to_tray(close_to_tray);
+            }
+            if let Some(window) = weak.upgrade() {
+                apply_presentation(&window, presentation(&controller));
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let controller = controller.clone();
         window.on_settings_client_changed(move |client, enabled| {
             if let Ok(mut controller) = controller.lock() {
                 controller.set_settings_client_enabled(&client, enabled);
@@ -306,7 +409,12 @@ fn run(
         });
     }
 
-    let event_loop_result = window.run();
+    // `ComponentHandle::run` used to show the window as part of starting the
+    // loop. `run_event_loop_until_quit` does not: it runs until something asks it
+    // to stop, which is what keeps a hidden-to-tray window alive. The window has
+    // to be mapped explicitly.
+    window.show().map_err(anyhow::Error::from)?;
+    let event_loop_result = slint::run_event_loop_until_quit();
     if let Some(mut handle) = pricing_handle {
         handle.stop();
     }
@@ -428,6 +536,42 @@ fn apply_presentation(window: &AppWindow, presentation: UiPresentation) {
     window.set_settings_clients(settings_client_model(presentation.settings.clients));
     window.set_settings_sources(settings_source_model(presentation.settings.sources));
     window.set_import_report(import_report_model(presentation.settings.import_rows));
+    window.set_settings_committed_close_to_tray(presentation.settings.committed_close_to_tray);
+    window.set_settings_close_to_tray(presentation.settings.draft_close_to_tray);
+    window.set_tray_capable(presentation.settings.tray_capable);
+}
+
+/// Render the badge bitmap Slint hands to the platform tray backend.
+fn badge_image(tokens: &str, cost: &str) -> slint::Image {
+    let pixels = tray::badge_rgba(tokens, cost);
+    slint::Image::from_rgba8(SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &pixels,
+        tray::BADGE_SIZE,
+        tray::BADGE_SIZE,
+    ))
+}
+
+/// Push today's labels to the tray, and only when they actually changed.
+///
+/// The caller is the existing 100 ms snapshot delivery, so the tray adds no
+/// timer, no watcher and no work while nothing is happening.
+fn sync_tray(
+    tray: &TrayIcon,
+    state: &RefCell<Option<(String, String, String)>>,
+    presentation: &UiPresentation,
+) {
+    let next = (
+        presentation.tray.tokens.clone(),
+        presentation.tray.cost.clone(),
+        presentation.tray.tooltip.clone(),
+    );
+    if state.borrow().as_ref() == Some(&next) {
+        return;
+    }
+    tray.set_badge(badge_image(&next.0, &next.1));
+    tray.set_hover_text(next.2.clone().into());
+    tray.set_label_text(format!("{} · {}", next.0, next.1).into());
+    *state.borrow_mut() = Some(next);
 }
 
 fn begin_update_check(

@@ -104,6 +104,7 @@ export component AppWindow inherits Window {
     callback select-session(string);
     callback clear-session-selection();
     callback settings-timezone-changed(string);
+    callback settings-close-to-tray-changed(bool);
     callback settings-client-changed(string, bool);
     callback settings-source-changed(string, bool);
     callback select-all-sources();
@@ -135,6 +136,9 @@ export component AppWindow inherits Window {
     in property <int> output-permille: 0;
     in property <int> cache-permille: 0;
     in property <int> reasoning-permille: 0;
+    in property <bool> settings-committed-close-to-tray: false;
+    in property <bool> settings-close-to-tray: false;
+    in property <bool> tray-capable: false;
     in property <[SessionRowData]> recent-sessions;
     in property <[SessionRowData]> sessions;
     in property <[TrendRowData]> trends;
@@ -629,6 +633,22 @@ export component AppWindow inherits Window {
                                 edited(text) => { root.settings-timezone-changed(text); }
                             }
                         }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Closing window"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            Button {
+                                text: root.tray-capable
+                                    ? (root.settings-close-to-tray ? "Hides to tray  · Enabled" : "Hides to tray  · Disabled")
+                                        + (root.settings-committed-close-to-tray == root.settings-close-to-tray ? "" : "  · edited")
+                                    : "Keeps running  · no tray on this desktop";
+                                enabled: root.tray-capable;
+                                accessible-role: button;
+                                accessible-id: "settings-close-to-tray";
+                                accessible-label: self.text;
+                                clicked => { root.settings-close-to-tray-changed(!root.settings-close-to-tray); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
                         if root.settings-validation-notice != "" : Text {
                             text: root.settings-validation-notice;
                             accessible-role: text;
@@ -919,6 +939,45 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+}
+
+// A tray-only component: it has no window of its own. The bitmap is produced by
+// the Rust side from today's totals, and the menu is the only UI it presents.
+export component TrayIcon inherits SystemTrayIcon {
+    in property <image> badge;
+    in property <string> hover-text: "Token Monitor Lite";
+    in property <string> label-text: "";
+    // `visible` belongs to the inherited item and has no generated setter, so it
+    // is driven through this property instead.
+    in property <bool> shown: true;
+
+    callback open-window();
+    callback toggle-window();
+    callback refresh-now();
+    callback quit-app();
+
+    visible: root.shown;
+    icon: root.badge;
+    tooltip: root.hover-text;
+    // Text next to the icon on macOS menu bars; advisory elsewhere.
+    title: root.label-text;
+
+    clicked => { root.toggle-window(); }
+
+    Menu {
+        MenuItem {
+            title: "Open";
+            activated => { root.open-window(); }
+        }
+        MenuItem {
+            title: "Refresh";
+            activated => { root.refresh-now(); }
+        }
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit-app(); }
         }
     }
 }

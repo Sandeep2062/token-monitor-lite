@@ -15,5 +15,6 @@ pub mod runtime;
 pub mod source_inputs;
 pub mod sources;
 pub mod storage;
+pub mod tray;
 pub mod ui;
 pub mod update;

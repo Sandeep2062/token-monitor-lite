@@ -158,6 +158,24 @@ fn clients_presence_and_recognized_credentials_are_inspected_without_values() {
 }
 
 #[test]
+fn close_to_tray_is_absent_by_default_and_roundtrips_when_set() {
+    let empty: Preferences = serde_json::from_str("{}").unwrap();
+    assert!(!empty.close_to_tray());
+
+    let merged = empty.with_native_edits(&[], "UTC", &[], true).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&merged).unwrap();
+    assert_eq!(value["closeToTray"], true);
+
+    let reparsed: Preferences = serde_json::from_slice(&merged).unwrap();
+    assert!(reparsed.close_to_tray());
+
+    // A wrong type is not a value we can honour, so it reads as off rather than
+    // failing the whole settings document.
+    let malformed: Preferences = serde_json::from_str(r#"{"closeToTray":"yes"}"#).unwrap();
+    assert!(!malformed.close_to_tray());
+}
+
+#[test]
 fn supported_native_edits_preserve_every_unedited_json_value() {
     let preferences: Preferences = serde_json::from_str(
         r#"{"clients":"claude","future":{"enabled":true,"value":null},"pluginState":[1,2]}"#,
@@ -168,12 +186,14 @@ fn supported_native_edits_preserve_every_unedited_json_value() {
             &["claude".to_owned(), "codex".to_owned()],
             "America/New_York",
             &["source-opaque-a".to_owned()],
+            true,
         )
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&merged).unwrap();
 
     assert_eq!(value["clients"], "claude,codex");
     assert_eq!(value["timezone"], "America/New_York");
+    assert_eq!(value["closeToTray"], true);
     assert_eq!(
         value["nativeSourceIds"],
         serde_json::json!(["source-opaque-a"])

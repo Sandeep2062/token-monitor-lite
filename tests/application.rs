@@ -220,6 +220,44 @@ fn stale_save_cannot_overwrite_and_preserves_user_input_with_conflict_notice() {
 }
 
 #[test]
+fn close_to_tray_persists_and_a_stale_draft_cannot_flip_it_back() {
+    let tree = Tree::new();
+    let discovery = discover(&tree.paths()).unwrap();
+    let (store, _) = StoreHandle::open(discovery.native.clone()).unwrap();
+    let application = ApplicationService::start(discovery, store.clone()).unwrap();
+
+    let initial = application.snapshot().unwrap();
+    assert!(
+        !initial.settings.close_to_tray,
+        "close-to-tray defaults off"
+    );
+
+    let mut enabling = initial.settings.open_draft();
+    enabling.close_to_tray = true;
+    application
+        .submit(ApplicationCommand::SaveSettings(enabling.clone()))
+        .unwrap();
+    let saved = wait_for(&application, |snapshot| snapshot.settings.revision == 1);
+    assert!(saved.settings.close_to_tray);
+    assert!(saved.draft.is_none());
+
+    // The same draft is now stale. It must not be able to turn the setting off.
+    let mut flipping_back = enabling;
+    flipping_back.close_to_tray = false;
+    application
+        .submit(ApplicationCommand::SaveSettings(flipping_back.clone()))
+        .unwrap();
+    let conflict = wait_for(&application, |snapshot| {
+        snapshot.notice == Some(ApplicationNotice::Conflict)
+    });
+    assert!(conflict.settings.close_to_tray);
+    assert_eq!(conflict.settings.revision, 1);
+    assert_eq!(conflict.draft, Some(flipping_back));
+    assert_eq!(store.snapshot().unwrap().settings_revision, 1);
+    application.shutdown().unwrap();
+}
+
+#[test]
 fn invalid_save_retains_draft_without_writing_or_starting_a_monitor() {
     let tree = Tree::new();
     tree.claude_source();

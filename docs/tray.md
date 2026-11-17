@@ -1,0 +1,190 @@
+# System tray
+
+The tray shows today's tracked tokens and today's cost, offers Open / Refresh /
+Quit, and lets the window close into the tray instead of quitting. This file
+records what was decided, what was measured, and what is still assumption.
+
+Every claim below is labelled:
+
+- **VERIFIED** — observed here, by a command in this file or a test in this repo.
+- **ASSUMED** — designed and reviewed but not observed on this machine.
+
+## Why Slint's own tray and not `tray-icon`
+
+Slint 1.18 ships a `system-tray` feature with native backends, so the comparison
+was real rather than hypothetical:
+
+| | Slint 1.18 `system-tray` | `tray-icon` 0.26.1 |
+|---|---|---|
+| New direct dependency | none — the toolkit is already a dependency | new pinned dependency |
+| License | `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0` (already relied on) | `MIT OR Apache-2.0` |
+| Windows backend | Win32 `Shell_NotifyIcon` inside `i-slint-core` | `windows-sys` + `muda` |
+| macOS backend | AppKit `NSStatusItem` inside `i-slint-core` | AppKit + `muda` |
+| Linux backend | `ksni` 0.3.7 (Unlicense) — pure-Rust StatusNotifierItem over D-Bus | `libappindicator`/GTK3 — C libraries |
+| Event loop | runs on Slint's own loop | needs its own platform loop integration |
+| Icon input | `slint::Image`, the type already in use | `tray_icon::Icon::from_rgba` |
+
+Picked **Slint's `system-tray`** for three reasons that matter here:
+
+1. **No second event loop.** The application already runs one Slint loop and the
+   requirement is "no second collector or watcher, no idle polling". `tray-icon`
+   needs a platform loop to be pumped (`muda`/`winit` integration), which is a
+   second wakeup source to reason about.
+2. **No GTK on Linux.** The Linux backend is `ksni`, which speaks
+   StatusNotifierItem over the existing session bus. `tray-icon` on Linux needs
+   `libappindicator`/GTK3, which drags in a C stack and tens of megabytes of RSS
+   against a 100 MiB idle budget and the project's no-Electron/no-webview stance.
+3. **One licence surface.** Slint is already a dependency with its licence
+   position settled; adding `tray-icon` would add a new dependency and a new
+   licence record for no behavioural gain. `tray-icon`'s MIT/Apache-2.0 is
+   permissive and would have been acceptable — it lost on the other two points,
+   not on licence.
+
+The `system-tray` feature is enabled in `Cargo.toml`. `Cargo.lock` gains
+`ksni` 0.3.7 (Unlicense) and `async-channel` 2.5.0 on Linux, `windows-sys`
+0.61.2 (`MIT OR Apache-2.0`) on Windows, and `objc2`/`objc2-app-kit` on macOS;
+`THIRD_PARTY_NOTICES.md` is regenerated from `cargo metadata` and now records
+599 registry crates across 33 license expressions. **VERIFIED**: the pinned
+Windows toolchain builds them.
+
+## What the tray shows
+
+The badge is a 32×32 RGBA8 bitmap rendered by `src/tray.rs`, which is pure Rust
+and has no OS or Slint dependency:
+
+- row 1: today's tokens, at most four characters (`12k`, `1.2M`, `999T`);
+- row 2: today's cost, at most five characters (`$0.00`, `$1.24`, `$12`, `$1.2k`);
+- the hover tooltip carries the exact figures: `Token Monitor Lite — today 12,345 tokens · $1.24`;
+- the `title` property carries `12k · $1.24`, which macOS renders next to the
+  icon in the menu bar and other desktops show in overflow listings.
+
+The tray always reports **today**, not the period the window happens to show.
+`tests/ui.rs::tray_always_reports_today_even_when_the_window_shows_all_time`
+proves it: with the window on All Time (60 tokens) the tray still reads 10.
+
+**ASSUMED**: the two-line badge is legible after the platform scales it to its
+own tray size (16 px on Windows at 100 %, 22 px on many Linux panels). The
+pixels are produced deterministically and tested; how a given desktop renders a
+32 px source is not something this machine can observe.
+
+## Menu and clicks
+
+- **Open** shows the window.
+- **Refresh** submits the same `ApplicationCommand::Refresh` the window's Refresh
+  button sends — one collector, one pipeline.
+- **Quit** hides the icon and quits the event loop.
+- **Left click toggles the window.** `TrayIcon.clicked` is handled by asking the
+  window whether it is visible, then hiding or showing it. **VERIFIED** on
+  Windows that the window is actually mapped once the loop starts (title
+  `Token Monitor`, non-zero window handle, process stays alive). The click
+  gesture itself is **ASSUMED** on Windows and Linux; it cannot be exercised
+  without a desktop session.
+
+**macOS limitation, from Slint's own item contract:** when a menu is attached,
+AppKit pops the menu on left click and `clicked` never fires. Since the menu is a
+requirement, macOS gets menu-on-click; there is no toggle there. This is a
+property of `NSStatusItem`, not of the chosen crate — `tray-icon` behaves the
+same way.
+
+## Close to tray
+
+`closeToTray` is a native-owned key in the settings document, next to the
+timezone and the selected sources. `Preferences::close_to_tray()` reads it and
+**absent, non-boolean or unreadable means `false`**: the window close quits,
+which is the only behaviour that can never strand the application behind an icon
+that is not there.
+
+Saving goes through the existing revision CAS — the draft carries
+`base_revision`, and `StoreHandle::save_settings` rejects a stale write.
+`tests/application.rs::close_to_tray_persists_and_a_stale_draft_cannot_flip_it_back`
+proves the sequence: enable, save, revision 1, then replay the same draft with
+`false` and observe a `Conflict` notice with the setting unchanged and the draft
+preserved.
+
+The window close handler asks the **application** for the committed value rather
+than a cached copy, so a save followed immediately by a close cannot race the
+100 ms presentation timer. If the value is true and a tray exists, the window
+hides and the event loop keeps running (`run_event_loop_until_quit`). Otherwise
+the icon is hidden and `quit_event_loop` is called.
+
+## Linux: the fallback
+
+The Linux backend registers a StatusNotifierItem over the session bus. Two
+things can be missing, and they are not the same:
+
+1. **No session bus at all** — as under a bare `Xvfb`, which has no D-Bus
+   session. `tray::tray_capable()` checks `DBUS_SESSION_BUS_ADDRESS`; when it is
+   unset the tray component is never constructed, so no backend is asked to
+   register anything, and the settings toggle is disabled with the text "Keeps
+   running · no tray on this desktop". **VERIFIED** by the bus-absent rows of the
+   resource measurement: the window starts and idle CPU is unchanged.
+2. **A session bus without a status-notifier host** — a desktop whose panel has
+   no AppIndicator/StatusNotifier support, which is also what the acceptance
+   environment looks like (it starts a bus for AT-SPI but no panel). **VERIFIED**:
+   the backend reports the failure and the application carries on —
+   `Slint: Failed to create system tray icon: Failed to spawn ksni tray: failed to
+   register to the StatusNotifierWatcher: org.freedesktop.DBus.Error.ServiceUnknown:
+   The name org.kde.StatusNotifierWatcher was not provided by any .service files`.
+   The window still appears, the settings screen still works, and idle CPU stays
+   at 0 %. **ASSUMED**: on such a desktop the icon is simply not visible, and
+   because `tray_capable()` can only see the bus, the close-to-tray setting is
+   still offered and would hide a window that nothing brings back. That is why
+   the setting is off by default, and the documented recovery is to start the
+   application again.
+
+Slint's tray item **fails soft**: a backend error is logged and the item simply
+never appears. That is why the close-to-tray decision also requires that a tray
+component was actually constructed (`UiController::set_tray_available`) — the
+setting can never hide the window when there is no icon to bring it back.
+
+AT-SPI is a separate axis: the tray raises no accessibility node of its own, and
+menu accessibility depends on the desktop's status-notifier host, not on this
+application. The Xvfb acceptance therefore asserts nothing about the tray icon;
+it asserts the window, settings and totals it can see. **ASSUMED** for every
+desktop with a real host.
+
+## Resource cost
+
+The tray adds no timer, no thread and no watcher. The badge is re-rendered only
+from the delivery pass that already paints the window, and only when the label
+text actually changed (`sync_tray` compares against the last applied triple), so
+a quiet system does no tray work at all.
+
+Measured on the Linux builder under `Xvfb`, release build, the same populated
+home (61 configured sources), 8 s settle then 10 one-second samples; thresholds
+are the suite's own: idle CPU ≤ 0.5 %, idle RSS ≤ 100 MiB.
+
+| Build | Session bus | Idle CPU | Idle RSS max | Verdict |
+|---|---|---|---|---|
+| before (no `system-tray`) | present | 0.1999 % | 34,904 KiB | pass |
+| before (no `system-tray`) | absent | 0.1000 % | 32,940 KiB | pass |
+| after (tray enabled) | present | 0.0000 % | 36,224 KiB | pass |
+| after (tray enabled) | absent | 0.1000 % | 33,968 KiB | pass |
+
+The tray costs about 1.0–1.3 MiB of resident memory (≈3 % of the app) and no
+measurable idle CPU. **VERIFIED** by measurement, not by inspection.
+
+`scripts/run-linux-resource-acceptance.py` cannot be used to produce those
+numbers on this revision: it never reaches the measurement phase, because the
+GUI acceptance it runs first still expects the fixture to expose 100 selectable
+sources while the seeded settings enable two clients (61 sources), and expects
+the on-screen total to equal the whole-fixture aggregate. Those expectations are
+stale against the current fixture, which now carries one source for every
+supported client. The numbers above therefore come from the same method and the
+same thresholds applied directly, and the suite's own defects are left visible
+rather than papered over. What *was* repaired is `scripts/check-catalog.cjs`,
+which aborted every run before any measurement: it compared the 53-client
+catalog against upstream's 42 rows with `deepStrictEqual`, so it could not pass
+once the documented extensions existed. It now checks the 42 upstream rows
+exactly and pins the 11 documented extensions by name.
+
+## Observed but not explained here
+
+While looking for a populated home to measure against, enabling **all** clients
+in the acceptance settings produced a saved selection of 100 sources that the
+running application then reported as "No sources configured" — no validation
+notice, no conflict notice, and the settings screen still listing all 100 as
+"Selected · Available". That was observed on the pre-tray build (`core-5qvhd35n`
+in the builder's evidence directory), so it is not caused by the tray work, and
+it is written down here rather than fixed inside this change.
+

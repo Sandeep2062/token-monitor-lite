@@ -65,6 +65,8 @@ pub struct SourceHealthRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HomeSummary {
     pub tracked_tokens: String,
+    /// The same total as a number, for callers that need to abbreviate it.
+    pub tracked: u128,
     pub input: String,
     pub output: String,
     pub cache: String,
@@ -121,6 +123,9 @@ pub struct SettingsPresentation {
     pub cancel_enabled: bool,
     pub validation_notice: String,
     pub notice: String,
+    pub committed_close_to_tray: bool,
+    pub draft_close_to_tray: bool,
+    pub tray_capable: bool,
 }
 
 impl Default for SettingsPresentation {
@@ -136,6 +141,7 @@ impl Default for SettingsPresentation {
                     timezone: "UTC".to_owned(),
                     selected_source_ids: Vec::new(),
                     sources: Vec::new(),
+                    close_to_tray: false,
                 },
                 None,
             ),
@@ -146,6 +152,9 @@ impl Default for SettingsPresentation {
             cancel_enabled: false,
             validation_notice: String::new(),
             notice: "Settings are unavailable until startup completes.".to_owned(),
+            committed_close_to_tray: false,
+            draft_close_to_tray: false,
+            tray_capable: crate::tray::tray_capable(),
         }
     }
 }
@@ -228,11 +237,38 @@ pub struct UiPresentation {
     pub refresh_available: bool,
     pub watch_status: String,
     pub settings: SettingsPresentation,
+    pub tray: TrayPresentation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrayPresentation {
+    /// Today's tracked tokens, compacted for the badge.
+    pub tokens: String,
+    /// Today's cost, compacted for the badge.
+    pub cost: String,
+    /// Full, unabbreviated text for the hover tooltip and the menu-bar title.
+    pub tooltip: String,
+    /// Today's tracked tokens and cost as the window formats them.
+    pub full_tokens: String,
+    pub full_cost: String,
+}
+
+impl Default for TrayPresentation {
+    fn default() -> Self {
+        Self {
+            tokens: "0".to_owned(),
+            cost: "—".to_owned(),
+            tooltip: "Token Monitor Lite — today 0 tokens · —".to_owned(),
+            full_tokens: "0".to_owned(),
+            full_cost: "—".to_owned(),
+        }
+    }
 }
 
 pub struct UiController {
     snapshot: Option<Arc<MonitorSnapshot>>,
     application_snapshot: Option<Arc<ApplicationSnapshot>>,
+    tray_available: bool,
     settings_draft: Option<SettingsDraft>,
     startup_notice: Option<String>,
     command_notice: Option<String>,
@@ -251,6 +287,7 @@ impl Default for UiController {
         Self {
             snapshot: None,
             application_snapshot: None,
+            tray_available: crate::tray::tray_capable(),
             settings_draft: None,
             startup_notice: None,
             command_notice: None,
@@ -341,6 +378,20 @@ impl UiController {
             draft.timezone.clear();
             draft.timezone.push_str(timezone);
         }
+    }
+
+    pub fn set_settings_close_to_tray(&mut self, close_to_tray: bool) {
+        if let Some(draft) = self.settings_draft.as_mut() {
+            draft.close_to_tray = close_to_tray;
+        }
+    }
+
+    /// Record whether a tray icon was actually created.
+    ///
+    /// The platform may be capable and still fail to produce an icon, so the
+    /// setting is only offered when the icon exists to come back to.
+    pub fn set_tray_available(&mut self, available: bool) {
+        self.tray_available = available;
     }
 
     pub fn set_settings_client_enabled(&mut self, client: &str, enabled: bool) {
@@ -578,6 +629,7 @@ impl UiController {
         UiPresentation {
             generation: snapshot.generation,
             home: home_summary(snapshot, &sources, self.period, self.clock_ms, pricing),
+            tray: tray_presentation(snapshot, self.clock_ms, pricing),
             trends: trends_presentation(snapshot, self.clock_ms),
             models: models_presentation(snapshot, self.period, self.clock_ms, pricing),
             detail: session_detail(snapshot, self.selected_session.as_ref(), pricing),
@@ -669,6 +721,9 @@ impl UiController {
                     .unwrap_or_default()
                     .to_owned()
             }),
+            committed_close_to_tray: snapshot.settings.close_to_tray,
+            draft_close_to_tray: draft.close_to_tray,
+            tray_capable: self.tray_available,
         }
     }
 
@@ -753,6 +808,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
         generation: 0,
         home: HomeSummary {
             tracked_tokens: "0".to_owned(),
+            tracked: 0,
             input: "0".to_owned(),
             output: "0".to_owned(),
             cache: "0".to_owned(),
@@ -778,6 +834,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
         },
         detail: None,
         update: UpdatePresentation::default(),
+        tray: TrayPresentation::default(),
         recent_sessions: Vec::new(),
         sessions: Vec::new(),
         sources: Vec::new(),
@@ -1315,6 +1372,7 @@ fn home_summary(
         || !snapshot.canonical.retained_periods.is_empty();
     HomeSummary {
         tracked_tokens: format_number(tracked),
+        tracked,
         input: format_number(input),
         output: format_number(output),
         cache: format_number(cache),
@@ -1342,6 +1400,24 @@ fn home_summary(
         output_permille: fraction_permille(output, tracked),
         cache_permille: fraction_permille(cache, tracked),
         reasoning_permille: fraction_permille(reasoning, tracked),
+    }
+}
+
+/// Today's usage for the tray, independent of the period the window shows.
+fn tray_presentation(
+    snapshot: &MonitorSnapshot,
+    clock_ms: Option<i64>,
+    pricing: &PricingCatalog,
+) -> TrayPresentation {
+    let today = home_summary(snapshot, &[], UsagePeriod::Today, clock_ms, pricing);
+    let tokens = crate::tray::compact_tokens(today.tracked);
+    let cost = crate::tray::compact_cost(&today.cost);
+    TrayPresentation {
+        tooltip: crate::tray::tooltip(&today.tracked_tokens, &today.cost, &tokens, &cost),
+        tokens,
+        cost,
+        full_tokens: today.tracked_tokens,
+        full_cost: today.cost,
     }
 }
 

@@ -126,6 +126,7 @@ fn application_snapshot(
             enabled_clients: vec!["claude".to_owned()],
             timezone: timezone.to_owned(),
             selected_source_ids: vec![SourceId::from_bytes([1; 16]).as_storage_key()],
+            close_to_tray: false,
             sources: vec![
                 SourceChoice {
                     id: SourceId::from_bytes([1; 16]).as_storage_key(),
@@ -236,6 +237,7 @@ fn settings_conflict_retains_user_input_with_a_short_redacted_notice() {
         enabled_clients: vec!["claude".to_owned()],
         timezone: "America/Los_Angeles".to_owned(),
         selected_source_ids: vec![SourceId::from_bytes([1; 16]).as_storage_key()],
+        close_to_tray: false,
     };
     assert!(controller.accept_application_snapshot(application_snapshot(
         2,
@@ -1037,4 +1039,98 @@ fn a_healthy_source_reports_unmeasured_turns() {
             .contains("4 turn(s) with no recorded counters")
     );
     assert!(!rows[0].detail.contains("current snapshot"));
+}
+
+#[test]
+fn tray_always_reports_today_even_when_the_window_shows_all_time() {
+    let day = |text: &str| {
+        chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            .expect("test date")
+            .and_hms_opt(12, 0, 0)
+            .expect("test time")
+            .and_utc()
+            .timestamp_millis()
+    };
+    let mut controller = UiController::new();
+    controller.set_clock_ms(day("2026-11-13"));
+    controller.accept_snapshot(snapshot(
+        1,
+        TokenCounts::default(),
+        vec![
+            session(
+                "claude",
+                "a",
+                "sonnet",
+                day("2026-11-13"),
+                TokenCounts {
+                    input: 10,
+                    ..TokenCounts::default()
+                },
+            ),
+            session(
+                "claude",
+                "b",
+                "opus",
+                day("2026-11-02"),
+                TokenCounts {
+                    input: 20,
+                    ..TokenCounts::default()
+                },
+            ),
+            session(
+                "codex",
+                "c",
+                "haiku",
+                day("2026-10-20"),
+                TokenCounts {
+                    input: 30,
+                    ..TokenCounts::default()
+                },
+            ),
+        ],
+        Vec::new(),
+        WatchStatus::Available,
+    ));
+
+    let today = controller.presentation();
+    assert_eq!(today.home.tracked_tokens, "10");
+    assert_eq!(today.tray.tokens, "10");
+    assert_eq!(today.tray.full_tokens, "10");
+    assert!(
+        today.tray.tooltip.contains("today 10 tokens"),
+        "{}",
+        today.tray.tooltip
+    );
+
+    controller.set_period(UsagePeriod::AllTime);
+    let all_time = controller.presentation();
+    assert_eq!(all_time.home.tracked_tokens, "60");
+    // The window changed period; the tray does not.
+    assert_eq!(all_time.tray.tokens, "10");
+    assert_eq!(all_time.tray, today.tray);
+}
+
+#[test]
+fn close_to_tray_draft_is_dirty_only_when_it_differs_from_the_committed_value() {
+    let mut controller = UiController::new();
+    controller.accept_application_snapshot(application_snapshot(
+        1,
+        1,
+        "UTC",
+        None,
+        None,
+        ImportReportView::default(),
+    ));
+    let committed = controller.presentation().settings;
+    assert!(!committed.draft_close_to_tray);
+    assert!(!committed.save_enabled);
+
+    controller.set_settings_close_to_tray(true);
+    let edited = controller.presentation().settings;
+    assert!(edited.draft_close_to_tray);
+    assert!(!edited.committed_close_to_tray);
+    assert!(edited.save_enabled);
+
+    controller.set_settings_close_to_tray(false);
+    assert!(!controller.presentation().settings.save_enabled);
 }

@@ -124,6 +124,7 @@ pub struct SettingsView {
     pub timezone: String,
     pub selected_source_ids: Vec<String>,
     pub sources: Vec<SourceChoice>,
+    pub close_to_tray: bool,
 }
 
 impl SettingsView {
@@ -133,6 +134,7 @@ impl SettingsView {
             enabled_clients: self.enabled_clients.clone(),
             timezone: self.timezone.clone(),
             selected_source_ids: self.selected_source_ids.clone(),
+            close_to_tray: self.close_to_tray,
         }
     }
 }
@@ -143,6 +145,7 @@ pub struct SettingsDraft {
     pub enabled_clients: Vec<String>,
     pub timezone: String,
     pub selected_source_ids: Vec<String>,
+    pub close_to_tray: bool,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -201,6 +204,7 @@ impl SettingsEditor {
             timezone,
             selected_source_ids,
             sources,
+            close_to_tray: preferences.close_to_tray(),
         };
         Ok(Self {
             preferences,
@@ -288,6 +292,7 @@ impl SettingsEditor {
                 &draft.enabled_clients,
                 &draft.timezone,
                 &draft.selected_source_ids,
+                draft.close_to_tray,
             )
             .map_err(|_| SettingsValidationError {
                 issues: vec![SettingsIssue {
