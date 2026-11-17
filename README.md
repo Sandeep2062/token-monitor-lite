@@ -81,7 +81,7 @@ Two implemented clients would report more with a cross-file capability that the 
 - **jcode** pairs each session snapshot with a sibling `*.journal.jsonl`. The journal appends the unsaved suffix of a session and can *replace* a snapshot message with a corrected one, so a merge would have to be keyed by message identity with the journal winning.
 - **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so detecting the pairing and reversing the aggregate requires reading both.
 
-Both need the same change — a source that owns a group of files — which is a change to discovery, the source model, and the persistence format. It is scoped as its own work rather than folded into reader additions, and it is the one piece that also unblocks Roo Code and the VS Code `globalStorage` lanes.
+Both need the same change — a source that owns a group of files — which is a change to discovery, the source model, and the persistence format. It is scoped as its own work rather than folded into reader additions, and it is the one piece that also unblocks Roo Code and the VS Code `globalStorage` lanes. The design is written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md), including the three ordering traps that make a naive implementation loop forever; it is designed but not implemented.
 
 ## Remote verification
 
