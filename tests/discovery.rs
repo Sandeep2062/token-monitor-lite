@@ -291,6 +291,62 @@ fn qodercn_database(path: &Path) {
         .unwrap();
 }
 
+fn bb_database(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                provider_id TEXT NOT NULL,
+                model_override TEXT,
+                title TEXT,
+                parent_thread_id TEXT,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT,
+                sequence INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+             INSERT INTO threads VALUES ('thr_1', NULL, 'claude-code', 'claude-3-7-sonnet', NULL, NULL, 1000);
+",
+        )
+        .unwrap();
+    // The payload is bound separately so its quotes need no escaping.
+    let data = r#"{"tokenUsage":{"last":{"totalTokens":120,"inputTokens":100,"outputTokens":20}}}"#;
+    connection
+        .execute(
+            "INSERT INTO events VALUES ('e1', 'thr_1', 'turn_1', 1, \
+             'thread/tokenUsage/updated', ?1, 1100)",
+            [data],
+        )
+        .unwrap();
+}
+
+#[test]
+fn bb_databases_are_discovered() {
+    let tree = Tree::new();
+    bb_database(&tree.0.join(".bb/bb.db"));
+
+    let report = discover(&tree.paths(&["bb"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::BbSqlite);
+
+    let disabled = discover(&tree.paths(&["claude"])).unwrap();
+    assert!(
+        disabled
+            .sources
+            .iter()
+            .all(|source| source.format != SourceFormat::BbSqlite)
+    );
+}
+
 #[test]
 fn freebuff_lane_is_partitioned_from_codebuff() {
     let tree = Tree::new();

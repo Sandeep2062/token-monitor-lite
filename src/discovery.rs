@@ -5,11 +5,11 @@ use crate::aggregation::MAX_SOURCES;
 use crate::parsers::jsonl::MAX_BATCH_BYTES;
 use crate::runtime::MonitoredSource;
 use crate::source_inputs::{
-    AntigravitySqliteAdapter, CatpawAdapter, CherrystudioAdapter, CodexLocalUsageAdapter,
-    DevinAdapter, GooseAdapter, HermesAdapter, KiloAdapter, MAX_DECODED_BYTES, MimoAdapter,
-    OpenClawAdapter, OpenCodeAdapter, QodercnAdapter, SessionArchiveAdapter, SourceInput,
-    SqliteSourceError, UnslothAdapter, WorkBuddySqliteAdapter, ZcodeAdapter, ZedAdapter,
-    has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
+    AntigravitySqliteAdapter, BbAdapter, CatpawAdapter, CherrystudioAdapter,
+    CodexLocalUsageAdapter, DevinAdapter, GooseAdapter, HermesAdapter, KiloAdapter,
+    MAX_DECODED_BYTES, MimoAdapter, OpenClawAdapter, OpenCodeAdapter, QodercnAdapter,
+    SessionArchiveAdapter, SourceInput, SqliteSourceError, UnslothAdapter, WorkBuddySqliteAdapter,
+    ZcodeAdapter, ZedAdapter, has_zstd_suffix, is_compressed_source_path, is_opencode_db_filename,
 };
 use crate::sources::{SourceFormat, SourceId, SourceProgress, SourceReader};
 use serde_json::Value;
@@ -2030,6 +2030,80 @@ fn discover_sources_with_id(
                 }),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
+            }
+            continue;
+        }
+        if client == "bb" {
+            // BB keeps one SQLite database per installation: `~/.bb/bb.db`,
+            // `$BB_DATA_DIR/bb.db`, and development instances at
+            // `~/.bb-dev/<instance>/bb.db`.
+            let mut roots = Vec::new();
+            if let Some(root) = inputs.env_paths.get("BB_DATA_DIR") {
+                let root = checked_root(inputs.platform, root, false)?;
+                roots.push(root);
+            }
+            roots.push(join_many(inputs.platform, &inputs.home, &[".bb"]));
+            roots.push(join_many(inputs.platform, &inputs.home, &[".bb-dev"]));
+
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for root in &roots {
+                collect_db_candidates(root, 0, &mut inspected, &mut candidates, &mut overflow)?;
+            }
+            candidates.retain(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "bb.db")
+            });
+            candidates.sort();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !metadata.file_type().is_file() {
+                    notices.push(DiscoveryNotice::SourceNotRegular {
+                        client: "bb",
+                        ordinal,
+                    });
+                    continue;
+                }
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                if metadata.len() > MAX_SOURCE_FILE_BYTES || BbAdapter::new(&path).read().is_err() {
+                    notices.push(DiscoveryNotice::SourceInvalid {
+                        client: "bb",
+                        ordinal,
+                    });
+                    continue;
+                }
+                let source_id = source_id_for(SourceFormat::BbSqlite, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                // Threads are the per-session identity inside the reader; the
+                // source itself is the database file.
+                let session = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .filter(|stem| !stem.is_empty())
+                    .unwrap_or("bb")
+                    .to_owned();
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::BbSqlite,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
             }
             continue;
         }
@@ -4338,6 +4412,7 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         for record in batch.records {
             let value: Value = serde_json::from_slice(&record).map_err(|_| ())?;
             let session = match format {
+                SourceFormat::BbSqlite => None,
                 SourceFormat::CodebuffJson => None,
                 SourceFormat::FreebuffJson => None,
                 SourceFormat::ClaudeCli => value.get("sessionId").and_then(Value::as_str),

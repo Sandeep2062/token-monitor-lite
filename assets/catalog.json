@@ -42,6 +42,7 @@
     {"id":"qodercn","label":"Qoder CN","defaultTracked":false,"forkOnly":true},
     {"id":"reasonix","label":"Reasonix"},
     {"id":"dsh","label":"DeepSeek Harness"},
+    {"id":"bb","label":"BB"},
     {"id":"cherrystudio","label":"Cherry Studio"},
     {"id":"lmstudio","label":"LM Studio"},
     {"id":"unsloth","label":"Unsloth"},

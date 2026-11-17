@@ -5,6 +5,7 @@
 
 use crate::accounting::{SessionKey, TokenCounts};
 use crate::parsers::antigravity::AntigravityDbReader;
+use crate::parsers::bb;
 use crate::parsers::catpaw;
 use crate::parsers::cherrystudio;
 use crate::parsers::devin;
@@ -302,6 +303,24 @@ impl CherrystudioAdapter {
 
     pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
         read_cherrystudio(&self.path)
+    }
+}
+
+pub struct BbAdapter {
+    path: PathBuf,
+}
+
+impl BbAdapter {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read(&self) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+        read_bb(&self.path)
     }
 }
 
@@ -648,6 +667,7 @@ pub enum InputAdapterStatus {
     DshJsonl,
     LmstudioLog,
     CatpawSqlite,
+    BbSqlite,
     CherrystudioSqlite,
     UnslothSqlite,
     DevinSqlite,
@@ -677,6 +697,7 @@ pub(crate) enum SqliteInputData {
     Zcode(Arc<[ResponseUsage]>),
     Qodercn(Arc<[ResponseUsage]>),
     Catpaw(Arc<[ResponseUsage]>),
+    Bb(Arc<[ResponseUsage]>),
     Cherrystudio(Arc<[ResponseUsage]>),
     Unsloth(Arc<[ResponseUsage]>),
     Devin(Arc<[ResponseUsage]>),
@@ -819,6 +840,7 @@ pub enum SourceInput {
     Zcode(ZcodeAdapter),
     Qodercn(QodercnAdapter),
     Catpaw(CatpawAdapter),
+    Bb(BbAdapter),
     Cherrystudio(CherrystudioAdapter),
     Unsloth(UnslothAdapter),
     Devin(DevinAdapter),
@@ -849,6 +871,7 @@ impl SourceInput {
             SourceFormat::ZcodeSqlite => Self::Zcode(ZcodeAdapter::new(path)),
             SourceFormat::QodercnSqlite => Self::Qodercn(QodercnAdapter::new(path)),
             SourceFormat::CatpawSqlite => Self::Catpaw(CatpawAdapter::new(path)),
+            SourceFormat::BbSqlite => Self::Bb(BbAdapter::new(path)),
             SourceFormat::CherrystudioSqlite => Self::Cherrystudio(CherrystudioAdapter::new(path)),
             SourceFormat::UnslothSqlite => Self::Unsloth(UnslothAdapter::new(path)),
             SourceFormat::DevinSqlite => Self::Devin(DevinAdapter::new(path)),
@@ -1140,6 +1163,7 @@ impl SourceInput {
             Self::Zcode(_) => InputAdapterStatus::ZcodeSqlite,
             Self::Qodercn(_) => InputAdapterStatus::QodercnSqlite,
             Self::Catpaw(_) => InputAdapterStatus::CatpawSqlite,
+            Self::Bb(_) => InputAdapterStatus::BbSqlite,
             Self::Cherrystudio(_) => InputAdapterStatus::CherrystudioSqlite,
             Self::Unsloth(_) => InputAdapterStatus::UnslothSqlite,
             Self::Devin(_) => InputAdapterStatus::DevinSqlite,
@@ -1189,6 +1213,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Bb(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
             | Self::Devin(_)
@@ -1238,6 +1263,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Bb(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
             | Self::Devin(_)
@@ -1264,6 +1290,7 @@ impl SourceInput {
             Self::Zcode(adapter) => Ok(Some(SqliteInputData::Zcode(adapter.read()?))),
             Self::Qodercn(adapter) => Ok(Some(SqliteInputData::Qodercn(adapter.read()?))),
             Self::Catpaw(adapter) => Ok(Some(SqliteInputData::Catpaw(adapter.read()?))),
+            Self::Bb(adapter) => Ok(Some(SqliteInputData::Bb(adapter.read()?))),
             Self::Cherrystudio(adapter) => Ok(Some(SqliteInputData::Cherrystudio(adapter.read()?))),
             Self::Unsloth(adapter) => Ok(Some(SqliteInputData::Unsloth(adapter.read()?))),
             Self::Devin(adapter) => Ok(Some(SqliteInputData::Devin(adapter.read()?))),
@@ -1344,6 +1371,7 @@ impl SourceInput {
             Self::Zcode(adapter) => Some(adapter.path()),
             Self::Qodercn(adapter) => Some(adapter.path()),
             Self::Catpaw(adapter) => Some(adapter.path()),
+            Self::Bb(adapter) => Some(adapter.path()),
             Self::Cherrystudio(adapter) => Some(adapter.path()),
             Self::Unsloth(adapter) => Some(adapter.path()),
             Self::Devin(adapter) => Some(adapter.path()),
@@ -1492,6 +1520,7 @@ impl SourceInput {
             | Self::Zcode(_)
             | Self::Qodercn(_)
             | Self::Catpaw(_)
+            | Self::Bb(_)
             | Self::Cherrystudio(_)
             | Self::Unsloth(_)
             | Self::Devin(_)
@@ -3361,6 +3390,126 @@ fn map_unsloth_error(error: ReaderError) -> SqliteSourceError {
         | ReaderError::InvalidTimestamp
         | ReaderError::Declined(_)
         | ReaderError::Unsupported(_) => SqliteSourceError::Invalid,
+    }
+}
+
+fn read_bb(path: &Path) -> Result<Arc<[ResponseUsage]>, SqliteSourceError> {
+    let snapshot = SqliteSnapshot::open(path)?;
+    let transaction = snapshot.connection.unchecked_transaction()?;
+
+    // Both tables are required: `events` alone cannot name a thread, and
+    // `threads` alone carries no usage.
+    if !table_exists(&transaction, "events")? || !table_exists(&transaction, "threads")? {
+        return Err(SqliteSourceError::Unsupported);
+    }
+    // The optional joins are probed individually, because a build may ship one
+    // without the other and naming a missing table fails the whole statement.
+    let has_projects = table_exists(&transaction, "projects")?;
+    let has_defaults = table_exists(&transaction, "project_execution_defaults")?;
+
+    let project_join = if has_projects {
+        "LEFT JOIN projects p ON p.id = t.project_id"
+    } else {
+        ""
+    };
+    let project_cols = if has_projects {
+        "p.id, p.name,"
+    } else {
+        "NULL AS project_id, NULL AS project_name,"
+    };
+    let defaults_join = if has_defaults {
+        "LEFT JOIN project_execution_defaults d \
+         ON d.project_id = t.project_id AND d.provider_id = t.provider_id"
+    } else {
+        ""
+    };
+    let defaults_cols = if has_defaults {
+        "d.model, d.service_tier"
+    } else {
+        "NULL AS default_model, NULL AS service_tier"
+    };
+
+    let sql = format!(
+        "SELECT e.thread_id, e.turn_id, e.sequence, e.type, e.data, e.created_at, \
+                t.id, {project_cols} t.provider_id, t.model_override, t.title, \
+                t.parent_thread_id, {defaults_cols} \
+         FROM events e \
+         LEFT JOIN threads t ON t.id = e.thread_id \
+         {project_join} {defaults_join} \
+         WHERE e.type IN ('thread/tokenUsage/updated', 'provider/modelFallback') \
+         ORDER BY e.thread_id, e.sequence ASC"
+    );
+
+    let fallback_timestamp = std::fs::symlink_metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+
+    let mut reader = bb::BbReader::new(fallback_timestamp);
+    let mut offset = 0_i64;
+    loop {
+        let mut statement =
+            transaction.prepare(&format!("{sql} LIMIT {SQLITE_PAGE_ROWS} OFFSET ?1"))?;
+        let mut rows = statement.query(params![offset])?;
+        let mut page_rows = 0_usize;
+        while let Some(row) = rows.next()? {
+            page_rows += 1;
+            // Bind every owned value before building the row.
+            let thread_id: String = row.get(0)?;
+            let turn_id: Option<String> = row.get(1)?;
+            let sequence: i64 = row.get(2)?;
+            let event_type: String = row.get(3)?;
+            let data: String = row.get(4)?;
+            let created_at_ms: Option<i64> = row.get(5)?;
+            let thread_pk: Option<String> = row.get(6)?;
+            let project_id: Option<String> = row.get(7)?;
+            let project_name: Option<String> = row.get(8)?;
+            let provider_id: Option<String> = row.get(9)?;
+            let model_override: Option<String> = row.get(10)?;
+            let title: Option<String> = row.get(11)?;
+            let parent_thread_id: Option<String> = row.get(12)?;
+            let default_model: Option<String> = row.get(13)?;
+            let service_tier: Option<String> = row.get(14)?;
+
+            let meta = thread_pk.map(|id| bb::BbThreadMeta {
+                id,
+                project_id,
+                project_name,
+                provider_id: provider_id.unwrap_or_default(),
+                model_override,
+                default_model,
+                service_tier,
+                title,
+                parent_thread_id,
+            });
+
+            reader
+                .ingest(&bb::BbRow {
+                    thread_id,
+                    turn_id,
+                    sequence,
+                    event_type,
+                    data,
+                    created_at_ms,
+                    meta,
+                })
+                .map_err(map_bb_error)?;
+        }
+        if page_rows < SQLITE_PAGE_ROWS as usize {
+            break;
+        }
+        offset += SQLITE_PAGE_ROWS;
+    }
+
+    Ok(Arc::from(reader.snapshot()))
+}
+
+fn map_bb_error(error: ReaderError) -> SqliteSourceError {
+    match error {
+        ReaderError::Capacity(_) => SqliteSourceError::Capacity,
+        _ => SqliteSourceError::Unsupported,
     }
 }
 
