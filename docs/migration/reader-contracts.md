@@ -1016,6 +1016,26 @@ A valid `GOOSE_PATH_ROOT` (raw absolute, not whitespace-prefixed) makes only `<r
 
 Discovery walks `<home>/.copilot/otel` recursively for `.jsonl` files. The configured exporter file is not read beyond that directory, and VS Code session-state stores are not admitted.
 
+## Live-host check
+
+The reader set was also run against a real Windows installation rather than only
+against fixtures: 478 discovered sources, all 478 read to a snapshot, and **0**
+sources rejected by aggregation. Per-client: `antigravity` 433, `copilot` 21,
+`codex` 13, `commandcode` 9, `cline` 1.
+
+Two things that run proved, and one it cleared:
+
+- Antigravity's two stores collided on 24,424 identities before the precedence
+  rule above; afterwards the client contributes 317 cache-backed conversations.
+- Codex forked rollouts collided on 29 identities before the cumulative-total
+  tolerance; afterwards none.
+- The 85 discovery-time `SourceInvalid` notices on that host are **not** lost
+  usage: they are 36 Command Code `.meta.json` sidecars (`{"entrypoint":"print"}`),
+  37 Copilot chat sessions with no completed request (51 files, 14 carry
+  counters), and one Command Code session that was still being written at scan
+  time, so its tail was incomplete. Every usage-bearing file on that host was
+  admitted.
+
 ## Native safety bounds
 
 These are acceptance limits, not truncation targets:

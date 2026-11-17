@@ -4416,6 +4416,12 @@ fn discover_sources_with_id(
                     &[".kiro", "sessions", "cli"],
                 )],
             ),
+            // The Cline-family task lane adds its sources from the task-log
+            // block above, so this client has no single-root tree of its own.
+            // Without an arm here it would fall through to the
+            // unsupported-client notice and be reported as a client we cannot
+            // read, on every host, whether or not Roo Code is installed.
+            "roocode" => continue,
             "kimi" => (
                 "kimi",
                 SourceFormat::KimiJsonl,

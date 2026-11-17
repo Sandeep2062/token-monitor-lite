@@ -787,6 +787,24 @@ fn copilot_cli_session_without_usage_is_not_admitted() {
 }
 
 #[test]
+fn clients_with_a_dedicated_lane_are_never_reported_unsupported() {
+    // These lanes add their sources from their own discovery blocks rather than
+    // the single-root table, so an empty tree must still not make them look like
+    // clients this app cannot read.
+    for client in ["roocode", "cline", "kilo", "copilot", "kiro"] {
+        let tree = Tree::new();
+        let report = discover(&tree.paths(&[client])).unwrap();
+        let unsupported = report.notices.iter().any(|notice| {
+            matches!(notice, DiscoveryNotice::UnsupportedClient { client: reported } if reported == client)
+        });
+        assert!(
+            !unsupported,
+            "{client} was reported as an unsupported client"
+        );
+    }
+}
+
+#[test]
 fn jcode_attaches_the_sibling_journal_as_a_companion() {
     let tree = Tree::new();
     tree.file(
