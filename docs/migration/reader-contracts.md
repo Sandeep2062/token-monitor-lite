@@ -166,7 +166,25 @@ The supported source is Cline CLI/Desktop's shared `~/.cline/data/sessions/<sess
 | Cache read + cache write greater than `inputTokens` | declined record | Skip and count this record; every other record in the source still publishes. The pinned reader saturating-subtracts and can under-count; the native reader refuses that shape. | Prior rows retained; `declined_records` increments. |
 | Assistant with metrics but no resolvable model | visible unsupported | No fabricated `unknown` model. | Prior committed generation remains active. |
 | Invalid JSON, missing `messages`, non-object message/metrics, negative/fractional counter, or invalid timestamp | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
-| VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | visible unsupported / ignored | Not discovered or not parsed; no format guessing. | No source slot. |
+| VS Code `tasks/**/ui_messages.json`, `api_conversation_history.json`, manifest-only model fallback, cost/currency, and the Roo/Kilo text-payload format | ignored (Cline) | Cline itself is read from its CLI session tree, not its task logs. The task-log shape is read under the separate `roocode` client instead — see the Roo Code matrix. | No source slot for Cline. |
+
+## Roo Code task-log matrix
+
+Roo Code (`RooVeterinaryInc.roo-cline`) keeps one directory per task under the VS Code extension's `globalStorage`: `<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/`. Two files sit in it and only one carries usage.
+
+`ui_messages.json` is `ClineMessage[]`. A completed API request is a `say: "api_req_started"` message whose `text` is a **JSON string** holding `tokensIn`, `tokensOut`, `cacheWrites`, `cacheReads` and `cost`.
+
+`api_conversation_history.json` is an Anthropic `MessageParam[]` — the provider-facing conversation. It has no counters, so it is not read. This is why Roo Code is a **single-file** source and does not need cross-file grouping.
+
+| Input shape | Status | Normalized result / parser state | Session ownership and failure rule |
+|---|---|---|---|
+| `say: "api_req_started"` with `tokensIn`/`tokensOut` | supported | `tokensIn` is **gross**: `input + cacheWrites + cacheReads` under the Anthropic protocol, raw `input_tokens` (cache included) under OpenAI. Cache is subtracted once; `outputTokens` retained; reasoning zero. `cost` is reported verbatim as nano-USD. | The task directory name, because the document has no task id inside. |
+| Placeholder `api_req_started` whose text is only `{"apiProtocol": …}` | ignored non-usage | Roo writes this before streaming and fills it on completion, so a cancelled request has no counters and no row. | No ownership change. |
+| `ask: "api_req_started"`, any other `say`/`ask` | ignored non-usage | Only the `say` variant is a usage record. | No ownership change. |
+| Cache read + cache write greater than `tokensIn` | declined record | Refused rather than clamped, because clamping under-counts. | Prior rows retained; `declined_records` increments. |
+| `api_conversation_history.json` | not read | No token counters exist in it. | Contributes nothing; not a source. |
+| Model resolution | not implemented | The model lives in Roo's provider profile settings, not the task directory, so rows carry `unknown` and `cost` carries the spend. | No fabricated model name. |
+| `condense_context` cost rows, subtask task-stack linkage | not implemented | No source slot. | — |
 
 ## Amp thread matrix
 

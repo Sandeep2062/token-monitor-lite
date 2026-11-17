@@ -47,6 +47,7 @@ pub mod proma;
 pub mod qodercn;
 pub mod qwen;
 pub mod reasonix;
+pub mod roocode;
 pub mod senpi;
 pub mod tencent_buddy;
 pub mod timestamps;

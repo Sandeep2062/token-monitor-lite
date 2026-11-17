@@ -1508,6 +1508,7 @@ fn source_format(format: SourceFormat) -> &'static str {
         SourceFormat::AmpJson => "Amp",
         SourceFormat::CodebuffJson => "Codebuff",
         SourceFormat::FreebuffJson => "Freebuff",
+        SourceFormat::RooCodeJson => "Roo Code",
         SourceFormat::DroidJson => "Droid",
         SourceFormat::KimiJsonl => "Kimi CLI",
         SourceFormat::CommandCodeJsonl => "Command Code",

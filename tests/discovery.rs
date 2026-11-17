@@ -585,6 +585,41 @@ fn kimchi_sessions_are_discovered_in_the_pi_format() {
 }
 
 #[test]
+fn roocode_reads_the_task_message_log_under_global_storage() {
+    let tree = Tree::new();
+    let task = ".config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-a";
+    tree.file(
+        &format!("{task}/ui_messages.json"),
+        br#"[{"ts":1740000000100,"type":"say","say":"api_req_started","text":"{\"tokensIn\":120,\"tokensOut\":30,\"cacheWrites\":1,\"cacheReads\":2,\"cost\":0.01}"}]"#,
+    );
+    // The provider-facing conversation carries no counters, so it is not a
+    // source of its own either.
+    tree.file(
+        &format!("{task}/api_conversation_history.json"),
+        br#"[{"role":"assistant","content":[{"type":"text","text":"hi"}]}]"#,
+    );
+
+    let report = discover(&tree.paths(&["roocode"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].format, SourceFormat::RooCodeJson);
+    // The task directory identifies the session; the file name does not.
+    assert_eq!(report.sources[0].session, "task-a");
+}
+
+#[test]
+fn roocode_task_without_a_message_log_is_not_admitted() {
+    let tree = Tree::new();
+    let task = ".config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-b";
+    tree.file(
+        &format!("{task}/api_conversation_history.json"),
+        br#"[{"role":"user","content":[{"type":"text","text":"hi"}]}]"#,
+    );
+
+    let report = discover(&tree.paths(&["roocode"])).unwrap();
+    assert!(report.sources.is_empty());
+}
+
+#[test]
 fn jcode_attaches_the_sibling_journal_as_a_companion() {
     let tree = Tree::new();
     tree.file(

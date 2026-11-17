@@ -644,6 +644,7 @@ pub enum InputAdapterStatus {
     OrdinaryJsonl,
     /// Several files read into one reader, in order.
     Grouped,
+    RooCodeJson,
     KimiJsonl,
     CommandCodeJsonl,
     GrokJsonl,
@@ -824,6 +825,7 @@ pub enum SourceInput {
     Codebuff(Box<DocumentInput>),
     Freebuff(Box<DocumentInput>),
     Trae(Box<DocumentInput>),
+    RooCode(Box<DocumentInput>),
     QodercnJsonl(OrdinaryJsonlInput),
     PromaJsonl(OrdinaryJsonlInput),
     Gemini(GeminiInput),
@@ -949,6 +951,7 @@ impl SourceInput {
             SourceFormat::CodebuffJson => Self::codebuff(path),
             SourceFormat::FreebuffJson => Self::freebuff(path),
             SourceFormat::TraeJson => Self::trae(path),
+            SourceFormat::RooCodeJson => Self::roocode(path),
             SourceFormat::CopilotJsonl => Self::copilot(path),
             SourceFormat::CodeBuddyJsonl
                 if path
@@ -1088,6 +1091,14 @@ impl SourceInput {
         }))
     }
 
+    pub(crate) fn roocode(path: PathBuf) -> Self {
+        Self::RooCode(Box::new(DocumentInput {
+            path,
+            cursor: DocumentCursor::default(),
+            window: None,
+        }))
+    }
+
     pub(crate) fn vibe(path: PathBuf) -> Self {
         Self::Vibe(Box::new(DocumentInput {
             path,
@@ -1146,6 +1157,7 @@ impl SourceInput {
             Self::Codebuff(_) => InputAdapterStatus::CodebuffJson,
             Self::Freebuff(_) => InputAdapterStatus::FreebuffJson,
             Self::Trae(_) => InputAdapterStatus::TraeJson,
+            Self::RooCode(_) => InputAdapterStatus::RooCodeJson,
             Self::Kimi(_) => InputAdapterStatus::KimiJsonl,
             Self::CommandCode(_) => InputAdapterStatus::CommandCodeJsonl,
             Self::Grok(_) => InputAdapterStatus::GrokJsonl,
@@ -1197,6 +1209,7 @@ impl SourceInput {
             Self::Codebuff(input) => input.reset(),
             Self::Freebuff(input) => input.reset(),
             Self::Trae(input) => input.reset(),
+            Self::RooCode(input) => input.reset(),
             Self::CommandCode(input) => input.cursor.reset(),
             Self::Grok(input) => input.cursor.reset(),
             Self::ZcodeJsonl(input) => input.cursor.reset(),
@@ -1248,6 +1261,7 @@ impl SourceInput {
             Self::Codebuff(input) => input.is_current(),
             Self::Freebuff(input) => input.is_current(),
             Self::Trae(input) => input.is_current(),
+            Self::RooCode(input) => input.is_current(),
             Self::CommandCode(input) => input.cursor.is_current(&input.path),
             Self::Grok(input) => input.cursor.is_current(&input.path),
             Self::ZcodeJsonl(input) => input.cursor.is_current(&input.path),
@@ -1340,7 +1354,8 @@ impl SourceInput {
             | Self::Copilot(_)
             | Self::CodeBuddyLog(_)
             | Self::CompressedJsonl(_)
-            | Self::Grouped(_) => Ok(None),
+            | Self::Grouped(_)
+            | Self::RooCode(_) => Ok(None),
         }
     }
 
@@ -1360,6 +1375,7 @@ impl SourceInput {
             Self::Codebuff(input) => Some(&input.path),
             Self::Freebuff(input) => Some(&input.path),
             Self::Trae(input) => Some(&input.path),
+            Self::RooCode(input) => Some(&input.path),
             Self::CommandCode(input) => Some(&input.path),
             Self::Grok(input) => Some(&input.path),
             Self::ZcodeJsonl(input) => Some(&input.path),
@@ -1495,6 +1511,7 @@ impl SourceInput {
             }
             Self::Gemini(input) => input.read_batch(),
             Self::Grouped(input) => input.read_batch(),
+            Self::RooCode(input) => input.read_batch(),
             Self::Kimi(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {

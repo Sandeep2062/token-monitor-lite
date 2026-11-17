@@ -47,6 +47,7 @@ const SUPPORTED_CLIENTS: &[&str] = &[
     "codebuff",
     "freebuff",
     "trae",
+    "roocode",
     "workbuddy",
 ];
 const COMMAND_CAPACITY: usize = 8;
@@ -1178,6 +1179,7 @@ fn source_client(format: SourceFormat) -> &'static str {
         SourceFormat::CodebuffJson => "codebuff",
         SourceFormat::FreebuffJson => "freebuff",
         SourceFormat::TraeJson => "trae",
+        SourceFormat::RooCodeJson => "roocode",
         SourceFormat::AntigravityJsonl => "antigravity",
         SourceFormat::QwenJsonl => "qwen",
         SourceFormat::ReasonixJsonl => "reasonix",

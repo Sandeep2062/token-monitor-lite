@@ -893,6 +893,121 @@ fn cline_cli_sessions_root(inputs: &HostPaths) -> Result<PathBuf, DiscoveryError
     ))
 }
 
+/// Every VS Code `globalStorage/<extension>/<subdir>` root for this host.
+///
+/// VS Code keeps extension state in a platform-specific root, and a remote or
+/// container session keeps a separate one, so a user can have the same
+/// extension's tasks in more than one place. Roots are returned whether or not
+/// they exist; the collector treats an absent root as empty.
+fn vscode_global_storage_roots(
+    inputs: &HostPaths,
+    extension: &str,
+    subdirectory: &str,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut push = |base: Option<&Path>, user: &[&str]| {
+        let Some(base) = base else {
+            return;
+        };
+        let mut path = base.to_path_buf();
+        for component in user {
+            path.push(component);
+        }
+        path.push("globalStorage");
+        path.push(extension);
+        path.push(subdirectory);
+        roots.push(path);
+    };
+    match inputs.platform {
+        HostPlatform::Windows => {
+            if let Some(app_data) = inputs.app_data.as_deref() {
+                push(Some(app_data), &["Code", "User"]);
+                push(Some(app_data), &["Code - Insiders", "User"]);
+            }
+        }
+        HostPlatform::MacOs => {
+            push(
+                Some(&inputs.home),
+                &["Library", "Application Support", "Code", "User"],
+            );
+        }
+        HostPlatform::Linux => {
+            let config = inputs
+                .xdg_config_home
+                .as_deref()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| inputs.home.join(".config"));
+            push(Some(&config), &["Code", "User"]);
+        }
+    }
+    // A Remote-SSH/WSL/container window stores extension state in the server
+    // directory, which lives in the home directory on every platform.
+    push(Some(&inputs.home), &[".vscode-server", "data", "User"]);
+    roots
+}
+
+/// Collect `<root>/<taskId>/ui_messages.json`.
+fn collect_roo_task_candidates(
+    root: &Path,
+    depth: usize,
+    inspected: &mut usize,
+    candidates: &mut Vec<PathBuf>,
+    overflow: &mut bool,
+) -> Result<(), DiscoveryError> {
+    if *overflow {
+        return Ok(());
+    }
+    if depth > 1 {
+        *overflow = true;
+        candidates.clear();
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut children = Vec::new();
+    for entry in fs::read_dir(root)? {
+        *inspected += 1;
+        if *inspected > MAX_SOURCE_CANDIDATES {
+            *overflow = true;
+            candidates.clear();
+            return Ok(());
+        }
+        children.push(entry?.path());
+    }
+    children.sort();
+    for child in children {
+        let child_metadata = fs::symlink_metadata(&child)?;
+        if !child_metadata.file_type().is_dir() {
+            continue;
+        }
+        // Only the task's own message log is usage. `api_conversation_history`
+        // is the provider-facing conversation and carries no counters, and the
+        // sibling metadata files carry none either.
+        let candidate = child.join("ui_messages.json");
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                *inspected += 1;
+                if *inspected > MAX_SOURCE_CANDIDATES {
+                    *overflow = true;
+                    candidates.clear();
+                    return Ok(());
+                }
+                candidates.push(candidate);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 fn collect_cline_candidates(
     directory: &Path,
     depth: usize,
@@ -3247,6 +3362,63 @@ fn discover_sources_with_id(
             }
             continue;
         }
+        if client == "roocode" {
+            // Roo Code keeps one directory per task under the VS Code
+            // extension's globalStorage, and `ui_messages.json` is the only
+            // file in it that carries usage.
+            let mut candidates = Vec::new();
+            let mut inspected = 0;
+            let mut overflow = false;
+            for root in vscode_global_storage_roots(inputs, "rooveterinaryinc.roo-cline", "tasks") {
+                collect_roo_task_candidates(
+                    &root,
+                    0,
+                    &mut inspected,
+                    &mut candidates,
+                    &mut overflow,
+                )?;
+            }
+            candidates.sort();
+            candidates.dedup();
+            for (ordinal, path) in candidates.into_iter().enumerate() {
+                let ordinal = ordinal + 1;
+                if sources.len() >= MAX_SOURCES {
+                    notices.push(DiscoveryNotice::SourceLimitReached);
+                    break;
+                }
+                let session = match validate_source(
+                    &path,
+                    SourceFormat::RooCodeJson,
+                    fs::symlink_metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(0),
+                ) {
+                    Ok(session) => session,
+                    Err(()) => {
+                        notices.push(DiscoveryNotice::SourceInvalid {
+                            client: "roocode",
+                            ordinal,
+                        });
+                        continue;
+                    }
+                };
+                let source_id = source_id_for(SourceFormat::RooCodeJson, &path);
+                if !admitted_ids.insert(source_id) {
+                    notices.push(DiscoveryNotice::SourceIdentityCollision);
+                    continue;
+                }
+                sources.push(DiscoveredSource {
+                    source_id,
+                    format: SourceFormat::RooCodeJson,
+                    session,
+                    path,
+                });
+            }
+            if overflow {
+                notices.push(DiscoveryNotice::SourceScanLimitReached);
+            }
+            continue;
+        }
         if client == "augment" {
             // Auggie writes one session snapshot per session at
             // `~/.augment/sessions/<sessionId>.json`.
@@ -4407,6 +4579,17 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         let session = crate::parsers::codebuff::session_from_path(path);
         return Ok(session);
     }
+    if format == SourceFormat::RooCodeJson {
+        // `ui_messages.json` is a bare array with no task identity inside, so
+        // the session is the task directory it sits in — `<tasks>/<taskId>/`.
+        return path
+            .parent()
+            .and_then(|directory| directory.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or(());
+    }
     if matches!(
         format,
         SourceFormat::CodeBuddyJsonl | SourceFormat::LmstudioLog
@@ -4442,6 +4625,8 @@ fn source_session(path: &Path, format: SourceFormat) -> Result<String, ()> {
         for record in batch.records {
             let value: Value = serde_json::from_slice(&record).map_err(|_| ())?;
             let session = match format {
+                // Resolved from the task directory before this point.
+                SourceFormat::RooCodeJson => None,
                 SourceFormat::BbSqlite => None,
                 SourceFormat::CodebuffJson => None,
                 SourceFormat::FreebuffJson => None,

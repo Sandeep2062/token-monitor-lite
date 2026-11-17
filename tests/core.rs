@@ -101,10 +101,10 @@ fn client_id_is_part_of_the_session_partition() {
 #[test]
 fn catalogs_keep_pinned_order_defaults_and_provider_labels() {
     let data = catalog::load().unwrap();
-    assert_eq!(data.clients.len(), 52);
+    assert_eq!(data.clients.len(), 53);
     assert_eq!(data.providers.len(), 34);
     assert_eq!(data.clients.first().unwrap().id, "claude");
-    assert_eq!(data.clients.last().unwrap().id, "jcode");
+    assert_eq!(data.clients.last().unwrap().id, "roocode");
     let off: Vec<_> = data
         .clients
         .iter()

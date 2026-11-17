@@ -1,8 +1,19 @@
 # Source groups: a source that owns more than one file
 
 Status: **implemented for `jcode`.** `MonitoredSource::companions`, `GroupedInput`
-and the keyed merge in `JcodeReader` are in place and tested. `roocode`, the VS Code
-`globalStorage` lanes and Prime Agent's fork reversal are not — see the last section.
+and the keyed merge in `JcodeReader` are in place and tested. `roocode` turned out
+**not** to need this at all — see the correction below. The VS Code `globalStorage`
+lanes and Prime Agent's fork reversal are still open — see the last section.
+
+## Correction: Roo Code is single-file
+
+This document originally claimed Roo Code needed two files per task, with
+`api_conversation_history.json` carrying "the usage-bearing request history". **That was
+wrong.** Roo's `api_conversation_history.json` is an Anthropic `MessageParam[]` and
+contains no token counters whatsoever; all usage lives in `ui_messages.json`, in the
+`say: "api_req_started"` messages. Roo Code is therefore an ordinary single-file reader
+and is implemented that way (`src/parsers/roocode.rs`). Source groups is what `jcode`
+needed, not what Roo Code needed.
 
 ## Why the current contract cannot express it
 
@@ -16,7 +27,6 @@ Three clients need two files to describe one session:
 | client | primary | companion | what the second file carries |
 | --- | --- | --- | --- |
 | `jcode` | `~/.jcode/sessions/session_*.json` | sibling `*.journal.jsonl` | the unsaved message suffix, plus a per-append-batch billing provider |
-| `roocode` | `…/tasks/<id>/ui_messages.json` | `…/tasks/<id>/api_conversation_history.json` | the usage-bearing request history |
 | `prime-agent` | parent transcript | child transcript | `child_usage_attributed` on the parent must be reversed against the child |
 
 Reading them as two sources is wrong, not merely incomplete: the same message would be
@@ -165,13 +175,13 @@ Implemented, in `tests/source_inputs.rs`, `tests/jcode.rs` and `tests/discovery.
 ## What this unblocks, in order
 
 1. **`jcode` sibling journal — done.** A merge into an existing reader, no new format.
-2. `roocode` — two files per task, plus a root under VS Code `globalStorage`. It is the
-   first client whose *only* viable root is a task-log directory, so it also needs the
-   task-log discovery path.
-3. The VS Code `globalStorage` lanes for `cline`, `kilo`, `copilot` and `kiro` — they
-   hold the same task-log shape, so they follow `roocode` rather than needing their own
-   work.
-4. `prime-agent` fork reversal — the hardest of the four, because the pairing is a
+2. **`roocode` — done, but not this way.** It is a single-file reader; see the correction
+   at the top.
+3. The VS Code `globalStorage` task lanes for `cline`, `kilo`, `copilot` and `kiro` —
+   `kilo`'s task root holds the same Roo task-log shape, so it can reuse
+   `src/parsers/roocode.rs` with its own client id. `copilot` and `kiro` keep different
+   stores there and need their own readers.
+4. `prime-agent` fork reversal — the hardest of them, because the pairing is a
    relationship between two *sources* rather than two files in one directory, so it may
    need identity matching beyond what `companions` expresses.
 

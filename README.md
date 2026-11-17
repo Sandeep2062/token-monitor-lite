@@ -54,12 +54,12 @@ See [`docs/migration/inventory.md`](docs/migration/inventory.md) for the complet
 Token Monitor 0.88.0 is cloned into `token-monitor/` as a **reference only** — it is not a build dependency, it is not vendored, and it is expected to be deleted once the migration is finished. Parity against it is:
 
 - **Every one of the 42 tracked clients in `clientCatalog.js` has a reader here.** Verified against `clientSourceRegistration.js`, which is upstream's authoritative `SOURCE_MARKERS` root table, not against a list copied by hand.
-- **Ten extra clients are present** that upstream does not track: `kimchi`, `mux`, `junie`, `augment`, `gjc`, `codebuff`, `freebuff`, `opencodereview`, `trae`, `bb`. These are parser modules shipped in the pinned tokscale reference but never added to Token Monitor's catalog. They are exposed here because the reader contract, the reconciliation test and the catalog must agree — a parser with no catalog entry fails that test.
-- The same is true of `crush`, `warp`, `aside`, `hindsight` and `roocode`: they are **not upstream clients**. Their absence is a catalog decision upstream made, not a gap here.
+- **Eleven extra clients are present** that upstream does not track: `kimchi`, `mux`, `junie`, `augment`, `gjc`, `codebuff`, `freebuff`, `opencodereview`, `trae`, `bb`, `roocode`. These are parser modules shipped in the pinned tokscale reference (or, for `roocode`, a native reader written against Roo Code's own task-log format) but never added to Token Monitor's catalog. They are exposed here because the reader contract, the reconciliation test and the catalog must agree — a parser with no catalog entry fails that test.
+- The same is true of `crush`, `warp`, `aside` and `hindsight`: they are **not upstream clients**. Their absence is a catalog decision upstream made, not a gap here.
 
 Known remaining differences from `SOURCE_MARKERS`, left for whoever picks this up:
 
-- The **VS Code `globalStorage` lanes** for `cline`, `kilo`, `copilot` and `kiro` (for example `…/globalStorage/saoudrizwan.claude-dev/tasks`). These are not extra copies of a root already read — they hold task-log directories rather than session files, so they need a task-log reader rather than another path. `roocode` needs the same reader, which is why it stays out too.
+- The **VS Code `globalStorage` lanes** for `cline`, `kilo`, `copilot` and `kiro`. `roocode` reads that tree natively now (`<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/ui_messages.json`), and `kilo`'s task root holds the same shape, so it can reuse that reader. `copilot` and `kiro` keep different stores there and need their own.
 - **`kiro`'s `~/.local/share/kiro-cli/data.sqlite3`** lane, a second store beside the `~/.kiro/sessions` tree it already reads.
 - Two extra `openclaw` homes and `kimi`'s `.kimi-code` lane **were** missing and have been fixed; see commit `5289a56`.
 
@@ -70,9 +70,8 @@ Six further lanes have no byte-slice reader, and are excluded on purpose rather 
 - **Perch** has no local usage format. `~/.perch` holds only MCP configuration, background-task JSON and log files, and its `cli-agents/sessions.json` is empty; the desktop application keeps conversation and usage state in browser-side IndexedDB against `app.perchai.app`. Reading it would mean parsing a LevelDB blob or calling an undocumented authenticated endpoint, so no reader is provided.
 - **Aside**, **Crush** and **Warp** document no discovery root in their reference. Aside is not installed on the development host, and Crush and Warp name a database or cache file (`crush.db`, a usage cache) without saying where it lives. Inventing a root would produce a reader that silently discovers nothing, which is worse than an absent one. Crush is additionally **cost-only** — it has reliable session cost but no trustworthy per-message token columns, so a token report would read zero by design.
 - **Hindsight** is an HTTP API rather than a file. A reader would introduce the first network and credential boundary into a reader layer that is otherwise pure byte slices.
-- **Roo Code** is blocked on the read contract rather than a root: each task is spread across `ui_messages.json` **and** `api_conversation_history.json`, so reading it needs the cross-file source grouping described below.
 
-A `perch`, `aside`, `crush`, `hindsight`, `roocode` or `warp` source therefore stays absent from discovery instead of appearing as a permanently empty client. Adding any of them is a separate piece of work with its own security review.
+A `perch`, `aside`, `crush`, `hindsight` or `warp` source therefore stays absent from discovery instead of appearing as a permanently empty client. Adding any of them is a separate piece of work with its own security review.
 
 ### Cross-file sources
 
@@ -80,10 +79,9 @@ A source may own more than one file. `MonitoredSource::companions` names files r
 
 **`jcode` uses this.** A session snapshot can have a sibling `*.journal.jsonl` that appends the unsaved suffix and may repeat an entry to correct it; the reader keys messages by identity with the journal winning, and each journal batch re-scopes the billing provider for its own messages so a late route change cannot re-authenticate earlier ones.
 
-Two clients still need the same capability:
+**Roo Code does not need it**, despite an earlier note here claiming otherwise. Its `api_conversation_history.json` is an Anthropic `MessageParam[]` with no token counters at all, so all of its usage is in `ui_messages.json` and it is an ordinary single-file reader.
 
-- **Roo Code** splits each task across `ui_messages.json` and `api_conversation_history.json`.
-- **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so reversing the aggregate means matching two *sources* rather than two files in one directory.
+One client still needs the capability: **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so reversing the aggregate means matching two *sources* rather than two files in one directory.
 
 The mechanism and the three ordering rules that make it work are written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md). It is also what unblocks the VS Code `globalStorage` task-log lanes for `cline`, `kilo`, `copilot` and `kiro`.
 

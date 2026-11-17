@@ -51,7 +51,8 @@
     {"id":"mcode","label":"MiniMax Code"},
     {"id":"mistral","label":"Mistral Vibe"},
     {"id":"prime-agent","label":"Prime Agent"},
-    {"id":"jcode","label":"Jcode"}
+    {"id":"jcode","label":"Jcode"},
+    {"id":"roocode","label":"Roo Code"}
   ],
   "providers": [
     {"id":"claude","label":"Claude","settingsLabel":"Claude Code"},
