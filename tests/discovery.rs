@@ -585,6 +585,47 @@ fn kimchi_sessions_are_discovered_in_the_pi_format() {
 }
 
 #[test]
+fn jcode_attaches_the_sibling_journal_as_a_companion() {
+    let tree = Tree::new();
+    tree.file(
+        ".jcode/sessions/session_a.json",
+        br#"{"id":"jcode-1","provider_key":"anthropic","model":"claude-sonnet-4","messages":[{"id":"m1","role":"assistant","timestamp":"2026-07-09T11:00:00.000Z","token_usage":{"input_tokens":100,"output_tokens":20}}]}"#,
+    );
+    tree.file(
+        ".jcode/sessions/session_a.journal.jsonl",
+        b"{\"messages\":[]}\n",
+    );
+
+    let report = discover(&tree.paths(&["jcode"])).unwrap();
+    // The journal is part of the session, not a source of its own: admitting it
+    // separately would count every message it repeats.
+    assert_eq!(report.sources.len(), 1);
+    let monitored = report.sources[0].monitored_source();
+    assert_eq!(
+        monitored
+            .companions
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>(),
+        ["session_a.journal.jsonl"]
+    );
+}
+
+#[test]
+fn a_jcode_session_without_a_journal_has_no_companion() {
+    let tree = Tree::new();
+    tree.file(
+        ".jcode/sessions/session_b.json",
+        br#"{"id":"jcode-2","provider_key":"anthropic","model":"claude-sonnet-4","messages":[{"id":"m1","role":"assistant","timestamp":"2026-07-09T11:00:00.000Z","token_usage":{"input_tokens":100,"output_tokens":20}}]}"#,
+    );
+
+    let report = discover(&tree.paths(&["jcode"])).unwrap();
+    assert_eq!(report.sources.len(), 1);
+    // The companion path is still declared; it is tolerated when absent.
+    assert_eq!(report.sources[0].monitored_source().companions.len(), 1);
+}
+
+#[test]
 fn jcode_session_snapshots_are_discovered_under_the_sessions_role() {
     let tree = Tree::new();
     tree.file(

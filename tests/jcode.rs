@@ -255,3 +255,84 @@ fn a_revision_replaces_rather_than_appends() {
     assert_eq!(reader.snapshot().len(), 1);
     assert!(reader.has_supported_usage());
 }
+
+// A journal is JSONL: one append batch per line, read into the same reader
+// after the snapshot. See docs/migration/source-groups.md.
+
+#[test]
+fn a_journal_appends_the_unsaved_suffix() {
+    let mut reader = JcodeReader::new("dir-session").with_fallback_timestamp(Some(1_000));
+    reader
+        .ingest(snapshot(vec![assistant("m1", json!({"input_tokens": 10}))]).as_bytes())
+        .expect("snapshot accepted");
+    let batch = json!({
+        "messages": [assistant("m2", json!({"input_tokens": 7}))]
+    });
+    reader
+        .ingest(format!("{batch}\n").as_bytes())
+        .expect("journal accepted");
+
+    let found = reader.snapshot();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].tokens.input, 10);
+    assert_eq!(found[1].tokens.input, 7);
+}
+
+#[test]
+fn a_journal_repeated_message_replaces_the_snapshot_entry() {
+    let mut reader = JcodeReader::new("dir-session").with_fallback_timestamp(Some(1_000));
+    reader
+        .ingest(snapshot(vec![assistant("m1", json!({"input_tokens": 10}))]).as_bytes())
+        .expect("snapshot accepted");
+    // The journal corrects the same message: the journal wins, and the message
+    // is still counted once.
+    let batch = json!({
+        "messages": [assistant("m1", json!({"input_tokens": 999}))]
+    });
+    reader
+        .ingest(format!("{batch}\n").as_bytes())
+        .expect("journal accepted");
+
+    let found = reader.snapshot();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].tokens.input, 999);
+}
+
+#[test]
+fn a_journal_batch_rescopes_the_provider_for_its_own_messages() {
+    let mut reader = JcodeReader::new("dir-session").with_fallback_timestamp(Some(1_000));
+    reader
+        .ingest(snapshot(vec![assistant("m1", json!({"input_tokens": 10}))]).as_bytes())
+        .expect("snapshot accepted");
+    let batch = json!({
+        "provider_key": "openrouter",
+        "messages": [assistant("m2", json!({"input_tokens": 5}))]
+    });
+    reader
+        .ingest(format!("{batch}\n").as_bytes())
+        .expect("journal accepted");
+
+    let found = reader.snapshot();
+    assert_eq!(found.len(), 2);
+    // A route change must not re-authenticate the message recorded before it.
+    assert_eq!(found[0].billing_provider_hint.as_deref(), Some("anthropic"));
+    assert_eq!(
+        found[1].billing_provider_hint.as_deref(),
+        Some("openrouter")
+    );
+}
+
+#[test]
+fn a_journal_written_one_message_per_line_is_accepted() {
+    let mut reader = JcodeReader::new("dir-session").with_fallback_timestamp(Some(1_000));
+    reader
+        .ingest(snapshot(vec![assistant("m1", json!({"input_tokens": 10}))]).as_bytes())
+        .expect("snapshot accepted");
+    // No enclosing `messages` array: the line is the message.
+    let line = assistant("m2", json!({"input_tokens": 3}));
+    reader
+        .ingest(format!("{line}\n").as_bytes())
+        .expect("journal accepted");
+
+    assert_eq!(reader.snapshot().len(), 2);
+}

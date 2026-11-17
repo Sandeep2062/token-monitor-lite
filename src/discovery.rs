@@ -248,6 +248,25 @@ impl DiscoveredSource {
             path: self.path.clone(),
             format: self.format,
             session: self.session.clone(),
+            companions: self.companions(),
+        }
+    }
+
+    /// Files that belong to this source but sit beside it.
+    ///
+    /// Derived from `path` rather than stored on the struct so the discovery
+    /// sites stay unaware of it, and so a companion that is absent needs no
+    /// directory scan to rule out.
+    fn companions(&self) -> Vec<PathBuf> {
+        match self.format {
+            // A Jcode session's journal amends its snapshot: it appends the
+            // unsaved suffix and may repeat an id to correct it. They are one
+            // session, so they are one source.
+            SourceFormat::JcodeJson => match self.path.file_stem().and_then(|stem| stem.to_str()) {
+                Some(stem) => vec![self.path.with_file_name(format!("{stem}.journal.jsonl"))],
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
         }
     }
 }

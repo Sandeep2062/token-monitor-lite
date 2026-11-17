@@ -33,16 +33,18 @@
 //! is absent the value is the session/file fallback, and subtracting a turn's
 //! duration from that would move the message into the wrong day.
 //!
-//! # Out of scope
+//! # The sibling journal
 //!
-//! The pinned reader also merges a **sibling journal** (`*.journal.jsonl`) that
-//! appends the unsaved message suffix, replaces a snapshot entry in place when
-//! the journal repeats its id (journal wins), and re-scopes the billing
-//! provider per append batch so a route change cannot authenticate historical
-//! messages. That is a cross-file reconciliation this codebase's one-slice-per-
-//! source contract cannot perform, so it is documented as unsupported rather
-//! than approximated. The snapshot alone is a valid, self-contained record of
-//! every message Jcode had committed when it was written.
+//! A session can have a `*.journal.jsonl` beside its snapshot. The journal
+//! appends the unsaved message suffix and may repeat a snapshot entry to
+//! *correct* it, so the two files are read as one source and messages are keyed
+//! by identity with the journal winning. Reading them as separate sources would
+//! count a corrected message twice.
+//!
+//! The journal is JSONL — one append batch per line — while the snapshot is a
+//! single object, so `ingest` accepts both. Each append batch re-scopes the
+//! billing provider for its own messages, since `provider_key` and `model` are
+//! session-scoped and may describe a later route.
 //!
 //! Not implemented: `is_turn_start` and `message_count` (no such fields on this
 //! codebase's observation), and `canonical_provider` — `provider_key` is
@@ -52,6 +54,7 @@ use super::timestamps::parse_timestamp_str;
 use super::{CostStatus, ReaderError, ResponseUsage, jsonl::MAX_RECORD_BYTES};
 use crate::accounting::{SessionKey, TokenCounts};
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub const MAX_RESPONSES: usize = 16_384;
 const MAX_IDENTITY_BYTES: usize = 4_096;
@@ -59,11 +62,25 @@ const MAX_RETAINED_IDENTITY_BYTES: usize = 8 * 1024 * 1024;
 
 pub const CLIENT: &str = "jcode";
 
-/// One Jcode session snapshot.
+/// One Jcode session: the snapshot plus any journal that amends it.
+///
+/// Both arrive through `ingest`. The journal repeats a snapshot message when it
+/// corrects it, so messages are keyed by identity and the last write wins —
+/// which makes the journal authoritative without needing to know which file a
+/// message came from.
 pub struct JcodeReader {
     key: SessionKey,
     fallback_timestamp_ms: i64,
     responses: Vec<ResponseUsage>,
+    /// Dedup key to position in `responses`, so a repeat replaces in place
+    /// instead of appending a second row for the same message.
+    positions: HashMap<String, usize>,
+    /// Session-scoped identity, updated by any batch that supplies it. A
+    /// journal append after a route change re-scopes later messages without
+    /// rewriting the ones already recorded.
+    model: Option<String>,
+    provider: Option<String>,
+    workspace_label: Option<String>,
     retained_identity_bytes: usize,
 }
 
@@ -73,6 +90,10 @@ impl JcodeReader {
             key: SessionKey::new(CLIENT, session),
             fallback_timestamp_ms: 0,
             responses: Vec::new(),
+            positions: HashMap::new(),
+            model: None,
+            provider: None,
+            workspace_label: None,
             retained_identity_bytes: 0,
         }
     }
@@ -82,16 +103,32 @@ impl JcodeReader {
         self
     }
 
-    /// Ingest a whole session snapshot.
+    /// Ingest a session snapshot, or the journal that amends it.
+    ///
+    /// A snapshot is a single JSON object. A journal is JSONL, one append batch
+    /// per line, so a document that does not parse as one object is split into
+    /// lines and each line applied in turn.
     pub fn ingest(&mut self, document: &[u8]) -> Result<(), ReaderError> {
         if document.len() > MAX_RECORD_BYTES {
             return Err(ReaderError::Capacity("Jcode session snapshot"));
         }
-        self.responses.clear();
-        self.retained_identity_bytes = 0;
+        if let Ok(root) = serde_json::from_slice::<Value>(document) {
+            return self.apply(&root);
+        }
+        for line in document.split(|byte| *byte == b'\n') {
+            let line = trim_ascii(line);
+            if line.is_empty() {
+                continue;
+            }
+            let batch: Value =
+                serde_json::from_slice(line).map_err(|_| ReaderError::InvalidRecord)?;
+            self.apply(&batch)?;
+        }
+        Ok(())
+    }
 
-        let root: Value =
-            serde_json::from_slice(document).map_err(|_| ReaderError::InvalidRecord)?;
+    /// Apply one snapshot or one append batch.
+    fn apply(&mut self, root: &Value) -> Result<(), ReaderError> {
         // A blank id falls through to the caller's path-derived session.
         let session = root
             .get("id")
@@ -101,82 +138,118 @@ impl JcodeReader {
         if let Some(session) = session {
             self.key = SessionKey::new(CLIENT, session);
         }
-
-        let model = identity(root.get("model"), "unknown");
-        let provider = identity(root.get("provider_key"), "jcode");
-        let workspace_label = root
+        // Each batch re-scopes the identity for its own messages, so a route
+        // change late in a session cannot re-authenticate earlier ones. A batch
+        // that omits them inherits the last value seen.
+        if let Some(model) = identity_opt(root.get("model")) {
+            self.model = Some(model);
+        }
+        if let Some(provider) = identity_opt(root.get("provider_key")) {
+            self.provider = Some(provider);
+        }
+        if let Some(label) = root
             .get("working_dir")
             .and_then(Value::as_str)
-            .and_then(workspace_label);
-
-        let messages = root
-            .get("messages")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        for (ordinal, message) in messages.iter().enumerate() {
-            // A single wrong-typed field must only drop that message, not its
-            // valid siblings.
-            let Some(usage) = message.get("token_usage") else {
-                continue;
-            };
-            let tokens = tokens(usage)?;
-            if zero(&tokens) {
-                continue;
-            }
-            let message_id = message
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty() && id.len() <= MAX_IDENTITY_BYTES)
-                .map(str::to_owned)
-                // Real messages carry stable ids; this keeps a custom or
-                // malformed file parseable without colliding across messages.
-                .unwrap_or_else(|| format!("snapshot:{ordinal}"));
-            let dedup_key = format!("jcode:{}:{message_id}", self.key.session);
-            if dedup_key.len() > MAX_IDENTITY_BYTES {
-                return Err(ReaderError::Declined("Jcode identity"));
-            }
-
-            let explicit_timestamp = message
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .and_then(parse_timestamp_str);
-            let duration_ms = message
-                .get("tool_duration_ms")
-                .and_then(Value::as_i64)
-                .filter(|duration| *duration > 0);
-            // Back-anchor only against the message's own recorded end time.
-            let timestamp_ms = match (explicit_timestamp, duration_ms) {
-                (Some(end), Some(duration)) => end.saturating_sub(duration).max(0),
-                _ => explicit_timestamp.unwrap_or(self.fallback_timestamp_ms),
-            };
-
-            let usage = ResponseUsage {
-                key: self.key.clone(),
-                model: model.clone(),
-                tokens,
-                cache_write_1h: 0,
-                timestamp_ms,
-                dedup_key: Some(dedup_key.clone()),
-                billing_provider_hint: Some(provider.clone()),
-                service_tier: None,
-                agent: None,
-                workspace_key: None,
-                workspace_label: workspace_label.clone(),
-                title: None,
-                cost: CostStatus::Unavailable,
-            };
-            if self.responses.len() == MAX_RESPONSES {
-                return Err(ReaderError::Capacity("Jcode responses"));
-            }
-            self.retained_identity_bytes = self
-                .retained_identity_bytes
-                .checked_add(dedup_key.len())
-                .filter(|bytes| *bytes <= MAX_RETAINED_IDENTITY_BYTES)
-                .ok_or(ReaderError::Capacity("Jcode identities"))?;
-            self.responses.push(usage);
+            .and_then(workspace_label)
+        {
+            self.workspace_label = Some(label);
         }
+        let model = self.model.clone().unwrap_or_else(|| "unknown".to_owned());
+        let provider = self.provider.clone().unwrap_or_else(|| "jcode".to_owned());
+
+        match root.get("messages").and_then(Value::as_array) {
+            Some(messages) => {
+                for (ordinal, message) in messages.iter().enumerate() {
+                    self.record(message, ordinal, &model, &provider)?;
+                }
+            }
+            // A journal written one message per line has no enclosing array.
+            None if root.get("token_usage").is_some() => self.record(root, 0, &model, &provider)?,
+            None => {}
+        }
+        Ok(())
+    }
+
+    fn record(
+        &mut self,
+        message: &Value,
+        ordinal: usize,
+        model: &str,
+        provider: &str,
+    ) -> Result<(), ReaderError> {
+        // A single wrong-typed field must only drop that message, not its
+        // valid siblings.
+        let Some(usage) = message.get("token_usage") else {
+            return Ok(());
+        };
+        let tokens = tokens(usage)?;
+        if zero(&tokens) {
+            return Ok(());
+        }
+        let message_id = message
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && id.len() <= MAX_IDENTITY_BYTES)
+            .map(str::to_owned)
+            // Real messages carry stable ids; this keeps a custom or
+            // malformed file parseable without colliding across messages.
+            .unwrap_or_else(|| format!("snapshot:{ordinal}"));
+        let dedup_key = format!("jcode:{}:{message_id}", self.key.session);
+        if dedup_key.len() > MAX_IDENTITY_BYTES {
+            return Err(ReaderError::Declined("Jcode identity"));
+        }
+
+        let explicit_timestamp = message
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp_str);
+        let duration_ms = message
+            .get("tool_duration_ms")
+            .and_then(Value::as_i64)
+            .filter(|duration| *duration > 0);
+        // Back-anchor only against the message's own recorded end time.
+        let timestamp_ms = match (explicit_timestamp, duration_ms) {
+            (Some(end), Some(duration)) => end.saturating_sub(duration).max(0),
+            _ => explicit_timestamp.unwrap_or(self.fallback_timestamp_ms),
+        };
+
+        let response = ResponseUsage {
+            key: self.key.clone(),
+            model: model.to_owned(),
+            tokens,
+            cache_write_1h: 0,
+            timestamp_ms,
+            dedup_key: Some(dedup_key.clone()),
+            billing_provider_hint: Some(provider.to_owned()),
+            service_tier: None,
+            agent: None,
+            workspace_key: None,
+            workspace_label: self.workspace_label.clone(),
+            title: None,
+            cost: CostStatus::Unavailable,
+        };
+        self.insert(response, dedup_key)
+    }
+
+    /// Keyed by message identity, with the last write winning.
+    fn insert(&mut self, response: ResponseUsage, dedup_key: String) -> Result<(), ReaderError> {
+        if let Some(&position) = self.positions.get(&dedup_key) {
+            // The journal is authoritative for a message it repeats: it is the
+            // corrected form of a snapshot entry, not a second turn.
+            self.responses[position] = response;
+            return Ok(());
+        }
+        if self.responses.len() == MAX_RESPONSES {
+            return Err(ReaderError::Capacity("Jcode responses"));
+        }
+        self.retained_identity_bytes = self
+            .retained_identity_bytes
+            .checked_add(dedup_key.len())
+            .filter(|bytes| *bytes <= MAX_RETAINED_IDENTITY_BYTES)
+            .ok_or(ReaderError::Capacity("Jcode identities"))?;
+        self.positions.insert(dedup_key, self.responses.len());
+        self.responses.push(response);
         Ok(())
     }
 
@@ -241,14 +314,30 @@ fn zero(tokens: &TokenCounts) -> bool {
         && tokens.reasoning == 0
 }
 
-/// A trimmed session-scoped identity, with a default when blank.
-fn identity(value: Option<&Value>, default: &str) -> String {
+/// A trimmed session-scoped identity, when the batch supplies a usable one.
+fn identity_opt(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty() && text.len() <= MAX_IDENTITY_BYTES)
         .map(str::to_owned)
-        .unwrap_or_else(|| default.to_owned())
+}
+
+/// Strip leading and trailing ASCII whitespace without allocating.
+fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
+    while let [first, rest @ ..] = bytes {
+        if !first.is_ascii_whitespace() {
+            break;
+        }
+        bytes = rest;
+    }
+    while let [rest @ .., last] = bytes {
+        if !last.is_ascii_whitespace() {
+            break;
+        }
+        bytes = rest;
+    }
+    bytes
 }
 
 /// The final component of a working directory, never the whole path.

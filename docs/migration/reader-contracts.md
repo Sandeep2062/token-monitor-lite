@@ -372,7 +372,7 @@ Cache accounting is decided from the **message-local** usage shape, never from t
 | Blank session `id`, `model`, or `provider_key` | supported | Falls back to the file stem, `unknown`, and `jcode` respectively. | As above. |
 | Message with no `id` | supported | A `snapshot:<ordinal>` fallback keeps a custom or malformed file parseable without colliding. | As above. |
 | Malformed JSON, negative counter | declined record | Skip and count this record; every other record in the source still publishes. | Prior rows retained; `declined_records` increments. |
-| Sibling journal (`*.journal.jsonl`) | visible unsupported | Not read. Merging it means appending the unsaved suffix, replacing a snapshot entry in place when the journal repeats its id, and re-scoping the billing provider per append batch — a cross-file merge this per-source contract cannot perform. The snapshot alone is self-contained. | No source slot. |
+| Sibling journal (`*.journal.jsonl`) | supported | Read as a **companion** of the snapshot — one source, one ledger row. The journal appends the unsaved suffix and may repeat a snapshot entry to correct it, so messages are keyed by identity and the last write wins; each append batch re-scopes the billing provider for its own messages. See [`source-groups.md`](./source-groups.md). | Contributes to the parent source's generation; never a separate source slot. A missing journal is tolerated and contributes nothing. |
 | `is_turn_start`, `message_count`, provider canonicalization | not implemented | No such fields on this codebase's observation; `provider_key` is reported verbatim as the billing hint. | No source slot. |
 
 ## Kimchi matrix

@@ -28,6 +28,12 @@ pub struct MonitoredSource {
     pub path: PathBuf,
     pub format: SourceFormat,
     pub session: String,
+    /// Files read after `path`, into the same reader, in order.
+    ///
+    /// A client whose session spans more than one file is one source, not
+    /// several: reading the parts as separate sources would count the same
+    /// message twice, under two identities.
+    pub companions: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

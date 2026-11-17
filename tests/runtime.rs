@@ -118,6 +118,7 @@ fn source(path: PathBuf, session: &str) -> MonitoredSource {
         path,
         format: SourceFormat::ClaudeCli,
         session: session.to_owned(),
+        companions: Vec::new(),
     }
 }
 

@@ -56,6 +56,7 @@ impl Source {
             path: self.0.clone(),
             format,
             session: session.to_owned(),
+            companions: Vec::new(),
         }
     }
 }
@@ -441,4 +442,73 @@ fn add_dictionary_id(frame: &[u8]) -> Vec<u8> {
     frame[4] |= 0x01;
     frame.insert(insert_at, 1);
     frame
+}
+
+/// A source that owns several files. The three ordering rules here are the
+/// difference between a grouped source working and it looping or truncating.
+#[test]
+fn a_grouped_source_reads_its_parts_in_order_into_one_generation() {
+    let primary = Source::new(b"primary");
+    let companion = Source::new(b"companion");
+    let mut monitored = primary.monitored_as(SourceFormat::JcodeJson, "jcode");
+    monitored.companions.push(companion.0.clone());
+
+    let mut input = SourceInput::from_monitored_source(&monitored);
+    assert_eq!(input.status(), InputAdapterStatus::Grouped);
+
+    // Only the first part may start a generation; the harness rebuilds its
+    // reader when it sees `reset`.
+    let first = input.read_batch().unwrap();
+    assert!(first.reset);
+    assert_eq!(first.records, vec![b"primary".to_vec()]);
+    // A non-final part must keep the source pending, or `finish()` runs and the
+    // companion is never read.
+    assert!(first.more_available);
+
+    let second = input.read_batch().unwrap();
+    assert!(!second.reset, "a companion must not discard the primary");
+    assert_eq!(second.records, vec![b"companion".to_vec()]);
+    assert!(!second.more_available);
+
+    // Both parts are stamped, which is what lets the source complete instead of
+    // requesting a reconciliation it will never get past.
+    assert!(input.is_current().unwrap());
+}
+
+#[test]
+fn a_missing_companion_is_tolerated() {
+    let primary = Source::new(b"primary");
+    let mut monitored = primary.monitored_as(SourceFormat::JcodeJson, "jcode");
+    monitored
+        .companions
+        .push(primary.0.with_extension("journal.jsonl"));
+
+    let mut input = SourceInput::from_monitored_source(&monitored);
+    assert!(input.read_batch().unwrap().more_available);
+
+    // Absent is not a failure: most sessions have no journal.
+    let second = input.read_batch().unwrap();
+    assert!(!second.reset);
+    assert!(second.records.is_empty());
+    assert!(input.is_current().unwrap());
+}
+
+#[test]
+fn a_companion_change_invalidates_the_whole_group() {
+    let primary = Source::new(b"primary");
+    let companion = Source::new(b"companion");
+    let mut monitored = primary.monitored_as(SourceFormat::JcodeJson, "jcode");
+    monitored.companions.push(companion.0.clone());
+
+    let mut input = SourceInput::from_monitored_source(&monitored);
+    input.read_batch().unwrap();
+    input.read_batch().unwrap();
+    assert!(input.is_current().unwrap());
+
+    // Growing the companion must re-read both parts, not just the tail: the
+    // reader is rebuilt from the primary, so the merge sees the whole group.
+    companion.append(b"more");
+    assert!(!input.is_current().unwrap());
+    input.reset();
+    assert!(input.read_batch().unwrap().reset);
 }

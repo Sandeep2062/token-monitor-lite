@@ -74,14 +74,18 @@ Six further lanes have no byte-slice reader, and are excluded on purpose rather 
 
 A `perch`, `aside`, `crush`, `hindsight`, `roocode` or `warp` source therefore stays absent from discovery instead of appearing as a permanently empty client. Adding any of them is a separate piece of work with its own security review.
 
-### Cross-file sources (not yet implemented)
+### Cross-file sources
 
-Two implemented clients would report more with a cross-file capability that the one-slice-per-source contract cannot express:
+A source may own more than one file. `MonitoredSource::companions` names files read after the primary into the same reader, in order, so the parts stay one source with one ledger row — reading them separately would count a repeated message twice, under two identities.
 
-- **jcode** pairs each session snapshot with a sibling `*.journal.jsonl`. The journal appends the unsaved suffix of a session and can *replace* a snapshot message with a corrected one, so a merge would have to be keyed by message identity with the journal winning.
-- **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so detecting the pairing and reversing the aggregate requires reading both.
+**`jcode` uses this.** A session snapshot can have a sibling `*.journal.jsonl` that appends the unsaved suffix and may repeat an entry to correct it; the reader keys messages by identity with the journal winning, and each journal batch re-scopes the billing provider for its own messages so a late route change cannot re-authenticate earlier ones.
 
-Both need the same change — a source that owns a group of files — which is a change to discovery, the source model, and the persistence format. It is scoped as its own work rather than folded into reader additions, and it is the one piece that also unblocks Roo Code and the VS Code `globalStorage` lanes. The design is written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md), including the three ordering traps that make a naive implementation loop forever; it is designed but not implemented.
+Two clients still need the same capability:
+
+- **Roo Code** splits each task across `ui_messages.json` and `api_conversation_history.json`.
+- **Prime Agent** records `child_usage_attributed` on the parent while the child's transcript is a separate source, so reversing the aggregate means matching two *sources* rather than two files in one directory.
+
+The mechanism and the three ordering rules that make it work are written out in [`docs/migration/source-groups.md`](docs/migration/source-groups.md). It is also what unblocks the VS Code `globalStorage` task-log lanes for `cline`, `kilo`, `copilot` and `kiro`.
 
 ## Remote verification
 

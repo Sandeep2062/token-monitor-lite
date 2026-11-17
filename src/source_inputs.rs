@@ -642,6 +642,8 @@ const ZSTD_SKIPPABLE_MAX: u32 = 0x184D_2A5F;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputAdapterStatus {
     OrdinaryJsonl,
+    /// Several files read into one reader, in order.
+    Grouped,
     KimiJsonl,
     CommandCodeJsonl,
     GrokJsonl,
@@ -806,6 +808,7 @@ struct CompressedStream<R> {
 
 pub enum SourceInput {
     OrdinaryJsonl(OrdinaryJsonlInput),
+    Grouped(GroupedInput),
     Kimi(OrdinaryJsonlInput),
     CommandCode(OrdinaryJsonlInput),
     Grok(OrdinaryJsonlInput),
@@ -854,7 +857,10 @@ pub enum SourceInput {
 
 impl SourceInput {
     pub fn from_monitored_source(source: &MonitoredSource) -> Self {
-        Self::for_path(source.format, source.path.clone())
+        if source.companions.is_empty() {
+            return Self::for_path(source.format, source.path.clone());
+        }
+        Self::Grouped(GroupedInput::new(source.path.clone(), &source.companions))
     }
 
     pub(crate) fn for_path(format: SourceFormat, path: PathBuf) -> Self {
@@ -1129,6 +1135,7 @@ impl SourceInput {
     pub fn status(&self) -> InputAdapterStatus {
         match self {
             Self::OrdinaryJsonl(_) => InputAdapterStatus::OrdinaryJsonl,
+            Self::Grouped(_) => InputAdapterStatus::Grouped,
             Self::Lmstudio(_) => InputAdapterStatus::LmstudioLog,
             Self::Fx(_) => InputAdapterStatus::FxUsageJson,
             Self::Vibe(_) => InputAdapterStatus::VibeJson,
@@ -1179,6 +1186,7 @@ impl SourceInput {
     pub fn reset(&mut self) {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.reset(),
+            Self::Grouped(input) => input.reset(),
             Self::Lmstudio(input) => input.reset(),
             Self::Fx(input) => input.reset(),
             Self::Vibe(input) => input.reset(),
@@ -1229,6 +1237,7 @@ impl SourceInput {
     pub fn is_current(&self) -> io::Result<bool> {
         match self {
             Self::OrdinaryJsonl(input) => input.cursor.is_current(&input.path),
+            Self::Grouped(input) => input.is_current(),
             Self::Lmstudio(input) => input.is_current(),
             Self::Fx(input) => input.is_current(),
             Self::Vibe(input) => input.is_current(),
@@ -1330,13 +1339,17 @@ impl SourceInput {
             | Self::Kiro(_)
             | Self::Copilot(_)
             | Self::CodeBuddyLog(_)
-            | Self::CompressedJsonl(_) => Ok(None),
+            | Self::CompressedJsonl(_)
+            | Self::Grouped(_) => Ok(None),
         }
     }
 
     pub(crate) fn source_path(&self) -> Option<&Path> {
         match self {
             Self::OrdinaryJsonl(input) => Some(&input.path),
+            // The primary identifies the source; companions are not paths a
+            // caller should resolve the source by.
+            Self::Grouped(input) => input.parts.first().map(|part| part.path.as_path()),
             Self::Lmstudio(input) => Some(&input.path),
             Self::Fx(input) => Some(&input.path),
             Self::Vibe(input) => Some(&input.path),
@@ -1481,6 +1494,7 @@ impl SourceInput {
                 })
             }
             Self::Gemini(input) => input.read_batch(),
+            Self::Grouped(input) => input.read_batch(),
             Self::Kimi(input) => {
                 let batch = input.cursor.read_batch(&input.path)?;
                 Ok(InputBatch {
@@ -1580,7 +1594,104 @@ impl GeminiInput {
     }
 }
 
+/// Several files read into one reader, in order.
+///
+/// A client whose session spans more than one file is one source, not several:
+/// reading the parts independently would count a message the later part repeats
+/// twice, under two identities. `read_batch` carries three ordering rules that
+/// are load-bearing rather than stylistic — see the comments there.
+pub struct GroupedInput {
+    parts: Vec<DocumentInput>,
+    /// Index of the next constituent to read, not the count already read.
+    next: usize,
+}
+
+impl GroupedInput {
+    fn new(primary: PathBuf, companions: &[PathBuf]) -> Self {
+        let mut parts = Vec::with_capacity(companions.len() + 1);
+        parts.push(DocumentInput::document(primary));
+        parts.extend(companions.iter().cloned().map(DocumentInput::document));
+        Self { parts, next: 0 }
+    }
+
+    fn reset(&mut self) {
+        for part in &mut self.parts {
+            part.reset();
+        }
+        self.next = 0;
+    }
+
+    fn is_current(&self) -> io::Result<bool> {
+        // Only the constituents already read are compared. A later part has not
+        // been stamped yet, so an "every part" check is false between the first
+        // and second read — and `read_step` turns a false here into a full
+        // reconciliation, restarting the source forever without ever reaching
+        // the second part.
+        for (index, part) in self.parts[..self.next].iter().enumerate() {
+            match part.is_current() {
+                Ok(true) => {}
+                Ok(false) => return Ok(false),
+                // A declared companion that does not exist contributes nothing.
+                // The primary is never optional, so index 0 still fails.
+                Err(error) if index > 0 && error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
+    }
+
+    fn read_batch(&mut self) -> io::Result<InputBatch> {
+        while self.next < self.parts.len() {
+            let index = self.next;
+            let last = index + 1 == self.parts.len();
+            let mut batch = match self.parts[index].read_batch() {
+                Ok(batch) => batch,
+                Err(error) if index > 0 && error.kind() == io::ErrorKind::NotFound => {
+                    self.next += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            self.next += 1;
+            // Only the first constituent may start a generation. The harness
+            // rebuilds the reader when a batch reports `reset`, so a companion
+            // reporting it would discard the primary it exists to amend.
+            if index > 0 {
+                batch.reset = false;
+            }
+            if !last {
+                // Every non-final constituent must report more_available, or the
+                // harness materializes the source at `finish()` and the next
+                // part is never read at all.
+                batch.more_available = true;
+                return Ok(batch);
+            }
+            if batch.records.is_empty() && batch.decoded_bytes_read == 0 {
+                continue;
+            }
+            return Ok(batch);
+        }
+        Ok(InputBatch {
+            records: Vec::new(),
+            physical_bytes_read: 0,
+            decoded_bytes_read: 0,
+            reset: false,
+            incomplete_tail: false,
+            truncated_head: false,
+            more_available: false,
+        })
+    }
+}
+
 impl DocumentInput {
+    fn document(path: PathBuf) -> Self {
+        Self {
+            path,
+            cursor: DocumentCursor::default(),
+            window: None,
+        }
+    }
+
     fn reset(&mut self) {
         self.cursor.stamp = None;
     }

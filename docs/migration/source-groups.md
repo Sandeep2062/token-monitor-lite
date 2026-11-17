@@ -1,8 +1,8 @@
 # Source groups: a source that owns more than one file
 
-Status: **designed, not implemented.** Nothing in this document is wired yet. The
-constraint that forces it is real, though, and this is the shape that satisfies it
-without weakening the reader contract.
+Status: **implemented for `jcode`.** `MonitoredSource::companions`, `GroupedInput`
+and the keyed merge in `JcodeReader` are in place and tested. `roocode`, the VS Code
+`globalStorage` lanes and Prime Agent's fork reversal are not — see the last section.
 
 ## Why the current contract cannot express it
 
@@ -146,23 +146,25 @@ not-current, `read_step` requests a full reconciliation, `reset()` clears every 
 stamp and sets `next = 0`, and the whole group is re-read into a fresh reader. No
 separate fingerprint over a set of files is needed.
 
-## Tests to add
+## Tests
 
-1. `jcode`: snapshot only — unchanged behaviour, byte-for-byte the current totals.
-2. `jcode`: snapshot + journal appending a new message — the message is counted once.
-3. `jcode`: snapshot + journal repeating a message id with different tokens — the
+Implemented, in `tests/source_inputs.rs`, `tests/jcode.rs` and `tests/discovery.rs`:
+
+1. `jcode` snapshot only — the message count and totals are unchanged.
+2. `jcode` snapshot + journal appending a new message — counted once.
+3. `jcode` snapshot + journal repeating a message id with different tokens — the
    journal's value wins and the message still appears once.
-4. `jcode`: a declared companion that does not exist — the snapshot still reads, no
-   error, no declined count.
-5. Grouped input: a journal that grows between passes triggers a re-read of the whole
-   group rather than a partial generation.
-6. Acceptance fixture: the 100 / 1,000 / 2,784 invariant must not move. No fixture
-   source has a companion, so this should be a no-op — if it moves, something is
-   double-counting.
+4. A declared companion that does not exist — the snapshot still reads, no error.
+5. A companion growing between passes makes the group not-current, and `reset()` makes
+   the next read start from the primary again.
+6. The grouped read order itself: `reset` only on the first part, `more_available` on
+   every non-final part, `is_current` true once both are stamped.
+7. Acceptance fixture: still 100 / 1,000 / 2,784. No fixture source has a companion, so
+   a move here would mean something is double-counting.
 
 ## What this unblocks, in order
 
-1. `jcode` sibling journal — a merge into an existing reader, no new format.
+1. **`jcode` sibling journal — done.** A merge into an existing reader, no new format.
 2. `roocode` — two files per task, plus a root under VS Code `globalStorage`. It is the
    first client whose *only* viable root is a task-log directory, so it also needs the
    task-log discovery path.
@@ -177,7 +179,8 @@ separate fingerprint over a set of files is needed.
 
 - Concurrency. Constituents are read in order, one at a time, matching the sources'
   existing serial `step()` contract.
-- A public API for companions. Nothing outside discovery sets them, and `monitored_source()`
-  is the only producer.
+- Companions from outside the source's own directory. `monitored_source()` derives them
+  by path arithmetic on the primary, so a pairing that needs cross-directory identity
+  matching (Prime Agent) is out of scope here.
 - `crush`, `warp`, `aside` and `hindsight`. They remain blocked on a missing root or a
   network boundary, which source groups does not address.
