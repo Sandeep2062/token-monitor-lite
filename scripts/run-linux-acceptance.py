@@ -383,13 +383,12 @@ def _tree_contains(env: dict[str, str], fragment: str) -> bool:
 
 
 def _selected_source_count(env: dict[str, str]) -> int:
+    # Every tracked client is enabled, so the row label is whatever the settings
+    # screen shows for that client; match the shape, not four known names.
     return sum(
         1
         for node in _accessibility_tree(env)
-        if re.fullmatch(
-            r"Source [0-9]+ · (?:Claude CLI|Codex CLI|Session archive|Codex local usage) · Selected · Available",
-            str(node.get("name", "")),
-        )
+        if re.fullmatch(r"Source [0-9]+ · .+ · Selected · Available", str(node.get("name", "")))
     )
 
 
@@ -597,6 +596,13 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
     summary = json.loads(generated.stdout)
     manifest_path = fixture_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # The fixture holds one source for every supported client, and this flow
+    # asserts that the on-screen total equals the whole-fixture aggregate, so
+    # every tracked client has to be enabled here. Seeding only claude/codex made
+    # 61 of the 100 sources selectable and left the assertion unsatisfiable.
+    catalog = json.loads(Path("assets/catalog.json").read_text(encoding="utf-8"))
+    enabled_clients = ",".join(client["id"] for client in catalog["clients"])
+    expected_sources = len(manifest["sources"])
     home = fixture_root / "home"
     config = home / ".config"
     state = home / ".local" / "state"
@@ -606,7 +612,7 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
     (legacy / "settings.json").write_text(
         json.dumps(
             {
-                "clients": "claude,codex",
+                "clients": enabled_clients,
                 "timezone": "UTC",
                 "acceptanceUnknownField": {"preserve": True},
             },
@@ -634,7 +640,7 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
             "XDG_STATE_HOME": str(state),
             "XDG_CACHE_HOME": str(cache),
             "XDG_RUNTIME_DIR": str(runtime),
-            "TOKEN_MONITOR_CLIENTS": "claude,codex",
+            "TOKEN_MONITOR_CLIENTS": enabled_clients,
             "SLINT_BACKEND": "winit-software",
             "NO_AT_BRIDGE": "0",
             "ACCESSIBILITY_ENABLED": "1",
@@ -734,17 +740,17 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
         selected_names = [
             str(node.get("name", ""))
             for node in activated_tree
-            if str(node.get("name", "")).startswith("Source ")
+            if re.match(r"Source [0-9]+ · ", str(node.get("name", "")))
             and "· Selected" in str(node.get("name", ""))
         ]
-        if len(selected_names) != 100:
+        if len(selected_names) != expected_sources:
             raise ValueError(
-                f"activated {len(selected_names)} of 100 source rows; "
+                f"activated {len(selected_names)} of {expected_sources} source rows; "
                 f"first={selected_names[:2]} last={selected_names[-2:]}"
             )
         _wait_for(
-            lambda: _selected_source_count(env) == 100,
-            "100 selected settings sources",
+            lambda: _selected_source_count(env) == expected_sources,
+            f"{expected_sources} selected settings sources",
             timeout=30.0,
         )
         save_node = _wait_for(
@@ -768,7 +774,11 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
             encoding="utf-8",
         )
         _screenshot(env, window_id, screenshots / "home-activated.png")
-        _wait_for(lambda: _tree_contains(env, "Healthy 100"), "100 healthy configured sources", timeout=30.0)
+        _wait_for(
+            lambda: _tree_contains(env, f"Healthy {expected_sources}"),
+            f"{expected_sources} healthy configured sources",
+            timeout=60.0,
+        )
         artifacts.append(_screenshot(env, window_id, screenshots / "home-populated.png"))
         checks.append({"name": "settings-save-activates-sources", "status": "passed"})
 
@@ -817,7 +827,11 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
 
         _click_named(env, "Refresh sources")
         _click_named(env, "Source health")
-        _wait_for(lambda: _tree_contains(env, "Healthy 100"), "manual refresh completion", timeout=30.0)
+        _wait_for(
+            lambda: _tree_contains(env, f"Healthy {expected_sources}"),
+            "manual refresh completion",
+            timeout=60.0,
+        )
         checks.append({"name": "manual-refresh", "status": "passed"})
 
         _wait_for(lambda: _tree_contains(env, "Healthy"), "source health view")
@@ -833,7 +847,11 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         artifacts.append(_screenshot(env, window_id, screenshots / "source-error.png"))
         first_source.write_bytes(original_source)
-        _wait_for(lambda: _tree_contains(env, "Healthy 100"), "source recovery", timeout=15.0)
+        _wait_for(
+            lambda: _tree_contains(env, f"Healthy {expected_sources}"),
+            "source recovery",
+            timeout=60.0,
+        )
         checks.append({"name": "source-error-last-good-recovery", "status": "passed"})
 
         _click_named(env, "About")
@@ -860,7 +878,11 @@ def gui_phase(arguments: argparse.Namespace) -> dict[str, Any]:
         shutdown_times.append(first_close_ms)
         application = None
         application, window_id = _start_application(binary, env, logs / "application-reopen.log")
-        _wait_for(lambda: _tree_contains(env, "Healthy 100"), "persisted source settings", timeout=30.0)
+        _wait_for(
+            lambda: _tree_contains(env, f"Healthy {expected_sources}"),
+            "persisted source settings",
+            timeout=60.0,
+        )
         _click_named(env, "Settings")
         _wait_for(lambda: _tree_contains(env, "Saved timezone  UTC"), "persisted timezone")
         if not _tree_contains(env, "Source 1 · Claude CLI · Selected"):

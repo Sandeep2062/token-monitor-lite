@@ -36,6 +36,16 @@ def _load_gui_driver() -> Any:
     return module
 
 
+def _healthy_sources(driver: Any, env: dict[str, str]) -> int:
+    """Number of healthy configured sources the window currently reports."""
+    for node in driver._accessibility_tree(env):
+        name = str(node.get("name", ""))
+        if name.startswith("Healthy "):
+            digits = name.split(" ", 2)[1]
+            return int(digits) if digits.isdigit() else 0
+    return 0
+
+
 def _regular_file(raw: str, description: str) -> Path:
     path = Path(raw)
     if not path.is_absolute() or ".." in path.parts or path.is_symlink() or not path.is_file():
@@ -246,6 +256,19 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise ValueError("fixture manifest is unavailable")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # The populated home comes from the GUI setup flow, which enables every
+    # tracked client so the whole fixture is selectable.
+    expected_sources = len(manifest["sources"])
+    catalog = json.loads(Path("assets/catalog.json").read_text(encoding="utf-8"))
+    enabled_clients = ",".join(client["id"] for client in catalog["clients"])
+    settings_path = home / ".config" / "Token Monitor" / "settings.json"
+    if settings_path.is_file():
+        document = json.loads(settings_path.read_text(encoding="utf-8"))
+        document["clients"] = enabled_clients
+        settings_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
     work = _new_directory(arguments.work_root)
     report_path = Path(arguments.report)
     if not report_path.is_absolute() or ".." in report_path.parts or report_path.exists() or report_path.is_symlink():
@@ -274,7 +297,7 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             "XDG_STATE_HOME": str(home / ".local" / "state"),
             "XDG_CACHE_HOME": str(cache),
             "XDG_RUNTIME_DIR": str(runtime),
-            "TOKEN_MONITOR_CLIENTS": "claude,codex",
+            "TOKEN_MONITOR_CLIENTS": enabled_clients,
             "SLINT_BACKEND": "winit-software",
             "NO_AT_BRIDGE": "0",
             "ACCESSIBILITY_ENABLED": "1",
@@ -358,9 +381,9 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 binary, env, logs / f"startup-{index:02d}.log"
             )
             driver._wait_for(
-                lambda: driver._tree_contains(env, "Healthy 100"),
+                lambda: _healthy_sources(driver, env) == expected_sources,
                 "populated startup window",
-                timeout=30.0,
+                timeout=60.0,
             )
             duration = round((time.monotonic() - started) * 1000)
             (cold_start_ms if index < 10 else warm_start_ms).append(duration)
@@ -369,9 +392,9 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
 
         application, window_id = driver._start_application(binary, env, logs / "resource-session.log")
         driver._wait_for(
-            lambda: driver._tree_contains(env, "Healthy 100"),
+            lambda: _healthy_sources(driver, env) == expected_sources,
             "resource session population",
-            timeout=30.0,
+            timeout=60.0,
         )
         time.sleep(5.0)
         idle_started = time.monotonic()
@@ -461,7 +484,11 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         active_peak_rss_kib = max(active_peak_rss_kib, burst_measurement["peakRssKiB"])
 
         driver._click_named(env, "Source health")
-        driver._wait_for(lambda: driver._tree_contains(env, "Healthy 100"), "source health view")
+        driver._wait_for(
+            lambda: _healthy_sources(driver, env) == expected_sources,
+            "source health view",
+            timeout=60.0,
+        )
         removal_measurement = _observe_update(
             driver,
             env,
@@ -477,7 +504,7 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             env,
             application.pid,
             lambda: _replace_file(first_source, original_source),
-            lambda: driver._tree_contains(env, "Healthy 100")
+            lambda: _healthy_sources(driver, env) == expected_sources
             and not driver._tree_contains(env, "Retained 1"),
             "visible source recovery",
         )

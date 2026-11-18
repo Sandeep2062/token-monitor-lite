@@ -164,19 +164,29 @@ are the suite's own: idle CPU ≤ 0.5 %, idle RSS ≤ 100 MiB.
 The tray costs about 1.0–1.3 MiB of resident memory (≈3 % of the app) and no
 measurable idle CPU. **VERIFIED** by measurement, not by inspection.
 
-`scripts/run-linux-resource-acceptance.py` cannot be used to produce those
-numbers on this revision: it never reaches the measurement phase, because the
-GUI acceptance it runs first still expects the fixture to expose 100 selectable
-sources while the seeded settings enable two clients (61 sources), and expects
-the on-screen total to equal the whole-fixture aggregate. Those expectations are
-stale against the current fixture, which now carries one source for every
-supported client. The numbers above therefore come from the same method and the
-same thresholds applied directly, and the suite's own defects are left visible
-rather than papered over. What *was* repaired is `scripts/check-catalog.cjs`,
-which aborted every run before any measurement: it compared the 53-client
-catalog against upstream's 42 rows with `deepStrictEqual`, so it could not pass
-once the documented extensions existed. It now checks the 42 upstream rows
-exactly and pins the 11 documented extensions by name.
+`scripts/run-linux-resource-acceptance.py` could not reach its measurement phase
+on the previous revision, so the numbers above came from the same method applied
+directly. Cause: the GUI setup it runs first seeded `clients: "claude,codex"`,
+which made 61 of the fixture's 100 sources selectable while the flow asserted
+that exactly 100 were activated and that the on-screen total equalled the
+whole-fixture aggregate. That assertion is only satisfiable when every tracked
+client is enabled, which was impossible before the catalog fix recorded below
+(the settings validator rejected 28 of the 53 clients outright).
+
+Both acceptance scripts now derive their expectations instead of hardcoding them:
+the seed enables every catalog client, `expected_sources` comes from the fixture
+manifest, `_healthy_sources` parses the count the window reports, and
+`_selected_source_count` matches the row shape rather than four known client
+names. The helper logic is checked locally, but the suites themselves have not
+been re-run end to end since: the Linux builder went offline during this work
+(its last contact was a day old), so the fix is committed unverified at runtime
+and this paragraph says so rather than implying a green run.
+
+What *was* repaired earlier, because it aborted every remote run before any
+measurement: `scripts/check-catalog.cjs` compared the 53-client catalog against
+upstream's 42 rows with `deepStrictEqual`, which cannot hold once the documented
+extensions exist. It now checks the 42 upstream rows exactly and pins the 11
+extensions by name.
 
 ## Fixed: enabling every client lost the whole selection
 
