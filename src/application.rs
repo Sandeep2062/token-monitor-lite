@@ -23,33 +23,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
-const SUPPORTED_CLIENTS: &[&str] = &[
-    "amp",
-    "claude",
-    "cline",
-    "codebuddy",
-    "codex",
-    "copilot",
-    "cursor",
-    "gemini",
-    "goose",
-    "kilo",
-    "omp",
-    "opencode",
-    "pi",
-    "senpi",
-    "kimchi",
-    "mux",
-    "junie",
-    "augment",
-    "gjc",
-    "opencodereview",
-    "codebuff",
-    "freebuff",
-    "trae",
-    "roocode",
-    "workbuddy",
-];
 const COMMAND_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,7 +218,7 @@ impl SettingsEditor {
                     SettingsReason::Duplicate,
                 );
             }
-            if !SUPPORTED_CLIENTS.contains(&client.as_str()) {
+            if !crate::catalog::tracks_client(client) {
                 push_issue(
                     &mut issues,
                     SettingsField::EnabledClients,

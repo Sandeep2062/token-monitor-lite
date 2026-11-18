@@ -65,3 +65,20 @@ pub fn load() -> Result<Catalog, CatalogError> {
         "../assets/catalog.json"
     ))?)
 }
+
+/// Whether the catalog tracks this client.
+///
+/// The catalog is the single source of truth for which clients exist. Every
+/// hand-maintained list that used to duplicate this drifted: the settings
+/// validator accepted 25 ids while the catalog held 53, so saving a selection
+/// that included any of the other 28 was rejected as `EnabledClients:
+/// Unsupported` and the application came back up with nothing monitored.
+pub fn tracks_client(client: &str) -> bool {
+    !client.is_empty() && catalog().clients.iter().any(|row| row.id == client)
+}
+
+/// The bundled catalog, decoded once.
+pub fn catalog() -> &'static Catalog {
+    static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| load().expect("the bundled catalog must decode"))
+}

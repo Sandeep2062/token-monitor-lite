@@ -851,71 +851,20 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
 }
 
 fn client_rows(settings: &SettingsView, draft: Option<&SettingsDraft>) -> Vec<SettingsClientRow> {
-    [
-        "amp",
-        "antigravity",
-        "claude",
-        "cline",
-        "codebuddy",
-        "codex",
-        "commandcode",
-        "copilot",
-        "droid",
-        "cursor",
-        "gemini",
-        "goose",
-        "grok",
-        "hermes",
-        "kilo",
-        "kimi",
-        "mcode",
-        "mimo",
-        "zcode",
-        "kiro",
-        "proma",
-        "catpaw",
-        "bb",
-        "cherrystudio",
-        "unsloth",
-        "devin",
-        "fx",
-        "mistral",
-        "prime-agent",
-        "jcode",
-        "qodercn",
-        "dsh",
-        "lmstudio",
-        "muse",
-        "omp",
-        "openclaw",
-        "opencode",
-        "pi",
-        "qwen",
-        "reasonix",
-        "senpi",
-        "kimchi",
-        "mux",
-        "junie",
-        "augment",
-        "gjc",
-        "opencodereview",
-        "codebuff",
-        "freebuff",
-        "trae",
-        "workbuddy",
-        "zed",
-    ]
-    .into_iter()
-    .map(|client| SettingsClientRow {
-        id: client.to_owned(),
-        label: client_label(client).to_owned(),
-        enabled: draft.map_or_else(
-            || settings.enabled_clients.contains(&client.to_owned()),
-            |draft| draft.enabled_clients.contains(&client.to_owned()),
-        ),
-        committed: settings.enabled_clients.contains(&client.to_owned()),
-    })
-    .collect()
+    crate::catalog::catalog()
+        .clients
+        .iter()
+        .map(|row| row.id.as_str())
+        .map(|client| SettingsClientRow {
+            id: client.to_owned(),
+            label: client_label(client).to_owned(),
+            enabled: draft.map_or_else(
+                || settings.enabled_clients.contains(&client.to_owned()),
+                |draft| draft.enabled_clients.contains(&client.to_owned()),
+            ),
+            committed: settings.enabled_clients.contains(&client.to_owned()),
+        })
+        .collect()
 }
 
 fn settings_validation_notice(settings: &SettingsView, draft: &SettingsDraft) -> Option<String> {
@@ -954,100 +903,11 @@ fn safe_source(source: &SourceChoice) -> bool {
 }
 
 fn is_selectable_source_client(client: &str) -> bool {
-    matches!(
-        client,
-        "amp"
-            | "antigravity"
-            | "claude"
-            | "cline"
-            | "codebuddy"
-            | "codex"
-            | "commandcode"
-            | "copilot"
-            | "cursor"
-            | "droid"
-            | "gemini"
-            | "goose"
-            | "grok"
-            | "hermes"
-            | "kilo"
-            | "kimi"
-            | "mcode"
-            | "mimo"
-            | "zcode"
-            | "kiro"
-            | "proma"
-            | "catpaw"
-            | "cherrystudio"
-            | "unsloth"
-            | "devin"
-            | "fx"
-            | "mistral"
-            | "prime-agent"
-            | "jcode"
-            | "qodercn"
-            | "dsh"
-            | "lmstudio"
-            | "muse"
-            | "omp"
-            | "openclaw"
-            | "opencode"
-            | "pi"
-            | "qwen"
-            | "reasonix"
-            | "senpi"
-            | "workbuddy"
-            | "zed"
-            | "mixed"
-    )
+    client == "mixed" || crate::catalog::tracks_client(client)
 }
 
 fn is_supported_client(client: &str) -> bool {
-    matches!(
-        client,
-        "amp"
-            | "antigravity"
-            | "claude"
-            | "cline"
-            | "codebuddy"
-            | "codex"
-            | "commandcode"
-            | "copilot"
-            | "cursor"
-            | "droid"
-            | "gemini"
-            | "goose"
-            | "grok"
-            | "hermes"
-            | "kilo"
-            | "kimi"
-            | "mcode"
-            | "mimo"
-            | "zcode"
-            | "kiro"
-            | "proma"
-            | "catpaw"
-            | "cherrystudio"
-            | "unsloth"
-            | "devin"
-            | "fx"
-            | "mistral"
-            | "prime-agent"
-            | "jcode"
-            | "qodercn"
-            | "dsh"
-            | "lmstudio"
-            | "muse"
-            | "omp"
-            | "openclaw"
-            | "opencode"
-            | "pi"
-            | "qwen"
-            | "reasonix"
-            | "senpi"
-            | "workbuddy"
-            | "zed"
-    )
+    crate::catalog::tracks_client(client)
 }
 
 fn client_label(client: &str) -> &'static str {
@@ -1082,6 +942,7 @@ fn client_label(client: &str) -> &'static str {
         "mistral" => "Mistral Vibe",
         "prime-agent" => "Prime Agent",
         "jcode" => "Jcode",
+        "roocode" => "Roo Code",
         "qodercn" => "Qoder CN",
         "dsh" => "DeepSeek Harness",
         "lmstudio" => "LM Studio",

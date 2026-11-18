@@ -178,13 +178,38 @@ catalog against upstream's 42 rows with `deepStrictEqual`, so it could not pass
 once the documented extensions existed. It now checks the 42 upstream rows
 exactly and pins the 11 documented extensions by name.
 
-## Observed but not explained here
+## Fixed: enabling every client lost the whole selection
 
-While looking for a populated home to measure against, enabling **all** clients
-in the acceptance settings produced a saved selection of 100 sources that the
-running application then reported as "No sources configured" — no validation
-notice, no conflict notice, and the settings screen still listing all 100 as
-"Selected · Available". That was observed on the pre-tray build (`core-5qvhd35n`
-in the builder's evidence directory), so it is not caused by the tray work, and
-it is written down here rather than fixed inside this change.
+Enabling all clients in the acceptance settings produced a saved selection of 100
+sources that the running application then reported as "No sources configured",
+with no notice on the settings screen and every row still shown as
+"Selected · Available". It was observed on the pre-tray build, so it was not
+caused by the tray work, and the cause was not the sources at all.
+
+`SettingsEditor::validate` carried its **own hardcoded client list of 25 ids**
+while `assets/catalog.json` tracks **53**. Any draft enabling one of the other 28
+— `antigravity`, `commandcode`, `cursor`, `droid`, `grok`, `hermes`, `kimi`,
+`kiro`, `zcode` and the rest — was rejected whole with
+`InvalidSettings { EnabledClients: Unsupported }`. Nothing was saved, so the
+application came back up with no committed selection and the Home screen said
+"No sources configured", while the settings screen kept showing the unsaved
+draft. A second layer hid it: `UiController` had three more hardcoded lists, and
+the settings row list was missing **11** clients the catalog tracks
+(`augment`, `bb`, `codebuff`, `freebuff`, `gjc`, `junie`, `kimchi`, `mux`,
+`opencodereview`, `roocode`, `trae`), so those could not be toggled at all.
+
+The catalog is now the single source of truth — `catalog::catalog()` (decoded
+once) and `catalog::tracks_client()` — and all five lists are gone. Reproduced
+and verified headlessly against the acceptance fixture: before the change,
+saving 95 sources ended in revision 0 with `InvalidSettings`; after, revision 1,
+the monitor starts, and it reports **95 healthy of 95**, 113 session models.
+Three tests pin it: every catalog client validates through settings, the settings
+row list equals the catalog exactly and every row has a real label, and every
+catalog client can be toggled on and produces a savable draft.
+
+## Previously observed, not explained
+
+The symptom that led to the fix above, recorded as it first appeared so the
+sequence is not lost: a saved selection of 100 sources that the running
+application then reported as "No sources configured".
 

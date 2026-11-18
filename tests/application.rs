@@ -144,6 +144,39 @@ fn invalid_clients_timezone_and_sources_return_only_stable_field_reasons() {
 }
 
 #[test]
+fn every_catalog_client_can_be_enabled_through_settings() {
+    // This used to fail for 28 of the 53 catalog clients: the settings validator
+    // carried its own hardcoded list and rejected anything it did not know as
+    // `EnabledClients: Unsupported`, so a selection covering the whole catalog
+    // was refused and the application restarted with nothing monitored.
+    let tree = Tree::new();
+    let discovery = discover(&tree.paths()).unwrap();
+    let (store, snapshot) = StoreHandle::open(discovery.native.clone()).unwrap();
+    let editor = SettingsEditor::new(&discovery, &snapshot).unwrap();
+
+    let catalog = token_monitor_lite::catalog::catalog();
+    assert!(catalog.clients.len() > 40, "catalog is unexpectedly small");
+
+    let mut draft = editor.open_draft();
+    draft.enabled_clients = catalog.clients.iter().map(|row| row.id.clone()).collect();
+    let validated = editor
+        .validate(&draft)
+        .expect("every catalog client must be an acceptable setting");
+    let decoded: serde_json::Value = serde_json::from_slice(validated.json_bytes()).unwrap();
+    assert_eq!(
+        decoded["clients"].as_str().unwrap().split(',').count(),
+        catalog.clients.len()
+    );
+
+    let mut unknown = editor.open_draft();
+    unknown.enabled_clients = vec!["not-a-client".to_owned()];
+    let error = editor.validate(&unknown).unwrap_err();
+    assert!(error.has(SettingsField::EnabledClients, SettingsReason::Unsupported));
+
+    store.shutdown().unwrap();
+}
+
+#[test]
 fn stale_draft_is_rejected_before_building_a_settings_document() {
     let tree = Tree::new();
     let discovery = discover(&tree.paths()).unwrap();

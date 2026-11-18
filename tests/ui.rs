@@ -1134,3 +1134,67 @@ fn close_to_tray_draft_is_dirty_only_when_it_differs_from_the_committed_value() 
     controller.set_settings_close_to_tray(false);
     assert!(!controller.presentation().settings.save_enabled);
 }
+
+#[test]
+fn the_settings_client_list_is_exactly_the_catalog() {
+    // The settings screen carried its own hardcoded list, which drifted from the
+    // catalog in both directions: it was missing 11 clients that the catalog
+    // tracks and the validator accepted, so their rows could not be toggled.
+    let mut controller = UiController::new();
+    controller.accept_application_snapshot(application_snapshot(
+        1,
+        1,
+        "UTC",
+        None,
+        None,
+        ImportReportView::default(),
+    ));
+    let rows = controller.presentation().settings.clients;
+    let catalog = token_monitor_lite::catalog::catalog();
+
+    let listed = rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+    let expected = catalog
+        .clients
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, expected);
+    // A row without a real label would render as "Unavailable client".
+    for row in &rows {
+        assert_ne!(row.label, "Unavailable client", "{} has no label", row.id);
+    }
+}
+
+#[test]
+fn every_catalog_client_can_be_toggled_on_and_off() {
+    let mut controller = UiController::new();
+    controller.accept_application_snapshot(application_snapshot(
+        1,
+        1,
+        "UTC",
+        None,
+        None,
+        ImportReportView::default(),
+    ));
+    for client in token_monitor_lite::catalog::catalog()
+        .clients
+        .iter()
+        .map(|row| row.id.as_str())
+    {
+        controller.set_settings_client_enabled(client, true);
+    }
+    let draft = controller
+        .settings_save_draft()
+        .expect("an enabled draft must be savable");
+    assert_eq!(
+        draft.enabled_clients.len(),
+        token_monitor_lite::catalog::catalog().clients.len()
+    );
+    assert!(
+        controller
+            .presentation()
+            .settings
+            .validation_notice
+            .is_empty()
+    );
+}
