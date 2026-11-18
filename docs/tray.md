@@ -164,23 +164,41 @@ are the suite's own: idle CPU ≤ 0.5 %, idle RSS ≤ 100 MiB.
 The tray costs about 1.0–1.3 MiB of resident memory (≈3 % of the app) and no
 measurable idle CPU. **VERIFIED** by measurement, not by inspection.
 
-`scripts/run-linux-resource-acceptance.py` could not reach its measurement phase
-on the previous revision, so the numbers above came from the same method applied
-directly. Cause: the GUI setup it runs first seeded `clients: "claude,codex"`,
-which made 61 of the fixture's 100 sources selectable while the flow asserted
-that exactly 100 were activated and that the on-screen total equalled the
-whole-fixture aggregate. That assertion is only satisfiable when every tracked
-client is enabled, which was impossible before the catalog fix recorded below
-(the settings validator rejected 28 of the 53 clients outright).
+`scripts/run-linux-resource-acceptance.py` now runs to completion on the Linux
+builder with the tray enabled. Same host, same fixture, release build, all 53
+catalog clients enabled so the whole 100-source fixture is selectable:
 
-Both acceptance scripts now derive their expectations instead of hardcoding them:
-the seed enables every catalog client, `expected_sources` comes from the fixture
-manifest, `_healthy_sources` parses the count the window reports, and
-`_selected_source_count` matches the row shape rather than four known client
-names. The helper logic is checked locally, but the suites themselves have not
-been re-run end to end since: the Linux builder went offline during this work
-(its last contact was a day old), so the fix is committed unverified at runtime
-and this paragraph says so rather than implying a green run.
+| Check | Measured | Threshold | Result |
+|---|---|---|---|
+| cold startup | 956 ms | ≤ 2,000 ms | passed |
+| warm startup | median 594 ms, p95 603 ms | — | passed |
+| **idle CPU** | **0.2666 %** | ≤ 0.5 % | **passed** |
+| **idle RSS** | **73,504 KiB** | ≤ 102,400 KiB | **passed** |
+| visible append / burst | 636 ms / 635 ms | — | passed |
+| removal / rewrite / recovery | 474 / 628 / 776 ms | — | passed |
+| no network listener, no child process | 0 / 0 | 0 | passed |
+
+14 of 15 resource checks pass and all 18 GUI checks pass. The one remaining
+resource check is `detail-history-peak-memory`, recorded as `blocked` with
+`gate-3-5-views-not-implemented` — the session detail/history views it would
+measure do not exist yet, which is why both reports carry the declared
+`representative-limits-accounts` blocker and report `diagnostic` rather than
+`passed`. That is the honest ceiling for this flow: nothing failed.
+
+The before/after comparison earlier in this file was taken directly, before the
+harness could complete, and both builds passed the same thresholds. On this run
+idle CPU is 0.2666 % with the tray constructing nothing (no status-notifier host)
+and 73,504 KiB resident with all 53 clients enabled — the memory is dominated by
+the 100-source fixture, not by the tray, which measured at 1.0–1.3 MiB when the
+two builds were compared directly.
+
+Both acceptance scripts derive their expectations instead of hardcoding them: the
+seed enables every catalog client, `expected_sources` comes from the fixture
+manifest, `_healthy_sources` parses the count the window reports,
+`_selected_source_count` and `_page_label` match the row and pager shapes rather
+than fixed strings, and the update checks baseline the total the window is
+actually showing instead of assuming the fixture aggregate. A timeout now
+reports the visible text, so a stalled wait explains itself.
 
 What *was* repaired earlier, because it aborted every remote run before any
 measurement: `scripts/check-catalog.cjs` compared the 53-client catalog against

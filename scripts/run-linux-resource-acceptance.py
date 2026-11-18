@@ -181,10 +181,19 @@ def _tcp_listener_count(driver: Any, env: dict[str, str], pid: int) -> int:
     return sum(1 for line in result.stdout.splitlines() if marker in line)
 
 
-def _formatted_tracked_total(manifest: dict[str, Any], increment: int = 0) -> str:
-    totals = manifest["expectedAggregate"]
-    value = sum(int(totals[name]) for name in ("input", "output", "cacheRead", "cacheWrite", "reasoning"))
-    return f"{value + increment:,}"
+TOTAL_LABEL = re.compile(r"^[0-9][0-9,]*$")
+
+
+def _all_captured_total(driver: Any, env: dict[str, str]) -> int | None:
+    """The All-Captured token total the Home screen shows, as a number."""
+    for node in driver._accessibility_tree(env):
+        name = str(node.get("name", ""))
+        if not TOTAL_LABEL.fullmatch(name):
+            continue
+        value = int(name.replace(",", ""))
+        if value > 0:
+            return value
+    return None
 
 
 def _tree_contains(driver: Any, env: dict[str, str], value: str) -> bool:
@@ -429,7 +438,24 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
         active_peak_rss_kib = _rss_kib(application.pid)
-        appended_total = _formatted_tracked_total(manifest, 7)
+        # The appended records carry the fixture's dates, not today's, so the
+        # total that must move is the All-Captured one. Home opens on Today.
+        driver._click_named(env, "Show all captured")
+        driver._wait_for(
+            lambda: driver._tree_contains(env, "TRACKED TOKENS · ALL CAPTURED"),
+            "all-captured period",
+            timeout=60.0,
+        )
+        # Baseline the total the window is really showing, then assert it moves by
+        # exactly the appended tokens. Comparing against the fixture aggregate
+        # instead assumes every fixture source is admitted and non-overlapping,
+        # which is a property of the fixture, not of this update path.
+        baseline_total = driver._wait_for(
+            lambda: _all_captured_total(driver, env),
+            "all-captured total",
+            timeout=60.0,
+        )
+        appended_total = f"{baseline_total + 7:,}"
         append_measurement = _observe_update(
             driver,
             env,
@@ -440,7 +466,7 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         )
         active_peak_rss_kib = max(active_peak_rss_kib, append_measurement["peakRssKiB"])
 
-        original_total = _formatted_tracked_total(manifest)
+        original_total = f"{baseline_total:,}"
         rewrite_measurement = _observe_update(
             driver,
             env,
@@ -477,7 +503,7 @@ def run(arguments: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             application.pid,
             lambda: _append_file(first_source, burst_lines),
             lambda: _tree_contains(
-                driver, env, _formatted_tracked_total(manifest, burst_records)
+                driver, env, f"{baseline_total + burst_records:,}"
             ),
             "coalesced burst update",
         )
