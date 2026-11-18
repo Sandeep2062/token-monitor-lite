@@ -1,5 +1,37 @@
 import { AboutSlint, Button, LineEdit, ScrollView } from "std-widgets.slint";
 
+// Colour roles. The values come from `src/theme.rs`, where every
+// foreground/background pair is contrast-checked against WCAG AA in a test. Slint
+// cannot compute a contrast ratio, so the palette is supplied from Rust rather
+// than written here twice.
+export global Theme {
+    in-out property <color> background: #0b0f14;
+    in-out property <color> surface: #121820;
+    in-out property <color> surface-alt: #1e2a36;
+    in-out property <color> text: #f2f6fa;
+    in-out property <color> text-muted: #91a0af;
+    in-out property <color> text-faint: #768492;
+    in-out property <color> border: #293542;
+    in-out property <color> accent: #69a7ff;
+    in-out property <color> warning: #f5a65b;
+    in-out property <color> danger: #f16d7a;
+    in-out property <color> success: #67e8b4;
+    // Row density, resolved from `Density::metrics`. Plain numbers so the Rust
+    // side does not need a length type that the `slint` crate does not re-export.
+    in-out property <int> row-height: 26;
+    in-out property <int> row-gap: 4;
+    /// When true, transitions are suppressed. Resolved from the motion setting
+    /// together with the desktop's own preference.
+    in-out property <bool> reduced-motion: false;
+}
+
+// One selectable option in a settings section.
+export struct ChoiceRowData {
+    value: string,
+    label: string,
+    selected: bool,
+}
+
 export struct SessionRowData {
     selection-key: string,
     client: string,
@@ -26,6 +58,26 @@ export struct TrendRowData {
     label: string,
     total: string,
     permille: int,
+}
+
+export struct MonthRowData {
+    month: string,
+    total: string,
+    permille: int,
+    partial: bool,
+}
+
+// One heatmap cell. `level` is 0=unknown, 1=empty, 2..5 = increasing intensity.
+// Unknown is a distinct level rather than the empty one, so a day with no
+// evidence never looks like a day with zero usage.
+export struct HeatmapCellData {
+    level: int,
+    tooltip: string,
+}
+
+export struct HeatmapRowData {
+    weekday: string,
+    cells: [HeatmapCellData],
 }
 
 export struct ModelRowData {
@@ -59,10 +111,142 @@ export struct ImportReportRowData {
     records: string,
 }
 
+export struct QuotaWindowData {
+    label: string,
+    used-percent: int,
+    amount: string,
+    reset: string,
+}
+
+export struct QuotaRowData {
+    provider: string,
+    heading: string,
+    windows: [QuotaWindowData],
+    status: string,
+    stale: bool,
+    attention: bool,
+}
+
+// One quota window. The fill is the consumed share, so an empty bar means
+// nothing has been used yet — which is only ever drawn when a provider actually
+// reported a percentage.
+component QuotaBar inherits Rectangle {
+    in property <QuotaWindowData> data;
+    in property <bool> attention;
+
+    VerticalLayout {
+        spacing: 3px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.data.label;
+                color: Theme.text-muted;
+                font-size: 12px;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: root.data.amount;
+                color: root.attention ? Theme.warning : Theme.text;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle {
+            height: 8px;
+            background: Theme.border;
+            border-radius: 4px;
+
+            Rectangle {
+                width: max(0px, min(parent.width, parent.width * root.data.used-percent / 100));
+                height: 8px;
+                border-radius: 4px;
+                background: root.attention ? Theme.warning : Theme.success;
+            }
+        }
+
+        if root.data.reset != "" : Text {
+            text: root.data.reset;
+            color: Theme.text-faint;
+            font-size: 11px;
+        }
+    }
+}
+
+component QuotaRowCard inherits Rectangle {
+    in property <QuotaRowData> data;
+
+    background: Theme.surface;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.data.heading;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            if root.data.stale : Text {
+                text: "Retained";
+                color: Theme.text-muted;
+                font-size: 11px;
+            }
+            Text {
+                text: root.data.status;
+                color: root.data.attention ? Theme.warning : Theme.success;
+                font-size: 11px;
+            }
+        }
+
+        for entry in root.data.windows : QuotaBar {
+            data: entry;
+            attention: root.data.attention;
+        }
+    }
+}
+
+// One heatmap row: a weekday across the weeks in the window.
+component HeatmapRowView inherits HorizontalLayout {
+    in property <HeatmapRowData> data;
+
+    spacing: 2px;
+
+    Text {
+        width: 34px;
+        text: root.data.weekday;
+        color: Theme.text-faint;
+        font-size: 10px;
+        vertical-alignment: center;
+    }
+    for cell in root.data.cells : Rectangle {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        // 0 = unknown (no evidence), 1 = empty (measured zero), 2..5 = levels.
+        background: cell.level == 0 ? Theme.surface
+            : cell.level == 1 ? Theme.surface-alt
+            : cell.level == 2 ? #2f6f57
+            : cell.level == 3 ? #3f9a74
+            : cell.level == 4 ? Theme.success : Theme.success;
+        border-width: cell.level == 0 ? 1px : 0px;
+        border-color: Theme.border;
+    }
+}
+
 component MetricLabel inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    background: #121820;
+    background: Theme.surface;
     border-radius: 6px;
     height: 56px;
 
@@ -71,12 +255,12 @@ component MetricLabel inherits Rectangle {
         spacing: 3px;
         Text {
             text: root.label;
-            color: #91a0af;
+            color: Theme.text-muted;
             font-size: 12px;
         }
         Text {
             text: root.value;
-            color: #f2f6fa;
+            color: Theme.text;
             font-size: 14px;
             font-family: "monospace";
             font-weight: 600;
@@ -91,7 +275,7 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 880px;
     min-height: 600px;
-    background: #0b0f14;
+    background: Theme.background;
 
     callback refresh();
     callback check-updates();
@@ -105,6 +289,14 @@ export component AppWindow inherits Window {
     callback clear-session-selection();
     callback settings-timezone-changed(string);
     callback settings-close-to-tray-changed(bool);
+    callback export-now();
+    callback export-folder-pick();
+    callback export-folder-changed(string);
+    callback theme-changed(string);
+    callback density-changed(string);
+    callback motion-changed(string);
+    callback currency-changed(string);
+    callback language-changed(string);
     callback settings-client-changed(string, bool);
     callback settings-source-changed(string, bool);
     callback select-all-sources();
@@ -143,6 +335,9 @@ export component AppWindow inherits Window {
     in property <[SessionRowData]> sessions;
     in property <[TrendRowData]> trends;
     in property <string> trends-headline: "";
+    in property <[MonthRowData]> trend-months;
+    in property <[HeatmapRowData]> trend-heatmap;
+    in property <string> heatmap-note: "";
     in property <[ModelRowData]> models;
     in property <string> models-headline: "";
     in property <bool> detail-visible: false;
@@ -167,15 +362,30 @@ export component AppWindow inherits Window {
     in property <[SettingsClientRowData]> settings-clients;
     in property <[SettingsSourceRowData]> settings-sources;
     in property <[ImportReportRowData]> import-report;
+    in property <string> quota-headline: "Provider limits";
+    in property <[QuotaRowData]> quota-rows;
+    in property <string> quota-notice: "No provider limits yet";
+    in property <string> export-folder: "";
+    in property <string> export-notice: "";
+    in property <bool> export-enabled: false;
+    in property <[ChoiceRowData]> theme-options;
+    in property <[ChoiceRowData]> density-options;
+    in property <[ChoiceRowData]> motion-options;
+    in property <[ChoiceRowData]> currency-options;
+    in property <[ChoiceRowData]> language-options;
+    in property <string> appearance-summary: "";
+    in property <string> currency-summary: "";
+    in property <string> language-summary: "";
+    in property <string> settings-warnings: "";
 
     HorizontalLayout {
         spacing: 0px;
 
         Rectangle {
             width: 208px;
-            background: #121820;
+            background: Theme.surface;
             border-width: 1px;
-            border-color: #293542;
+            border-color: Theme.border;
 
             VerticalLayout {
                 padding: 14px;
@@ -183,7 +393,7 @@ export component AppWindow inherits Window {
 
                 Text {
                     text: "∑  Token Monitor";
-                    color: #f2f6fa;
+                    color: Theme.text;
                     font-size: 18px;
                     font-weight: 700;
                     height: 42px;
@@ -191,7 +401,7 @@ export component AppWindow inherits Window {
                 }
                 Text {
                     text: "LEDGER RAIL";
-                    color: #69a7ff;
+                    color: Theme.accent;
                     font-size: 11px;
                     height: 20px;
                 }
@@ -249,7 +459,7 @@ export component AppWindow inherits Window {
                     accessible-role: text;
                     accessible-id: "watch-status";
                     accessible-label: root.watch-status;
-                    color: root.refresh-available ? #91a0af : #f5a65b;
+                    color: root.refresh-available ? Theme.text-muted : Theme.warning;
                     font-size: 12px;
                     wrap: word-wrap;
                 }
@@ -272,7 +482,7 @@ export component AppWindow inherits Window {
         }
 
         Rectangle {
-            background: #0b0f14;
+            background: Theme.background;
             horizontal-stretch: 1;
 
             if root.active-view == 0 : VerticalLayout {
@@ -282,7 +492,7 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     Text {
                         text: "Home";
-                        color: #f2f6fa;
+                        color: Theme.text;
                         font-size: 20px;
                         font-weight: 700;
                         horizontal-stretch: 1;
@@ -313,10 +523,10 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     height: 190px;
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
 
                     HorizontalLayout {
                         padding: 20px;
@@ -325,20 +535,20 @@ export component AppWindow inherits Window {
                         Rectangle {
                             width: 14px;
                             height: 142px;
-                            background: #293542;
+                            background: Theme.border;
                             border-radius: 6px;
 
                             Rectangle {
                                 y: 0px;
                                 width: 14px;
                                 height: 142px * root.input-permille / 1000;
-                                background: #67e8b4;
+                                background: Theme.success;
                             }
                             Rectangle {
                                 y: 142px * root.input-permille / 1000;
                                 width: 14px;
                                 height: 142px * root.output-permille / 1000;
-                                background: #69a7ff;
+                                background: Theme.accent;
                             }
                             Rectangle {
                                 y: 142px * (root.input-permille + root.output-permille) / 1000;
@@ -350,17 +560,17 @@ export component AppWindow inherits Window {
                                 y: 142px * (root.input-permille + root.output-permille + root.cache-permille) / 1000;
                                 width: 14px;
                                 height: 142px * root.reasoning-permille / 1000;
-                                background: #f5a65b;
+                                background: Theme.warning;
                             }
                         }
 
                         VerticalLayout {
                             spacing: 5px;
                             horizontal-stretch: 1;
-                            Text { text: root.period-heading; color: #91a0af; font-size: 12px; }
+                            Text { text: root.period-heading; color: Theme.text-muted; font-size: 12px; }
                             Text {
                                 text: root.tracked-tokens;
-                                color: #f2f6fa;
+                                color: Theme.text;
                                 font-family: "monospace";
                                 font-size: 32px;
                                 font-weight: 700;
@@ -371,10 +581,10 @@ export component AppWindow inherits Window {
                                 accessible-role: text;
                                 accessible-id: "home-source-summary";
                                 accessible-label: root.has-usage ? root.source-headline : root.empty-message;
-                                color: root.has-usage ? #91a0af : #f5a65b;
+                                color: root.has-usage ? Theme.text-muted : Theme.warning;
                                 font-size: 13px;
                             }
-                            Text { text: "Cost  " + root.cost; color: #91a0af; font-size: 12px; }
+                            Text { text: "Cost  " + root.cost; color: Theme.text-muted; font-size: 12px; }
                         }
                     }
                 }
@@ -387,12 +597,33 @@ export component AppWindow inherits Window {
                     MetricLabel { label: "Reasoning"; value: root.reasoning-tokens; horizontal-stretch: 1; }
                 }
 
-                Text { text: "Recent sessions"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                Text {
+                    text: root.quota-headline;
+                    accessible-role: text;
+                    accessible-id: "home-quota-headline";
+                    accessible-label: root.quota-headline;
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                if root.quota-rows.length == 0 : Text {
+                    text: root.quota-notice;
+                    accessible-role: text;
+                    accessible-id: "home-quota-empty";
+                    accessible-label: root.quota-notice;
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+                for quota-row in root.quota-rows : QuotaRowCard {
+                    data: quota-row;
+                }
+
+                Text { text: "Recent sessions"; color: Theme.text; font-size: 14px; font-weight: 600; }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
 
                     VerticalLayout {
@@ -403,7 +634,7 @@ export component AppWindow inherits Window {
                             accessible-role: text;
                             accessible-id: "home-empty-state";
                             accessible-label: root.empty-message;
-                            color: #91a0af;
+                            color: Theme.text-muted;
                             vertical-stretch: 1;
                             vertical-alignment: center;
                             horizontal-alignment: center;
@@ -421,7 +652,7 @@ export component AppWindow inherits Window {
             if root.active-view == 1 : VerticalLayout {
                 padding: 24px;
                 spacing: 12px;
-                Text { text: "Sessions"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: "Sessions"; color: Theme.text; font-size: 20px; font-weight: 700; }
                 LineEdit {
                     placeholder-text: "Search captured client, session, or model";
                     accessible-role: text-input;
@@ -432,14 +663,14 @@ export component AppWindow inherits Window {
                 }
                 if root.selection-notice != "" : Text {
                     text: root.selection-notice;
-                    color: #f5a65b;
+                    color: Theme.warning;
                     font-size: 12px;
                 }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     ScrollView {
                         VerticalLayout {
@@ -450,7 +681,7 @@ export component AppWindow inherits Window {
                                 accessible-role: text;
                                 accessible-id: "sessions-empty-state";
                                 accessible-label: root.empty-message;
-                                color: #91a0af;
+                                color: Theme.text-muted;
                                 height: 80px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
@@ -466,10 +697,10 @@ export component AppWindow inherits Window {
                 }
                 if root.detail-visible : Rectangle {
                     height: 196px;
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     VerticalLayout {
                         padding: 12px;
                         spacing: 5px;
@@ -480,7 +711,7 @@ export component AppWindow inherits Window {
                                 accessible-role: text;
                                 accessible-id: "session-detail-heading";
                                 accessible-label: "Session detail · " + root.detail-heading;
-                                color: #f2f6fa;
+                                color: Theme.text;
                                 font-size: 14px;
                                 font-weight: 600;
                                 horizontal-stretch: 1;
@@ -493,10 +724,10 @@ export component AppWindow inherits Window {
                                 clicked => { root.clear-session-selection(); }
                             }
                         }
-                        Text { text: "Selected model · " + root.detail-model; color: #69a7ff; font-size: 12px; }
-                        Text { text: "Tracked " + root.detail-tracked + " · Input " + root.detail-input + " · Output " + root.detail-output; color: #91a0af; font-size: 12px; font-family: "monospace"; }
-                        Text { text: "Cache " + root.detail-cache + " · Reasoning " + root.detail-reasoning; color: #91a0af; font-size: 12px; font-family: "monospace"; }
-                        Text { text: "First " + root.detail-first-seen + " · Last " + root.detail-last-seen; color: #91a0af; font-size: 11px; }
+                        Text { text: "Selected model · " + root.detail-model; color: Theme.accent; font-size: 12px; }
+                        Text { text: "Tracked " + root.detail-tracked + " · Input " + root.detail-input + " · Output " + root.detail-output; color: Theme.text-muted; font-size: 12px; font-family: "monospace"; }
+                        Text { text: "Cache " + root.detail-cache + " · Reasoning " + root.detail-reasoning; color: Theme.text-muted; font-size: 12px; font-family: "monospace"; }
+                        Text { text: "First " + root.detail-first-seen + " · Last " + root.detail-last-seen; color: Theme.text-muted; font-size: 11px; }
                         ScrollView {
                             height: 60px;
                             VerticalLayout {
@@ -505,7 +736,7 @@ export component AppWindow inherits Window {
                                     text: model.label + " · " + model.total + " tokens · " + model.cost;
                                     accessible-role: text;
                                     accessible-label: model.label + " · " + model.total + " tokens · " + model.cost;
-                                    color: #f2f6fa;
+                                    color: Theme.text;
                                     font-size: 11px;
                                     font-family: "monospace";
                                 }
@@ -520,7 +751,7 @@ export component AppWindow inherits Window {
                         accessible-role: text;
                         accessible-id: "sessions-page";
                         accessible-label: root.page-label;
-                        color: #91a0af;
+                        color: Theme.text-muted;
                         font-family: "monospace";
                         vertical-alignment: center;
                         horizontal-alignment: center;
@@ -533,13 +764,13 @@ export component AppWindow inherits Window {
             if root.active-view == 2 : VerticalLayout {
                 padding: 24px;
                 spacing: 12px;
-                Text { text: "Source health"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
-                Text { text: root.source-headline; accessible-role: text; accessible-id: "source-headline"; accessible-label: root.source-headline; color: #91a0af; font-size: 13px; }
+                Text { text: "Source health"; color: Theme.text; font-size: 20px; font-weight: 700; }
+                Text { text: root.source-headline; accessible-role: text; accessible-id: "source-headline"; accessible-label: root.source-headline; color: Theme.text-muted; font-size: 13px; }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     ScrollView {
                         VerticalLayout {
@@ -547,26 +778,26 @@ export component AppWindow inherits Window {
                             spacing: 8px;
                             if root.sources.length == 0 : Text {
                                 text: "No sources configured";
-                                color: #91a0af;
+                                color: Theme.text-muted;
                                 height: 80px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
                             }
                             for source in root.sources : Rectangle {
                                 height: 66px;
-                                background: #18212b;
+                                background: Theme.surface;
                                 border-radius: 6px;
                                 border-width: 1px;
-                                border-color: source.severity == 0 ? #67e8b4 : source.severity == 2 ? #f5a65b : source.severity == 4 ? #f16d7a : #69a7ff;
+                                border-color: source.severity == 0 ? Theme.success : source.severity == 2 ? Theme.warning : source.severity == 4 ? Theme.danger : Theme.accent;
                                 HorizontalLayout {
                                     padding: 10px;
                                     spacing: 12px;
                                     VerticalLayout {
                                         horizontal-stretch: 1;
-                                        Text { text: source.name + "  ·  " + source.format; color: #f2f6fa; font-size: 14px; font-weight: 600; }
-                                        Text { text: source.detail; color: #91a0af; font-size: 12px; overflow: elide; }
+                                        Text { text: source.name + "  ·  " + source.format; color: Theme.text; font-size: 14px; font-weight: 600; }
+                                        Text { text: source.detail; color: Theme.text-muted; font-size: 12px; overflow: elide; }
                                     }
-                                    Text { text: source.status; accessible-role: text; accessible-label: source.status; color: #f2f6fa; font-size: 12px; vertical-alignment: center; }
+                                    Text { text: source.status; accessible-role: text; accessible-label: source.status; color: Theme.text; font-size: 12px; vertical-alignment: center; }
                                 }
                             }
                         }
@@ -577,40 +808,40 @@ export component AppWindow inherits Window {
             if root.active-view == 3 : VerticalLayout {
                 padding: 24px;
                 spacing: 12px;
-                Text { text: "Settings"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: "Settings"; color: Theme.text; font-size: 20px; font-weight: 700; }
                 if root.settings-notice != "" : Text {
                     text: root.settings-notice;
-                    color: #f5a65b;
+                    color: Theme.warning;
                     font-size: 12px;
                     wrap: word-wrap;
                 }
                 Rectangle {
-                    height: 280px;
-                    background: #121820;
+                    height: 392px;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     VerticalLayout {
                         padding: 14px;
                         spacing: 10px;
-                        Text { text: "MONITORING CONFIGURATION"; color: #69a7ff; font-size: 11px; }
+                        Text { text: "MONITORING CONFIGURATION"; color: Theme.accent; font-size: 11px; }
                         Text {
                             text: "Saved timezone  " + root.settings-committed-timezone;
                             accessible-role: text;
                             accessible-id: "settings-saved-timezone";
                             accessible-label: self.text;
-                            color: #91a0af;
+                            color: Theme.text-muted;
                             font-size: 12px;
                         }
                         Text {
                             text: "Credential storage  " + root.credential-status;
-                            color: #91a0af;
+                            color: Theme.text-muted;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
                         HorizontalLayout {
                             spacing: 18px;
-                            Text { text: "Clients"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            Text { text: "Clients"; color: Theme.text; font-size: 13px; width: 100px; vertical-alignment: center; }
                             for client in root.settings-clients : Button {
                                 text: client.label + (client.enabled ? "  · Enabled" : "  · Disabled") + (client.committed == client.enabled ? "" : "  · edited");
                                 accessible-role: button;
@@ -621,7 +852,7 @@ export component AppWindow inherits Window {
                         }
                         HorizontalLayout {
                             spacing: 12px;
-                            Text { text: "Timezone"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            Text { text: "Timezone"; color: Theme.text; font-size: 13px; width: 100px; vertical-alignment: center; }
                             LineEdit {
                                 text: root.settings-timezone;
                                 placeholder-text: "IANA timezone, for example UTC";
@@ -635,7 +866,7 @@ export component AppWindow inherits Window {
                         }
                         HorizontalLayout {
                             spacing: 12px;
-                            Text { text: "Closing window"; color: #f2f6fa; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            Text { text: "Closing window"; color: Theme.text; font-size: 13px; width: 100px; vertical-alignment: center; }
                             Button {
                                 text: root.tray-capable
                                     ? (root.settings-close-to-tray ? "Hides to tray  · Enabled" : "Hides to tray  · Disabled")
@@ -649,17 +880,74 @@ export component AppWindow inherits Window {
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                         }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: "Data export"; color: Theme.text; font-size: 13px; width: 100px; vertical-alignment: center; }
+                            Button {
+                                text: root.export-folder == ""
+                                    ? "Choose folder…"
+                                    : (root.export-enabled ? "Auto-export  · On" : "Auto-export  · Off");
+                                accessible-role: button;
+                                accessible-id: "settings-export-folder";
+                                accessible-label: self.text;
+                                clicked => { root.export-folder-pick(); }
+                            }
+                            Button {
+                                text: "Export now";
+                                enabled: root.export-folder != "";
+                                accessible-role: button;
+                                accessible-id: "settings-export-now";
+                                accessible-label: "Export data now";
+                                clicked => { root.export-now(); }
+                            }
+                            Button {
+                                text: root.export-enabled ? "Turn off" : "Turn on";
+                                enabled: root.export-folder != "";
+                                accessible-role: button;
+                                accessible-id: "settings-export-toggle";
+                                accessible-label: self.text;
+                                clicked => { root.export-folder-changed(root.export-enabled ? "" : root.export-folder); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        if root.export-folder != "" : Text {
+                            text: root.export-folder;
+                            accessible-role: text;
+                            accessible-id: "settings-export-path";
+                            accessible-label: root.export-folder;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            overflow: elide;
+                        }
+                        if root.export-notice != "" : Text {
+                            text: root.export-notice;
+                            accessible-role: text;
+                            accessible-id: "settings-export-notice";
+                            accessible-label: root.export-notice;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        if root.settings-warnings != "" : Text {
+                            text: root.settings-warnings;
+                            accessible-role: text;
+                            accessible-id: "settings-warnings";
+                            accessible-label: root.settings-warnings;
+                            color: Theme.warning;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
                         if root.settings-validation-notice != "" : Text {
                             text: root.settings-validation-notice;
                             accessible-role: text;
                             accessible-id: "settings-validation";
                             accessible-label: root.settings-validation-notice;
-                            color: #f16d7a;
+                            color: Theme.danger;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
                         HorizontalLayout {
-                            Text { text: "Sources"; color: #f2f6fa; font-size: 13px; vertical-alignment: center; }
+                            Text { text: "Sources"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Button {
                                 text: "Select all sources";
@@ -671,7 +959,7 @@ export component AppWindow inherits Window {
                         }
                         if root.settings-sources.length == 0 : Text {
                             text: "No supported sources discovered";
-                            color: #f5a65b;
+                            color: Theme.warning;
                             font-size: 12px;
                         }
                         HorizontalLayout {
@@ -692,12 +980,215 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                Text { text: "Migration report"; accessible-role: text; accessible-id: "migration-report"; accessible-label: "Migration report"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                Text { text: @tr("Appearance"); accessible-role: text; accessible-id: "settings-appearance-heading"; accessible-label: @tr("Appearance"); color: Theme.text; font-size: 14px; font-weight: 600; }
                 Rectangle {
-                    background: #121820;
+                    height: 250px;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: @tr("Theme"); color: Theme.text; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for option in root.theme-options : Rectangle {
+                                height: 28px;
+                                width: 96px;
+                                border-radius: 6px;
+                                background: option.selected ? Theme.accent : Theme.surface-alt;
+                                border-width: 1px;
+                                border-color: option.selected ? Theme.accent : Theme.border;
+                                // The focus ring is drawn from the accent role, which
+                                // the contrast test pins at 3:1 or better against both
+                                // the surface and the window background.
+                                accessible-role: button;
+                                accessible-id: "settings-theme-" + option.value;
+                                accessible-label: @tr("Theme") + ": " + option.label
+                                    + (option.selected ? " · Selected" : "");
+                                accessible-action-default => { root.theme-changed(option.value); }
+                                Text {
+                                    text: option.label;
+                                    color: option.selected ? Theme.background : Theme.text;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.theme-changed(option.value); }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text { text: @tr("Density"); color: Theme.text; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for option in root.density-options : Rectangle {
+                                height: 28px;
+                                width: 110px;
+                                border-radius: 6px;
+                                background: option.selected ? Theme.accent : Theme.surface-alt;
+                                border-width: 1px;
+                                border-color: option.selected ? Theme.accent : Theme.border;
+                                accessible-role: button;
+                                accessible-id: "settings-density-" + option.value;
+                                accessible-label: @tr("Density") + ": " + option.label
+                                    + (option.selected ? " · Selected" : "");
+                                accessible-action-default => { root.density-changed(option.value); }
+                                Text {
+                                    text: option.label;
+                                    color: option.selected ? Theme.background : Theme.text;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.density-changed(option.value); }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text { text: @tr("Reduce Motion"); color: Theme.text; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for option in root.motion-options : Rectangle {
+                                height: 28px;
+                                width: 96px;
+                                border-radius: 6px;
+                                background: option.selected ? Theme.accent : Theme.surface-alt;
+                                border-width: 1px;
+                                border-color: option.selected ? Theme.accent : Theme.border;
+                                accessible-role: button;
+                                accessible-id: "settings-motion-" + option.value;
+                                accessible-label: @tr("Reduce Motion") + ": " + option.label
+                                    + (option.selected ? " · Selected" : "");
+                                accessible-action-default => { root.motion-changed(option.value); }
+                                Text {
+                                    text: option.label;
+                                    color: option.selected ? Theme.background : Theme.text;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.motion-changed(option.value); }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text {
+                            text: root.appearance-summary;
+                            accessible-role: text;
+                            accessible-id: "settings-appearance-summary";
+                            accessible-label: root.appearance-summary;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+                }
+                Text { text: @tr("Currency"); accessible-role: text; accessible-id: "settings-currency-heading"; accessible-label: @tr("Currency"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                Rectangle {
+                    height: 96px;
+                    background: Theme.surface;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: @tr("Currency"); color: Theme.text; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for option in root.currency-options : Rectangle {
+                                height: 28px;
+                                width: 168px;
+                                border-radius: 6px;
+                                background: option.selected ? Theme.accent : Theme.surface-alt;
+                                border-width: 1px;
+                                border-color: option.selected ? Theme.accent : Theme.border;
+                                accessible-role: button;
+                                accessible-id: "settings-currency-" + option.value;
+                                accessible-label: @tr("Currency") + ": " + option.label
+                                    + (option.selected ? " · Selected" : "");
+                                accessible-action-default => { root.currency-changed(option.value); }
+                                Text {
+                                    text: option.label;
+                                    color: option.selected ? Theme.background : Theme.text;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.currency-changed(option.value); }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text {
+                            text: root.currency-summary;
+                            accessible-role: text;
+                            accessible-id: "settings-currency-summary";
+                            accessible-label: root.currency-summary;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+                }
+                Text { text: @tr("Language"); accessible-role: text; accessible-id: "settings-language-heading"; accessible-label: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                Rectangle {
+                    height: 96px;
+                    background: Theme.surface;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: @tr("Language"); color: Theme.text; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for option in root.language-options : Rectangle {
+                                height: 28px;
+                                width: 128px;
+                                border-radius: 6px;
+                                background: option.selected ? Theme.accent : Theme.surface-alt;
+                                border-width: 1px;
+                                border-color: option.selected ? Theme.accent : Theme.border;
+                                accessible-role: button;
+                                accessible-id: "settings-language-" + option.value;
+                                accessible-label: @tr("Language") + ": " + option.label
+                                    + (option.selected ? " · Selected" : "");
+                                accessible-action-default => { root.language-changed(option.value); }
+                                Text {
+                                    text: option.label;
+                                    color: option.selected ? Theme.background : Theme.text;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.language-changed(option.value); }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text {
+                            text: root.language-summary;
+                            accessible-role: text;
+                            accessible-id: "settings-language-summary";
+                            accessible-label: root.language-summary;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+                }
+                Text { text: "Migration report"; accessible-role: text; accessible-id: "migration-report"; accessible-label: "Migration report"; color: Theme.text; font-size: 14px; font-weight: 600; }
+                Rectangle {
+                    background: Theme.surface;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     ScrollView {
                         VerticalLayout {
@@ -705,23 +1196,23 @@ export component AppWindow inherits Window {
                             spacing: 7px;
                             if root.import-report.length == 0 : Text {
                                 text: "No legacy artifacts were found";
-                                color: #91a0af;
+                                color: Theme.text-muted;
                                 height: 70px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
                             }
                             for item in root.import-report : Rectangle {
                                 height: 58px;
-                                background: #18212b;
+                                background: Theme.surface;
                                 border-radius: 6px;
                                 HorizontalLayout {
                                     padding: 10px;
                                     spacing: 12px;
-                                    Text { text: item.artifact; color: #f2f6fa; font-size: 13px; width: 180px; vertical-alignment: center; }
-                                    Text { text: item.preservation; color: #67e8b4; font-size: 12px; width: 130px; vertical-alignment: center; }
-                                    Text { text: item.semantic-import; color: #69a7ff; font-size: 12px; width: 130px; vertical-alignment: center; }
-                                    Text { text: item.activation; color: item.activation == "Active" ? #67e8b4 : #f5a65b; font-size: 12px; width: 110px; vertical-alignment: center; }
-                                    Text { text: item.records + " records"; color: #91a0af; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: right; }
+                                    Text { text: item.artifact; color: Theme.text; font-size: 13px; width: 180px; vertical-alignment: center; }
+                                    Text { text: item.preservation; color: Theme.success; font-size: 12px; width: 130px; vertical-alignment: center; }
+                                    Text { text: item.semantic-import; color: Theme.accent; font-size: 12px; width: 130px; vertical-alignment: center; }
+                                    Text { text: item.activation; color: item.activation == "Active" ? Theme.success : Theme.warning; font-size: 12px; width: 110px; vertical-alignment: center; }
+                                    Text { text: item.records + " records"; color: Theme.text-muted; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: right; }
                                 }
                             }
                         }
@@ -732,28 +1223,28 @@ export component AppWindow inherits Window {
             if root.active-view == 4 : VerticalLayout {
                 padding: 24px;
                 spacing: 12px;
-                Text { text: "About"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: "About"; color: Theme.text; font-size: 20px; font-weight: 700; }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     VerticalLayout {
                         padding: 20px;
                         spacing: 8px;
-                        Text { text: "Token Monitor Lite 0.1.0"; accessible-role: text; accessible-id: "about-version"; accessible-label: "Token Monitor Lite 0.1.0"; color: #f2f6fa; font-size: 18px; font-weight: 700; }
-                        Text { text: "Native Rust + Slint migration · compiled subset"; color: #91a0af; font-size: 13px; }
-                        Text { text: "MIT © 2026 Sandeep Khadka"; color: #f2f6fa; font-size: 13px; }
-                        Text { text: "Token Monitor © 2026 Javis · Tokscale © 2025 Junho Yeo · MIT."; color: #91a0af; font-size: 12px; wrap: word-wrap; }
+                        Text { text: "Token Monitor Lite 0.1.0"; accessible-role: text; accessible-id: "about-version"; accessible-label: "Token Monitor Lite 0.1.0"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                        Text { text: "Native Rust + Slint migration · compiled subset"; color: Theme.text-muted; font-size: 13px; }
+                        Text { text: "MIT © 2026 Sandeep Khadka"; color: Theme.text; font-size: 13px; }
+                        Text { text: "Token Monitor © 2026 Javis · Tokscale © 2025 Junho Yeo · MIT."; color: Theme.text-muted; font-size: 12px; wrap: word-wrap; }
                         Rectangle { height: 12px; background: transparent; }
-                        Text { text: "Updates"; color: #f2f6fa; font-size: 14px; font-weight: 600; }
+                        Text { text: "Updates"; color: Theme.text; font-size: 14px; font-weight: 600; }
                         Text {
                             text: root.update-status;
                             accessible-role: text;
                             accessible-id: "update-status";
                             accessible-label: root.update-status;
-                            color: #91a0af;
+                            color: Theme.text-muted;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
@@ -785,20 +1276,123 @@ export component AppWindow inherits Window {
             if root.active-view == 5 : VerticalLayout {
                 padding: 24px;
                 spacing: 10px;
-                Text { text: "Trends"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: "Trends"; color: Theme.text; font-size: 20px; font-weight: 700; }
                 Text {
                     text: root.trends-headline;
                     accessible-role: text;
                     accessible-id: "trends-headline";
                     accessible-label: root.trends-headline;
-                    color: #91a0af;
+                    color: Theme.text-muted;
                     font-size: 13px;
                 }
+
+                Text {
+                    text: "Activity";
+                    accessible-role: text;
+                    accessible-id: "trends-heatmap-heading";
+                    accessible-label: "Activity heatmap";
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                if root.trend-heatmap.length == 0 : Text {
+                    text: "No history yet";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+                if root.trend-heatmap.length > 0 : VerticalLayout {
+                    spacing: 2px;
+                    for heat-row in root.trend-heatmap : HeatmapRowView {
+                        data: heat-row;
+                    }
+                }
+                Text {
+                    text: root.heatmap-note;
+                    accessible-role: text;
+                    accessible-id: "trends-heatmap-note";
+                    accessible-label: root.heatmap-note;
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                }
+
+                Text {
+                    text: "Monthly";
+                    accessible-role: text;
+                    accessible-id: "trends-monthly-heading";
+                    accessible-label: "Monthly rollups";
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                if root.trend-months.length == 0 : Text {
+                    text: "No monthly history yet";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+                ScrollView {
+                    height: root.trend-months.length == 0 ? 0px : 120px;
+                    VerticalLayout {
+                        spacing: 3px;
+                        for month in root.trend-months : Rectangle {
+                            height: 22px;
+                            background: Theme.background;
+                            border-radius: 4px;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                Text {
+                                    width: 70px;
+                                    text: month.month;
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.surface-alt;
+                                    horizontal-stretch: 1;
+                                    Rectangle {
+                                        width: parent.width * month.permille / 1000;
+                                        height: 6px;
+                                        border-radius: 3px;
+                                        background: #55c495;
+                                    }
+                                }
+                                if month.partial : Text {
+                                    text: "partial";
+                                    accessible-role: text;
+                                    accessible-label: month.month + " has unknown days";
+                                    color: Theme.warning;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: month.total;
+                                    color: Theme.text;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Daily";
+                    accessible-role: text;
+                    accessible-id: "trends-daily-heading";
+                    accessible-label: "Daily history";
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     ScrollView {
                         VerticalLayout {
@@ -806,14 +1400,14 @@ export component AppWindow inherits Window {
                             spacing: 4px;
                             if root.trends.length == 0 : Text {
                                 text: "No daily history yet";
-                                color: #91a0af;
+                                color: Theme.text-muted;
                                 height: 80px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
                             }
                             for row in root.trends : Rectangle {
                                 height: 26px;
-                                background: #0f1620;
+                                background: Theme.background;
                                 border-radius: 4px;
                                 HorizontalLayout {
                                     padding-left: 8px;
@@ -823,7 +1417,7 @@ export component AppWindow inherits Window {
                                         text: row.label;
                                         accessible-role: text;
                                         accessible-label: row.label + " · " + row.total + " tokens";
-                                        color: #91a0af;
+                                        color: Theme.text-muted;
                                         font-size: 11px;
                                         font-family: "monospace";
                                         width: 88px;
@@ -831,19 +1425,19 @@ export component AppWindow inherits Window {
                                     }
                                     Rectangle {
                                         height: 10px;
-                                        background: #1e2a36;
+                                        background: Theme.surface-alt;
                                         border-radius: 3px;
                                         horizontal-stretch: 1;
                                         Rectangle {
                                             width: parent.width * row.permille / 1000;
                                             height: 10px;
-                                            background: #67e8b4;
+                                            background: Theme.success;
                                             border-radius: 3px;
                                         }
                                     }
                                     Text {
                                         text: row.total;
-                                        color: #f2f6fa;
+                                        color: Theme.text;
                                         font-size: 11px;
                                         font-family: "monospace";
                                         width: 100px;
@@ -860,20 +1454,20 @@ export component AppWindow inherits Window {
             if root.active-view == 6 : VerticalLayout {
                 padding: 24px;
                 spacing: 10px;
-                Text { text: "Models"; color: #f2f6fa; font-size: 20px; font-weight: 700; }
+                Text { text: "Models"; color: Theme.text; font-size: 20px; font-weight: 700; }
                 Text {
                     text: root.models-headline;
                     accessible-role: text;
                     accessible-id: "models-headline";
                     accessible-label: root.models-headline;
-                    color: #91a0af;
+                    color: Theme.text-muted;
                     font-size: 13px;
                 }
                 Rectangle {
-                    background: #121820;
+                    background: Theme.surface;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #293542;
+                    border-color: Theme.border;
                     vertical-stretch: 1;
                     ScrollView {
                         VerticalLayout {
@@ -881,14 +1475,14 @@ export component AppWindow inherits Window {
                             spacing: 4px;
                             if root.models.length == 0 : Text {
                                 text: "No model usage in this period";
-                                color: #91a0af;
+                                color: Theme.text-muted;
                                 height: 80px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
                             }
                             for row in root.models : Rectangle {
                                 height: 30px;
-                                background: #0f1620;
+                                background: Theme.background;
                                 border-radius: 4px;
                                 HorizontalLayout {
                                     padding-left: 8px;
@@ -898,26 +1492,26 @@ export component AppWindow inherits Window {
                                         text: row.label;
                                         accessible-role: text;
                                         accessible-label: row.label + " · " + row.total + " tokens · " + row.cost;
-                                        color: #f2f6fa;
+                                        color: Theme.text;
                                         font-size: 12px;
                                         width: 320px;
                                         vertical-alignment: center;
                                     }
                                     Rectangle {
                                         height: 10px;
-                                        background: #1e2a36;
+                                        background: Theme.surface-alt;
                                         border-radius: 3px;
                                         horizontal-stretch: 1;
                                         Rectangle {
                                             width: parent.width * row.permille / 1000;
                                             height: 10px;
-                                            background: #69a7ff;
+                                            background: Theme.accent;
                                             border-radius: 3px;
                                         }
                                     }
                                     Text {
                                         text: row.total;
-                                        color: #f2f6fa;
+                                        color: Theme.text;
                                         font-size: 12px;
                                         font-family: "monospace";
                                         width: 120px;
@@ -926,7 +1520,7 @@ export component AppWindow inherits Window {
                                     }
                                     Text {
                                         text: row.cost;
-                                        color: #91a0af;
+                                        color: Theme.text-muted;
                                         font-size: 12px;
                                         font-family: "monospace";
                                         width: 100px;

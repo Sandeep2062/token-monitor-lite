@@ -82,6 +82,24 @@ impl Preferences {
         self.fields.get("clients").and_then(Value::as_str)
     }
 
+    /// Read a string field by name.
+    ///
+    /// Read-only on purpose: writes go through [`Preferences::with_native_edits`],
+    /// which clones the whole document before touching it. An API that could set
+    /// one field would be an invitation to drop the others.
+    pub fn get_str(&self, field: &str) -> Option<&str> {
+        self.fields.get(field).and_then(Value::as_str)
+    }
+
+    /// Whether a field is present at all, even as `null`.
+    ///
+    /// Distinguishing "absent" from "present but unreadable" is what lets the
+    /// settings surface report a default it is *using* without claiming the file
+    /// agreed with it.
+    pub fn has_field(&self, field: &str) -> bool {
+        self.fields.contains_key(field)
+    }
+
     pub fn has_clients(&self) -> bool {
         self.fields.contains_key("clients")
     }
@@ -114,6 +132,37 @@ impl Preferences {
             .unwrap_or(false)
     }
 
+    /// The folder auto-export writes to, when it is enabled.
+    ///
+    /// An absent or empty value means auto-export is off. The folder is a path,
+    /// never a credential, so it lives in settings rather than the keyring — but
+    /// it is never logged either, because a path can carry a person's name.
+    pub fn export_folder(&self) -> Option<&str> {
+        self.fields
+            .get("exportFolder")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    /// The auto-export cadence in seconds, clamped to the documented range.
+    ///
+    /// `docs/export.md` offers 30 seconds to 60 minutes with a one-minute
+    /// default. A stored value outside the range is clamped rather than rejected,
+    /// so an edited settings file cannot make the app write every second.
+    pub fn export_interval_seconds(&self) -> u64 {
+        self.fields
+            .get("exportIntervalSeconds")
+            .and_then(Value::as_u64)
+            .map(|seconds| {
+                seconds.clamp(
+                    crate::export::schedule::MIN_INTERVAL_SECONDS,
+                    crate::export::schedule::MAX_INTERVAL_SECONDS,
+                )
+            })
+            .unwrap_or(crate::export::schedule::DEFAULT_INTERVAL_SECONDS)
+    }
+
     /// Replace only the native-owned editable fields. Every other imported
     /// value, including unknown objects and explicit nulls, is retained.
     pub fn with_native_edits(
@@ -122,6 +171,8 @@ impl Preferences {
         timezone: &str,
         selected_source_ids: &[String],
         close_to_tray: bool,
+        export: &ExportEdits<'_>,
+        appearance: &crate::settings::SettingsEdits,
     ) -> Result<Vec<u8>> {
         let mut fields = self.fields.clone();
         fields.insert(
@@ -140,6 +191,41 @@ impl Preferences {
                     .collect(),
             ),
         );
+        // Auto-export is native-owned for the same reason the tray setting is:
+        // it describes what this window does, not what the tool reports.
+        fields.insert(
+            "exportFolder".to_owned(),
+            match export.folder {
+                Some(folder) => Value::String(folder.to_owned()),
+                None => Value::Null,
+            },
+        );
+        fields.insert(
+            "exportIntervalSeconds".to_owned(),
+            Value::Number(crate::export::schedule::clamp_interval(export.interval_seconds).into()),
+        );
+        // Appearance, currency and language. Written as the same plain strings the
+        // reference tool stores, so a settings file stays readable by both.
+        fields.insert(
+            crate::settings::THEME_FIELD.to_owned(),
+            Value::String(appearance.theme.wire().to_owned()),
+        );
+        fields.insert(
+            crate::settings::DENSITY_FIELD.to_owned(),
+            Value::String(appearance.density.wire().to_owned()),
+        );
+        fields.insert(
+            crate::settings::MOTION_FIELD.to_owned(),
+            Value::String(appearance.motion.wire().to_owned()),
+        );
+        fields.insert(
+            crate::settings::LANGUAGE_FIELD.to_owned(),
+            Value::String(appearance.language.wire().to_owned()),
+        );
+        fields.insert(
+            crate::settings::CURRENCY_FIELD.to_owned(),
+            Value::String(appearance.currency.code().to_owned()),
+        );
         serde_json::to_vec(&fields).context("could not encode native settings")
     }
 
@@ -152,6 +238,26 @@ impl Preferences {
             .get("nativeSourceIds")?
             .as_array()
             .map(|values| values.iter().filter_map(Value::as_str).collect())
+    }
+}
+
+/// The export fields a settings save writes.
+///
+/// A borrowed view so a save cannot accidentally move an owned path out of the
+/// draft it was validating.
+#[derive(Clone, Copy, Debug)]
+pub struct ExportEdits<'a> {
+    /// `None` turns auto-export off.
+    pub folder: Option<&'a str>,
+    pub interval_seconds: u64,
+}
+
+impl Default for ExportEdits<'_> {
+    fn default() -> Self {
+        Self {
+            folder: None,
+            interval_seconds: crate::export::schedule::DEFAULT_INTERVAL_SECONDS,
+        }
     }
 }
 

@@ -31,6 +31,10 @@ pub enum SettingsField {
     EnabledClients,
     Timezone,
     Sources,
+    ExportFolder,
+    Appearance,
+    Currency,
+    Language,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +44,8 @@ pub enum SettingsReason {
     Unsupported,
     InvalidTimezone,
     Unavailable,
+    /// The export folder does not exist or is not a directory.
+    InvalidFolder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +104,11 @@ pub struct SettingsView {
     pub selected_source_ids: Vec<String>,
     pub sources: Vec<SourceChoice>,
     pub close_to_tray: bool,
+    /// `None` means auto-export is off.
+    pub export_folder: Option<String>,
+    pub export_interval_seconds: u64,
+    /// Theme, density, motion, language and currency.
+    pub appearance: crate::settings::SettingsValues,
 }
 
 impl SettingsView {
@@ -108,6 +119,9 @@ impl SettingsView {
             timezone: self.timezone.clone(),
             selected_source_ids: self.selected_source_ids.clone(),
             close_to_tray: self.close_to_tray,
+            export_folder: self.export_folder.clone(),
+            export_interval_seconds: self.export_interval_seconds,
+            appearance: self.appearance.clone(),
         }
     }
 }
@@ -119,6 +133,9 @@ pub struct SettingsDraft {
     pub timezone: String,
     pub selected_source_ids: Vec<String>,
     pub close_to_tray: bool,
+    pub export_folder: Option<String>,
+    pub export_interval_seconds: u64,
+    pub appearance: crate::settings::SettingsValues,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -178,6 +195,9 @@ impl SettingsEditor {
             selected_source_ids,
             sources,
             close_to_tray: preferences.close_to_tray(),
+            export_folder: preferences.export_folder().map(str::to_owned),
+            export_interval_seconds: preferences.export_interval_seconds(),
+            appearance: crate::settings::SettingsValues::read(&preferences),
         };
         Ok(Self {
             preferences,
@@ -255,10 +275,33 @@ impl SettingsEditor {
                 );
             }
         }
+        // An export folder that is set must exist: a typo would otherwise turn
+        // auto-export into a permanent, silent failure. `None` (off) is always
+        // valid, which is what makes turning it off a way out of a bad path.
+        if let Some(folder) = draft.export_folder.as_deref()
+            && !folder.trim().is_empty()
+        {
+            let path = std::path::Path::new(folder.trim());
+            if !path.is_dir() {
+                push_issue(
+                    &mut issues,
+                    SettingsField::ExportFolder,
+                    SettingsReason::InvalidFolder,
+                );
+            }
+        }
         if !issues.is_empty() {
             return Err(SettingsValidationError { issues });
         }
 
+        let export = crate::config::ExportEdits {
+            folder: draft
+                .export_folder
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            interval_seconds: draft.export_interval_seconds,
+        };
         let bytes = self
             .preferences
             .with_native_edits(
@@ -266,6 +309,14 @@ impl SettingsEditor {
                 &draft.timezone,
                 &draft.selected_source_ids,
                 draft.close_to_tray,
+                &export,
+                &crate::settings::SettingsEdits {
+                    theme: draft.appearance.theme,
+                    density: draft.appearance.density,
+                    motion: draft.appearance.motion,
+                    language: draft.appearance.language,
+                    currency: draft.appearance.currency,
+                },
             )
             .map_err(|_| SettingsValidationError {
                 issues: vec![SettingsIssue {
@@ -333,6 +384,8 @@ pub struct ApplicationSnapshot {
     pub source_availability: SourceAvailability,
     pub credential_status: CredentialStatus,
     pub notice: Option<ApplicationNotice>,
+    /// Provider quota as the limits lane last published it.
+    pub limits: crate::limits::scheduler::LimitsSnapshot,
 }
 
 impl fmt::Debug for ApplicationSnapshot {
@@ -354,8 +407,16 @@ impl fmt::Debug for ApplicationSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplicationCommand {
     SaveSettings(SettingsDraft),
-    CancelSettings { base_revision: u64 },
+    CancelSettings {
+        base_revision: u64,
+    },
     Refresh,
+    /// Write the export file set to this folder now.
+    ExportNow {
+        folder: std::path::PathBuf,
+    },
+    /// Run one automatic export if the cadence is due.
+    AutoExport,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -399,6 +460,9 @@ struct ApplicationInner {
     latest: Arc<RwLock<Arc<ApplicationSnapshot>>>,
     stopped: Mutex<bool>,
     join: Mutex<Option<JoinHandle<()>>>,
+    /// A second handle to the one credential worker, so the limits lane can read
+    /// a credential without starting a keyring thread of its own.
+    credentials: CredentialService,
 }
 
 impl ApplicationInner {
@@ -526,6 +590,7 @@ impl ApplicationService {
             source_availability: SourceAvailability::Unavailable,
             credential_status,
             notice: None,
+            limits: crate::limits::scheduler::LimitsSnapshot::default(),
         });
         let latest = Arc::new(RwLock::new(initial));
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
@@ -534,13 +599,17 @@ impl ApplicationService {
             inputs,
             discovery,
             store,
-            credentials: Some(credentials),
+            credentials: Some(credentials.clone()),
             credential_status,
             credential_generation,
             editor,
             monitor: None,
+            limits: None,
             pending_monitor: pending_monitor.clone(),
             latest: latest.clone(),
+            export_memory: crate::export::writer::ExportMemory::new(),
+            last_export_attempt_ms: None,
+            pricing: crate::pricing::PricingCatalog::bundled(),
         };
         let worker_sender = sender.clone();
         let join = thread::Builder::new()
@@ -553,6 +622,7 @@ impl ApplicationService {
                 latest,
                 stopped: Mutex::new(false),
                 join: Mutex::new(Some(join)),
+                credentials,
             }),
         })
     }
@@ -563,6 +633,14 @@ impl ApplicationService {
             .read()
             .map(|snapshot| snapshot.clone())
             .map_err(|_| ApplicationSubmitError::Closed)
+    }
+
+    /// A handle on the credential worker, for the limits lane.
+    ///
+    /// It is the same worker the application uses, so there is no second keyring
+    /// thread and no competing read of the same secret.
+    pub fn credentials(&self) -> CredentialService {
+        self.inner.credentials.clone()
     }
 
     /// Enqueues without waiting for discovery, SQLite, monitor, or filesystem work.
@@ -598,8 +676,17 @@ struct ApplicationState {
     credential_generation: u64,
     editor: SettingsEditor,
     monitor: Option<Monitor>,
+    /// The limits lane, present only while a credential exists for a provider it
+    /// knows. It owns the only thread that may make a quota request.
+    limits: Option<crate::limits::scheduler::LimitsWorker>,
     pending_monitor: Arc<Mutex<Option<Arc<MonitorSnapshot>>>>,
     latest: Arc<RwLock<Arc<ApplicationSnapshot>>>,
+    /// What was last written, so an unchanged auto-export is a no-op.
+    export_memory: crate::export::writer::ExportMemory,
+    /// The last time an auto-export *attempted*, whether or not it wrote.
+    last_export_attempt_ms: Option<i64>,
+    /// The pricing catalog the export costs with. The same catalog the UI shows.
+    pricing: std::sync::Arc<crate::pricing::PricingCatalog>,
 }
 
 fn worker_main(
@@ -640,7 +727,62 @@ impl ApplicationState {
             ApplicationCommand::SaveSettings(draft) => self.save(draft, sender),
             ApplicationCommand::CancelSettings { .. } => self.publish(None, None, None),
             ApplicationCommand::Refresh => self.refresh(sender),
+            ApplicationCommand::ExportNow { folder } => {
+                self.export(&folder, true);
+                self.publish(None, None, self.current_notice());
+            }
+            ApplicationCommand::AutoExport => {
+                let folder = self
+                    .editor
+                    .view()
+                    .export_folder
+                    .clone()
+                    .map(std::path::PathBuf::from);
+                let interval = self.editor.view().export_interval_seconds;
+                let now = export_now_ms();
+                if let Some(folder) = folder
+                    && crate::export::schedule::is_due(interval, self.last_export_attempt_ms, now)
+                {
+                    self.last_export_attempt_ms = Some(now);
+                    self.export(&folder, false);
+                    self.publish(None, None, self.current_notice());
+                }
+            }
         }
+    }
+
+    /// Build and write the export file set.
+    ///
+    /// `force` is a manual export. Either way the writer skips files whose bytes
+    /// already match, so a synced folder never sees a pointless modification.
+    fn export(
+        &mut self,
+        folder: &std::path::Path,
+        force: bool,
+    ) -> Option<crate::export::writer::ExportOutcome> {
+        // The latest published monitor snapshot, which is exactly what the UI is
+        // showing; exporting anything else would make the files disagree with it.
+        let monitor = self.latest.read().ok()?.monitor.clone()?;
+        let now_ms = export_now_ms();
+        let generated_at = chrono::DateTime::from_timestamp_millis(now_ms)
+            .map(|instant| instant.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+            .unwrap_or_default();
+        let input = crate::export::builder::build(
+            &monitor.canonical,
+            now_ms,
+            self.pricing.as_ref(),
+            generated_at,
+        )
+        .ok()?;
+        let files = crate::export::file_set(
+            &input.document,
+            &input.snapshot_rows,
+            &input.daily_rows,
+            &input.daily_model_rows,
+        );
+        let signature = crate::export::signature(&input.document);
+        crate::export::write_file_set(folder, &files, &signature, &mut self.export_memory, force)
+            .ok()
     }
 
     fn refresh(&mut self, sender: &SyncSender<WorkerCommand>) {
@@ -851,11 +993,23 @@ impl ApplicationState {
             },
             credential_status: self.credential_status,
             notice,
+            limits: self
+                .limits
+                .as_ref()
+                .map(|limits| limits.snapshot())
+                .unwrap_or_else(|| previous.limits.clone()),
         });
         if let Ok(mut latest) = self.latest.write() {
             *latest = next;
         }
     }
+}
+
+fn export_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn bootstrap_credentials(

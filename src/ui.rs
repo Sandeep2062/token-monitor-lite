@@ -4,7 +4,9 @@
 use crate::accounting::TokenCounts;
 use crate::aggregation::BucketTimezone;
 use crate::aggregation::SessionModelRollup;
-use crate::analytics::{UsagePeriod, daily_series, model_breakdown, period_totals};
+use crate::analytics::{
+    DayState, UsagePeriod, daily_series, model_breakdown, monthly_rollups, period_totals,
+};
 use crate::application::{
     ApplicationNotice, ApplicationSnapshot, CredentialAvailability, SettingsDraft, SettingsView,
     SourceChoice,
@@ -13,7 +15,7 @@ use crate::pricing::{CostEstimate, PricingCatalog, estimate};
 use crate::runtime::{MonitorSnapshot, SourceHealthStatus, WatchStatus};
 use crate::sources::{SourceFormat, SourceId};
 use crate::storage::{ActivationState, ImportState, PreserveState};
-use chrono::DateTime;
+use chrono::{DateTime, Datelike as _};
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -22,7 +24,12 @@ use std::sync::{Arc, Mutex};
 
 pub const SESSION_PAGE_SIZE: usize = 50;
 pub const HOME_RECENT_LIMIT: usize = 5;
-pub const TREND_DAYS: usize = 30;
+/// Days of history the Trends view spans.
+///
+/// Matches `analytics::MAX_TREND_DAYS`, which is the reference's "roughly the last
+/// 370 days" (`docs/export.md`). Daily granularity, not monthly: the monthly
+/// rollups are derived from this same series.
+pub const TREND_DAYS: usize = crate::analytics::MAX_TREND_DAYS;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionIdentity {
@@ -126,6 +133,24 @@ pub struct SettingsPresentation {
     pub committed_close_to_tray: bool,
     pub draft_close_to_tray: bool,
     pub tray_capable: bool,
+    /// The folder auto-export writes to, or empty when it is off.
+    pub export_folder: String,
+    pub export_notice: String,
+    /// Whether auto-export is on, so the button can say which way it will go.
+    pub export_enabled: bool,
+    /// Appearance, currency and language choices, in display order.
+    pub theme_options: Vec<ChoiceRow>,
+    pub density_options: Vec<ChoiceRow>,
+    pub motion_options: Vec<ChoiceRow>,
+    pub currency_options: Vec<ChoiceRow>,
+    pub language_options: Vec<ChoiceRow>,
+    /// Short lines summarising the committed values.
+    pub appearance_summary: String,
+    pub currency_summary: String,
+    pub language_summary: String,
+    /// Unreadable fields found in the settings file, so the UI can say it is
+    /// using a default rather than implying the file agreed.
+    pub settings_warnings: String,
 }
 
 impl Default for SettingsPresentation {
@@ -142,6 +167,9 @@ impl Default for SettingsPresentation {
                     selected_source_ids: Vec::new(),
                     sources: Vec::new(),
                     close_to_tray: false,
+                    export_folder: None,
+                    export_interval_seconds: crate::export::schedule::DEFAULT_INTERVAL_SECONDS,
+                    appearance: crate::settings::SettingsValues::default(),
                 },
                 None,
             ),
@@ -155,6 +183,18 @@ impl Default for SettingsPresentation {
             committed_close_to_tray: false,
             draft_close_to_tray: false,
             tray_capable: crate::tray::tray_capable(),
+            export_folder: String::new(),
+            export_notice: String::new(),
+            export_enabled: false,
+            theme_options: theme_options(crate::settings::ThemeMode::System),
+            density_options: density_options(crate::settings::Density::Comfortable),
+            motion_options: motion_options(crate::settings::MotionPreference::System),
+            currency_options: currency_options(crate::currency::Currency::Usd),
+            language_options: language_options(crate::settings::Language::En),
+            appearance_summary: String::new(),
+            currency_summary: String::new(),
+            language_summary: String::new(),
+            settings_warnings: String::new(),
         }
     }
 }
@@ -166,10 +206,61 @@ pub struct TrendRow {
     pub permille: i32,
 }
 
+/// How a heatmap cell should be drawn.
+///
+/// `Unknown` is a distinct state, never the empty one: a day with no evidence must
+/// not look like a day with zero usage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeatCell {
+    Unknown,
+    Empty,
+    Level1,
+    Level2,
+    Level3,
+    Level4,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeatmapCell {
+    /// ISO date, for the accessible label.
+    pub date: String,
+    pub level: HeatCell,
+    /// Full text, e.g. "2026-07-03 · 12,345 tokens" or "2026-07-03 · unknown".
+    pub tooltip: String,
+}
+
+/// One row of the heatmap grid: a weekday across 53 weeks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeatmapRow {
+    /// `Mon` … `Sun`.
+    pub weekday: String,
+    pub cells: Vec<HeatmapCell>,
+}
+
+/// A month of the history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonthRow {
+    /// `YYYY-MM`.
+    pub month: String,
+    pub total: String,
+    pub permille: i32,
+    /// True when some of the month's days are unknown.
+    pub partial: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrendsPresentation {
     pub headline: String,
     pub rows: Vec<TrendRow>,
+    /// Monthly rollups, oldest first.
+    pub months: Vec<MonthRow>,
+    /// Seven weekday rows of 53 cells, oldest week first.
+    pub heatmap: Vec<HeatmapRow>,
+    /// The heatmap's legend text, so a reader knows what `Unknown` looks like.
+    pub heatmap_note: String,
+    /// Days counted as observed versus unknown in the window.
+    pub known_days: usize,
+    pub unknown_days: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +269,236 @@ pub struct ModelRow {
     pub total: String,
     pub cost: String,
     pub permille: i32,
+}
+
+/// The resolved appearance the window should draw with.
+///
+/// Resolved from the *committed* settings, not the draft: the theme applies when
+/// Save succeeds, like every other setting, so an abandoned draft cannot leave the
+/// window repainted in a theme that was never stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppearancePresentation {
+    pub theme: crate::settings::ThemeMode,
+    pub dark: bool,
+    pub density: crate::settings::Density,
+    pub reduced_motion: bool,
+    pub language: crate::settings::Language,
+    pub currency: crate::currency::Currency,
+}
+
+impl Default for AppearancePresentation {
+    fn default() -> Self {
+        Self {
+            theme: crate::settings::ThemeMode::System,
+            dark: true,
+            density: crate::settings::Density::Comfortable,
+            reduced_motion: false,
+            language: crate::settings::Language::En,
+            currency: crate::currency::Currency::Usd,
+        }
+    }
+}
+
+impl AppearancePresentation {
+    fn resolve(values: &crate::settings::SettingsValues, system_locale: &str) -> Self {
+        let system = crate::system_palette::detect();
+        Self {
+            theme: values.theme,
+            dark: values.theme.is_dark(system.dark),
+            density: values.density,
+            reduced_motion: values.motion.should_reduce(system.reduce_motion),
+            language: values.language.resolve(system_locale),
+            currency: values.currency,
+        }
+    }
+
+    /// Format a USD amount for display. Accounting stays in USD; only the text
+    /// changes, which is why this returns a string.
+    pub fn format_cost(&self, usd: f64) -> String {
+        self.currency.format_from_usd(usd)
+    }
+}
+
+/// One selectable option in a settings section.
+///
+/// `label` is the source string Slint translates; `selected` drives both the tick
+/// and the accessible state, so a screen reader reports the same choice the eye
+/// sees.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceRow {
+    /// The wire value, used as the identity when the row is clicked.
+    pub value: String,
+    pub label: String,
+    pub selected: bool,
+}
+
+fn theme_options(current: crate::settings::ThemeMode) -> Vec<ChoiceRow> {
+    use crate::settings::ThemeMode;
+    [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark]
+        .into_iter()
+        .map(|mode| ChoiceRow {
+            value: mode.wire().to_owned(),
+            label: match mode {
+                ThemeMode::System => "System",
+                ThemeMode::Light => "Light",
+                ThemeMode::Dark => "Dark",
+            }
+            .to_owned(),
+            selected: mode == current,
+        })
+        .collect()
+}
+
+fn density_options(current: crate::settings::Density) -> Vec<ChoiceRow> {
+    use crate::settings::Density;
+    [Density::Comfortable, Density::Compact]
+        .into_iter()
+        .map(|density| ChoiceRow {
+            value: density.wire().to_owned(),
+            label: match density {
+                Density::Comfortable => "Comfortable",
+                Density::Compact => "Compact",
+            }
+            .to_owned(),
+            selected: density == current,
+        })
+        .collect()
+}
+
+fn motion_options(current: crate::settings::MotionPreference) -> Vec<ChoiceRow> {
+    use crate::settings::MotionPreference;
+    [
+        MotionPreference::System,
+        MotionPreference::On,
+        MotionPreference::Off,
+    ]
+    .into_iter()
+    .map(|motion| ChoiceRow {
+        value: motion.wire().to_owned(),
+        label: match motion {
+            MotionPreference::System => "System",
+            MotionPreference::On => "On",
+            MotionPreference::Off => "Off",
+        }
+        .to_owned(),
+        selected: motion == current,
+    })
+    .collect()
+}
+
+fn currency_options(current: crate::currency::Currency) -> Vec<ChoiceRow> {
+    use crate::currency::Currency;
+    [
+        (Currency::Usd, "USD - US Dollar"),
+        (Currency::Twd, "TWD - New Taiwan Dollar"),
+        (Currency::Hkd, "HKD - Hong Kong Dollar"),
+        (Currency::Cny, "CNY - Chinese Yuan"),
+    ]
+    .into_iter()
+    .map(|(currency, label)| ChoiceRow {
+        value: currency.code().to_owned(),
+        label: label.to_owned(),
+        selected: currency == current,
+    })
+    .collect()
+}
+
+fn language_options(current: crate::settings::Language) -> Vec<ChoiceRow> {
+    use crate::settings::Language;
+    [
+        (Language::Auto, "Auto (system)"),
+        (Language::En, "English"),
+        (Language::ZhTw, "繁體中文"),
+        (Language::ZhCn, "简体中文"),
+        (Language::Ko, "한국어"),
+        (Language::Ja, "日本語"),
+        (Language::PtBr, "Português (Brasil)"),
+    ]
+    .into_iter()
+    .map(|(language, label)| ChoiceRow {
+        value: language.wire().to_owned(),
+        label: label.to_owned(),
+        selected: language == current,
+    })
+    .collect()
+}
+
+/// The operating system's locale tag, or empty when it cannot be determined.
+///
+/// Read from the conventional environment variables rather than a platform crate:
+/// they are what every desktop on the three targets sets, and an absent or
+/// unreadable value simply resolves to English. `LANGUAGE` is a `:`-separated
+/// preference list, so its first usable entry wins.
+pub fn system_locale() -> String {
+    fn first_usable(value: &str) -> Option<String> {
+        value
+            .split(':')
+            .map(str::trim)
+            .find(|part| !part.is_empty() && *part != "C" && *part != "POSIX")
+            .map(str::to_owned)
+    }
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
+        if let Ok(value) = std::env::var(key)
+            && let Some(tag) = first_usable(&value)
+        {
+            return tag;
+        }
+    }
+    String::new()
+}
+
+fn theme_label(mode: crate::settings::ThemeMode) -> &'static str {
+    use crate::settings::ThemeMode;
+    match mode {
+        ThemeMode::System => "System",
+        ThemeMode::Light => "Light",
+        ThemeMode::Dark => "Dark",
+    }
+}
+
+fn density_label(density: crate::settings::Density) -> &'static str {
+    use crate::settings::Density;
+    match density {
+        Density::Comfortable => "Comfortable",
+        Density::Compact => "Compact",
+    }
+}
+
+fn motion_label(motion: crate::settings::MotionPreference) -> &'static str {
+    use crate::settings::MotionPreference;
+    match motion {
+        MotionPreference::System => "System",
+        MotionPreference::On => "On",
+        MotionPreference::Off => "Off",
+    }
+}
+
+fn language_label(language: crate::settings::Language) -> &'static str {
+    use crate::settings::Language;
+    match language {
+        Language::Auto => "Auto (system)",
+        Language::En => "English",
+        Language::ZhTw => "繁體中文",
+        Language::ZhCn => "简体中文",
+        Language::Ko => "한국어",
+        Language::Ja => "日本語",
+        Language::PtBr => "Português (Brasil)",
+    }
+}
+
+/// Say plainly that a stored value could not be read.
+///
+/// An unreadable field is not an error: the app is running on the default. But
+/// saying nothing would let a person believe their setting took effect, so the
+/// line names the fields and offers the Save-again fix.
+fn settings_warnings(values: &crate::settings::SettingsValues) -> String {
+    if values.unreadable.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Using defaults: {} could not be read. Saving will replace the stored value.",
+        values.unreadable.join(", ")
+    )
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -220,6 +541,8 @@ impl Default for UpdatePresentation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiPresentation {
     pub generation: u64,
+    /// Palette, density, motion and language, resolved from committed settings.
+    pub appearance: AppearancePresentation,
     pub home: HomeSummary,
     pub trends: TrendsPresentation,
     pub models: ModelsPresentation,
@@ -238,6 +561,56 @@ pub struct UiPresentation {
     pub watch_status: String,
     pub settings: SettingsPresentation,
     pub tray: TrayPresentation,
+    pub quota: QuotaPresentation,
+}
+
+/// One provider's quota as Home renders it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuotaRow {
+    pub provider: String,
+    /// Provider plus account, for the bar's heading.
+    pub heading: String,
+    /// Every window this row reports, as its own bar.
+    pub windows: Vec<QuotaWindow>,
+    /// The status in words, already user-facing.
+    pub status: String,
+    /// True when the row is retained from an earlier attempt.
+    pub stale: bool,
+    /// True when the status is one a reader should act on.
+    pub attention: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuotaWindow {
+    pub label: String,
+    /// Consumed percentage, 0..100.
+    pub used_percent: i32,
+    /// Free text beside the bar: "42% used" or "Not reported".
+    pub amount: String,
+    /// Reset time, or empty when the provider did not say.
+    pub reset: String,
+}
+
+/// Home's quota bars.
+///
+/// Empty is a legitimate state: no provider configured, no credential, or no
+/// successful probe yet. It renders as an explanation, never as a zero bar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuotaPresentation {
+    pub headline: String,
+    pub rows: Vec<QuotaRow>,
+    /// Why there are no bars, when there are none.
+    pub notice: Option<String>,
+}
+
+impl Default for QuotaPresentation {
+    fn default() -> Self {
+        Self {
+            headline: "Provider limits".to_owned(),
+            rows: Vec::new(),
+            notice: Some("No provider limits yet".to_owned()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -280,6 +653,13 @@ pub struct UiController {
     clock_ms: Option<i64>,
     update: UpdatePresentation,
     pricing: Arc<PricingCatalog>,
+    limits: Vec<crate::limits::LimitsProvider>,
+    limits_notice: Option<String>,
+    limits_updated_ms: Option<i64>,
+    export_notice: String,
+    /// The last committed appearance, so a monitor-only update keeps painting
+    /// with the settings the user actually saved.
+    committed_appearance: crate::settings::SettingsValues,
 }
 
 impl Default for UiController {
@@ -299,6 +679,11 @@ impl Default for UiController {
             clock_ms: None,
             update: UpdatePresentation::default(),
             pricing: PricingCatalog::bundled(),
+            limits: Vec::new(),
+            limits_notice: None,
+            limits_updated_ms: None,
+            export_notice: String::new(),
+            committed_appearance: crate::settings::SettingsValues::default(),
         }
     }
 }
@@ -384,6 +769,95 @@ impl UiController {
         if let Some(draft) = self.settings_draft.as_mut() {
             draft.close_to_tray = close_to_tray;
         }
+    }
+
+    /// Set the export folder in the draft. An empty string turns auto-export off.
+    ///
+    /// Folders are validated on save, not here: a user may pick a folder that is
+    /// currently unavailable and still expect the draft to keep it so Save can
+    /// explain the problem.
+    pub fn set_export_folder(&mut self, folder: &str) {
+        if let Some(draft) = self.settings_draft.as_mut() {
+            let trimmed = folder.trim();
+            draft.export_folder = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            };
+        }
+    }
+
+    /// Replace the short line under the export controls.
+    pub fn set_export_notice(&mut self, notice: impl Into<String>) {
+        self.export_notice = notice.into();
+    }
+
+    /// Set the theme in the draft.
+    ///
+    /// The draft only: nothing repaints from this, because the revisioned save is
+    /// what makes a choice real. An unreadable value is ignored rather than
+    /// defaulted, so a stray click cannot silently discard the stored choice.
+    pub fn set_theme(&mut self, value: &str) {
+        if let (Some(draft), Some(mode)) = (
+            self.settings_draft.as_mut(),
+            crate::settings::ThemeMode::parse(value),
+        ) {
+            draft.appearance.theme = mode;
+        }
+    }
+
+    pub fn set_density(&mut self, value: &str) {
+        if let (Some(draft), Some(density)) = (
+            self.settings_draft.as_mut(),
+            crate::settings::Density::parse(value),
+        ) {
+            draft.appearance.density = density;
+        }
+    }
+
+    pub fn set_motion(&mut self, value: &str) {
+        if let (Some(draft), Some(motion)) = (
+            self.settings_draft.as_mut(),
+            crate::settings::MotionPreference::parse(value),
+        ) {
+            draft.appearance.motion = motion;
+        }
+    }
+
+    pub fn set_currency(&mut self, value: &str) {
+        if let (Some(draft), Some(currency)) = (
+            self.settings_draft.as_mut(),
+            crate::currency::Currency::parse(value),
+        ) {
+            draft.appearance.currency = currency;
+        }
+    }
+
+    pub fn set_language(&mut self, value: &str) {
+        if let (Some(draft), Some(language)) = (
+            self.settings_draft.as_mut(),
+            crate::settings::Language::parse(value),
+        ) {
+            draft.appearance.language = language;
+        }
+    }
+
+    /// The language the window should currently render in.
+    ///
+    /// Taken from the committed snapshot rather than the draft: a language change
+    /// applies when it is saved, like every other setting, so an in-progress
+    /// selection cannot leave the interface half-translated.
+    pub fn active_language(&self) -> crate::settings::Language {
+        self.application_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .settings
+                    .appearance
+                    .language
+                    .resolve(&system_locale())
+            })
+            .unwrap_or(crate::settings::Language::En)
     }
 
     /// Record whether a tray icon was actually created.
@@ -603,6 +1077,7 @@ impl UiController {
             let mut presentation = empty_presentation(&self.search_query);
             presentation.settings = self.settings_presentation();
             presentation.update = self.update.clone();
+            presentation.quota = self.quota_presentation();
             return presentation;
         };
         let sorted = sorted_sessions(snapshot);
@@ -628,6 +1103,15 @@ impl UiController {
 
         UiPresentation {
             generation: snapshot.generation,
+            // Committed settings, not the draft: an unsaved choice must not
+            // repaint the window.
+            appearance: AppearancePresentation::resolve(
+                self.application_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.settings.appearance)
+                    .unwrap_or(&self.committed_appearance),
+                &system_locale(),
+            ),
             home: home_summary(snapshot, &sources, self.period, self.clock_ms, pricing),
             tray: tray_presentation(snapshot, self.clock_ms, pricing),
             trends: trends_presentation(snapshot, self.clock_ms),
@@ -649,7 +1133,35 @@ impl UiController {
                 WatchStatus::Unavailable => "Watcher unavailable · refresh manually".to_owned(),
             },
             settings: self.settings_presentation(),
+            quota: self.quota_presentation(),
         }
+    }
+
+    /// Accept a limits snapshot and say whether anything changed.
+    ///
+    /// Called from the same delivery pass as the monitor snapshot, so the quota
+    /// bars add no timer. A row is only replaced when its content differs, which
+    /// keeps the comparison cheap and stops a repaint per delivery.
+    pub fn accept_limits(
+        &mut self,
+        rows: Vec<crate::limits::LimitsProvider>,
+        notice: Option<String>,
+        now_ms: i64,
+    ) -> bool {
+        let changed = self.limits != rows || self.limits_notice != notice;
+        if changed {
+            self.limits = rows;
+            self.limits_notice = notice;
+            self.limits_updated_ms = Some(now_ms);
+        }
+        changed
+    }
+
+    /// Home's quota bars, projected from the retained rows.
+    pub fn quota_presentation(&self) -> QuotaPresentation {
+        // Reset text is relative to the clock the rows were measured at, so it is
+        // the same instant every other projection uses.
+        quota_presentation(&self.limits, self.limits_notice.as_deref(), self.clock_ms)
     }
 
     fn settings_presentation(&self) -> SettingsPresentation {
@@ -724,6 +1236,31 @@ impl UiController {
             committed_close_to_tray: snapshot.settings.close_to_tray,
             draft_close_to_tray: draft.close_to_tray,
             tray_capable: self.tray_available,
+            export_folder: draft.export_folder.clone().unwrap_or_default(),
+            export_enabled: draft.export_folder.is_some(),
+            export_notice: self.export_notice.clone(),
+            theme_options: theme_options(draft.appearance.theme),
+            density_options: density_options(draft.appearance.density),
+            motion_options: motion_options(draft.appearance.motion),
+            currency_options: currency_options(draft.appearance.currency),
+            language_options: language_options(draft.appearance.language),
+            appearance_summary: format!(
+                "{} · {} · {}",
+                theme_label(draft.appearance.theme),
+                density_label(draft.appearance.density),
+                motion_label(draft.appearance.motion)
+            ),
+            // The committed currency, not the draft: this line explains what the
+            // amounts on screen are actually displayed in.
+            currency_summary: format!(
+                "Displaying in {} · accounting stays in USD",
+                snapshot.settings.appearance.currency.code()
+            ),
+            language_summary: format!(
+                "Interface language: {}",
+                language_label(draft.appearance.language)
+            ),
+            settings_warnings: settings_warnings(&snapshot.settings.appearance),
         }
     }
 
@@ -806,6 +1343,9 @@ impl SnapshotMailbox {
 fn empty_presentation(search_query: &str) -> UiPresentation {
     UiPresentation {
         generation: 0,
+        // Before startup completes there are no committed settings, so the window
+        // shows the palette it has always used rather than flickering to light.
+        appearance: AppearancePresentation::default(),
         home: HomeSummary {
             tracked_tokens: "0".to_owned(),
             tracked: 0,
@@ -825,8 +1365,8 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
             reasoning_permille: 0,
         },
         trends: TrendsPresentation {
-            headline: "Daily tracked tokens · last 30 days".to_owned(),
-            rows: Vec::new(),
+            headline: format!("Daily tracked tokens · last {TREND_DAYS} days"),
+            ..TrendsPresentation::default()
         },
         models: ModelsPresentation {
             headline: "Model share".to_owned(),
@@ -847,6 +1387,7 @@ fn empty_presentation(search_query: &str) -> UiPresentation {
         refresh_available: false,
         watch_status: "No sources configured".to_owned(),
         settings: SettingsPresentation::default(),
+        quota: QuotaPresentation::default(),
     }
 }
 
@@ -1282,31 +1823,280 @@ fn tray_presentation(
     }
 }
 
+/// Home's quota bars, projected from retained provider rows.
+///
+/// A provider that reports nothing produces no bar. The alternative — inventing
+/// a 0 % meter — would tell a reader their quota is untouched when it is simply
+/// unknown, which is the one thing a quota display must never do.
+fn quota_presentation(
+    rows: &[crate::limits::LimitsProvider],
+    notice: Option<&str>,
+    clock_ms: Option<i64>,
+) -> QuotaPresentation {
+    let now_ms = clock_ms.unwrap_or_else(current_time_ms);
+    let rows: Vec<QuotaRow> = rows
+        .iter()
+        .filter(|row| !row.windows.is_empty() || !row.status.is_ok())
+        .map(|row| {
+            let heading = if row.account_label.is_empty() {
+                client_label(&row.provider).to_owned()
+            } else {
+                format!("{} · {}", client_label(&row.provider), row.account_label)
+            };
+            let windows = row
+                .windows
+                .iter()
+                .map(|window| {
+                    let used = window.used_percent();
+                    QuotaWindow {
+                        label: window
+                            .label
+                            .clone()
+                            .unwrap_or_else(|| window_kind_label(window.kind)),
+                        used_percent: used
+                            .map(|percent| percent.round().clamp(0.0, 100.0) as i32)
+                            .unwrap_or(0),
+                        amount: match used {
+                            Some(percent) => format!("{}% used", percent.round() as i64),
+                            None => "Not reported".to_owned(),
+                        },
+                        reset: reset_text(window, now_ms),
+                    }
+                })
+                .collect();
+            QuotaRow {
+                provider: row.provider.clone(),
+                heading,
+                windows,
+                status: limit_status_label(row.status),
+                stale: row.stale,
+                attention: row.status.needs_attention(),
+            }
+        })
+        .collect();
+
+    let empty = rows.is_empty();
+    let headline = if empty {
+        "Provider limits".to_owned()
+    } else {
+        format!("Provider limits · {} tracked", rows.len())
+    };
+    let fallback = match notice {
+        Some(notice) => Some(notice.to_owned()),
+        None => Some("No provider limits yet".to_owned()),
+    };
+    QuotaPresentation {
+        headline,
+        rows,
+        notice: if empty { fallback } else { None },
+    }
+}
+
+/// A window's cadence, in the same words the rest of the window uses.
+fn window_kind_label(kind: crate::limits::WindowKind) -> String {
+    match kind {
+        crate::limits::WindowKind::Session => "Session".to_owned(),
+        crate::limits::WindowKind::Daily => "Daily".to_owned(),
+        crate::limits::WindowKind::Weekly => "Weekly".to_owned(),
+        crate::limits::WindowKind::Billing => "Billing".to_owned(),
+    }
+}
+
+/// A provider status in words a reader can act on.
+fn limit_status_label(status: crate::limits::LimitStatus) -> String {
+    match status {
+        crate::limits::LimitStatus::Ok => "OK".to_owned(),
+        crate::limits::LimitStatus::Disabled => "Disabled".to_owned(),
+        crate::limits::LimitStatus::NotConfigured => "Not configured".to_owned(),
+        crate::limits::LimitStatus::Unauthorized => "Sign in again".to_owned(),
+        crate::limits::LimitStatus::RateLimited => "Rate limited".to_owned(),
+        crate::limits::LimitStatus::SourceRateLimited => "Rate limited (one window)".to_owned(),
+        crate::limits::LimitStatus::Timeout => "Timed out".to_owned(),
+        crate::limits::LimitStatus::Unavailable => "Unavailable".to_owned(),
+        crate::limits::LimitStatus::Error => "Error".to_owned(),
+    }
+}
+
+/// The reset time, relative where that is useful and absolute when it is not.
+///
+/// An absent or unparseable reset is empty rather than a guess: a wrong "resets
+/// in 3 hours" is worse than no reset line.
+fn reset_text(window: &crate::limits::Window, now_ms: i64) -> String {
+    if let Some(description) = &window.reset_description
+        && !description.trim().is_empty()
+    {
+        return format!("Resets {description}");
+    }
+    let Some(reset_ms) = window.resets_at_ms() else {
+        return String::new();
+    };
+    let remaining = reset_ms.saturating_sub(now_ms);
+    if remaining <= 0 {
+        return "Reset due".to_owned();
+    }
+    let minutes = remaining / 60_000;
+    if minutes < 60 {
+        return format!("Resets in {minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 48 {
+        let rest = minutes % 60;
+        return if rest == 0 {
+            format!("Resets in {hours}h")
+        } else {
+            format!("Resets in {hours}h {rest}m")
+        };
+    }
+    format!("Resets in {}d", hours / 24)
+}
+
 fn trends_presentation(snapshot: &MonitorSnapshot, clock_ms: Option<i64>) -> TrendsPresentation {
     let now_ms = clock_ms.unwrap_or_else(current_time_ms);
     let Ok(series) = daily_series(&snapshot.canonical, TREND_DAYS, now_ms) else {
         return TrendsPresentation {
             headline: "Trend history unavailable".to_owned(),
-            rows: Vec::new(),
+            heatmap_note: "Trend history unavailable".to_owned(),
+            ..TrendsPresentation::default()
         };
     };
-    let busiest = series.iter().map(|day| day.total).max().unwrap_or(0);
+    let known_days = series
+        .iter()
+        .filter(|day| day.state != DayState::Unknown)
+        .count();
+    let unknown_days = series.len() - known_days;
+    // Averages and totals use observed days only: an unknown day is not a zero,
+    // so counting it would understate the mean.
+    let busiest = series
+        .iter()
+        .filter(|day| day.state != DayState::Unknown)
+        .map(|day| day.total)
+        .max()
+        .unwrap_or(0);
     let sum = series
         .iter()
+        .filter(|day| day.state != DayState::Unknown)
         .fold(0_u128, |sum, day| sum.saturating_add(day.total));
+
+    let rows = series
+        .iter()
+        .map(|day| TrendRow {
+            label: day.day.format("%Y-%m-%d").to_string(),
+            total: match day.state {
+                DayState::Unknown => "unknown".to_owned(),
+                _ => format_number(day.total),
+            },
+            permille: match day.state {
+                DayState::Unknown => 0,
+                _ => fraction_permille(day.total, busiest),
+            },
+        })
+        .collect();
+
+    let months = monthly_rollups(&series)
+        .into_iter()
+        .map(|month| MonthRow {
+            month: month.month.clone(),
+            total: format_number(month.total),
+            permille: fraction_permille(month.total, busiest * 31),
+            partial: !month.is_complete(),
+        })
+        .collect();
+
+    let headline = format!(
+        "Daily tracked tokens · last {} days · {} total{}",
+        TREND_DAYS,
+        format_number(sum),
+        if unknown_days == 0 {
+            String::new()
+        } else {
+            format!(" · {unknown_days} days unknown")
+        }
+    );
     TrendsPresentation {
-        headline: format!(
-            "Daily tracked tokens · last {TREND_DAYS} days · {} total",
-            format_number(sum)
-        ),
-        rows: series
-            .iter()
-            .map(|day| TrendRow {
-                label: day.day.format("%Y-%m-%d").to_string(),
-                total: format_number(day.total),
-                permille: fraction_permille(day.total, busiest),
-            })
-            .collect(),
+        headline,
+        rows,
+        months,
+        heatmap: heatmap(&series, busiest),
+        heatmap_note: "Unknown days are drawn distinctly and excluded from totals".to_owned(),
+        known_days,
+        unknown_days,
+    }
+}
+
+/// A 7 × 53 heatmap, oldest week first.
+///
+/// Columns are weeks so the grid reads like a calendar. A day outside the series
+/// is `Unknown`, which the UI draws differently from `Empty` — the whole point of
+/// tracking the state.
+fn heatmap(series: &[crate::analytics::DailyUsage], busiest: u128) -> Vec<HeatmapRow> {
+    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let mut rows: Vec<HeatmapRow> = WEEKDAYS
+        .iter()
+        .map(|weekday| HeatmapRow {
+            weekday: (*weekday).to_owned(),
+            cells: Vec::new(),
+        })
+        .collect();
+    let Some(first) = series.first() else {
+        return rows;
+    };
+    // Offset the first cell so each column is a real calendar week.
+    let leading = first.day.weekday().num_days_from_monday() as usize;
+    for row in rows.iter_mut().take(leading) {
+        push_cell(row, None, busiest);
+    }
+    for day in series {
+        let weekday = day.day.weekday().num_days_from_monday() as usize;
+        push_cell(&mut rows[weekday], Some(day), busiest);
+    }
+    // Pad every row to a whole number of weeks so the grid is rectangular.
+    let widest = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
+    for row in &mut rows {
+        while row.cells.len() < widest {
+            push_cell(row, None, busiest);
+        }
+    }
+    rows
+}
+
+/// Append one cell. `None` means the day is outside the series at all, which is
+/// still `Unknown` rather than empty.
+fn push_cell(row: &mut HeatmapRow, day: Option<&crate::analytics::DailyUsage>, busiest: u128) {
+    let cell = match day {
+        None => HeatmapCell {
+            date: String::new(),
+            level: HeatCell::Unknown,
+            tooltip: "No data for this day".to_owned(),
+        },
+        Some(day) => {
+            let date = day.day.format("%Y-%m-%d").to_string();
+            match day.state {
+                DayState::Unknown => HeatmapCell {
+                    date,
+                    level: HeatCell::Unknown,
+                    tooltip: "unknown".to_owned(),
+                },
+                _ => HeatmapCell {
+                    date: date.clone(),
+                    level: heat_level(day.total, busiest),
+                    tooltip: format!("{date} · {} tokens", format_number(day.total)),
+                },
+            }
+        }
+    };
+    row.cells.push(cell);
+}
+
+/// Intensity for a known day. Zero is its own level so it never reads as unknown.
+fn heat_level(total: u128, busiest: u128) -> HeatCell {
+    if total == 0 || busiest == 0 {
+        return HeatCell::Empty;
+    }
+    match fraction_permille(total, busiest) {
+        permille if permille >= 750 => HeatCell::Level4,
+        permille if permille >= 500 => HeatCell::Level3,
+        permille if permille >= 250 => HeatCell::Level2,
+        _ => HeatCell::Level1,
     }
 }
 

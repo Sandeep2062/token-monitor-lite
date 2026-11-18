@@ -202,7 +202,7 @@ Reference: [architecture](../../token-monitor/docs/architecture.md), `src/shared
 | [ ] | Context/prompt cache | Provider-owned indexed observations and valid denominators only; disabled features do not launch extra transcript readers. |
 | [ ] | Title/project metadata | Explicit title precedence and in-place metadata updates without advancing token/activity baselines; display hiding independent from sync consent. |
 | [ ] | Projects / Models | Canonical workspace identity, model aliases and breakdowns; opaque workspace keys do not become fabricated path hashes. **Partial:** period-scoped client/model breakdowns are implemented and GUI-accepted; project identity and aliases remain open. |
-| [ ] | History / Trends | Daily/client/model components, charts/heatmap/monthly rollups and retained trends; missing is unknown, not zero. Preserve the reference's roughly 370-day exported daily-history window separately from session archive retention; importing older originals does not authorize pruning them. **Partial:** contiguous 30-day daily totals from live canonical rows plus retained Today are implemented and GUI-accepted; persisted multi-month history, heatmaps and monthly rollups remain open. |
+| U | History / Trends | Daily/client/model components, charts/heatmap/monthly rollups and retained trends; missing is unknown, not zero. Preserve the reference's roughly 370-day exported daily-history window separately from session archive retention; importing older originals does not authorize pruning them. **Partial:** contiguous 30-day daily totals from live canonical rows plus retained Today are implemented and GUI-accepted; persisted multi-month history, heatmaps and monthly rollups remain open. |
 | [ ] | Quota history | Successful fresh observations only, 180-day detail/730-day daily retention, 14-day preview; gaps/reset boundaries and no hover probes. |
 | [ ] | Alerts | Quota/reset/burn-rate behavior, account/provider selection and hidden-account policies; no speculative model inference or extra polling loop. |
 
@@ -230,26 +230,47 @@ Reference: `src/shared/usage/sessionUsageArchiveStore.js`, [archive replay](../.
 
 Reference: [export.md](../../token-monitor/docs/export.md) and `src/shared/export` implementations.
 
-- [ ] `token-monitor-export.json`: numeric snapshot and available history; not a full application backup.
-- [ ] `token-monitor-snapshot.csv`: period/tool/model totals.
-- [ ] `token-monitor-daily.csv`: conditional on available daily history.
-- [ ] `token-monitor-daily-models.csv`: conditional components, including unclassified remainder.
-- [ ] UTF-8 BOM/RFC4180 CSV, ISO dates and USD cost columns; exclude device/account/plan/quota identity.
-- [ ] Folder picker, immediate export and configured auto-export cadence; unchanged output produces no rewrite.
+Spec: [export-spec.md](export-spec.md). Implementation: `src/export/` and
+`tests/export_golden.rs`.
+
+- U `token-monitor-export.json`: numeric snapshot and available history; not a
+  full application backup. Wire keys are the reference spelling (`generatedAt`,
+  `allTime`, `perClient`, `perModel`, `outputTokens`).
+- U `token-monitor-snapshot.csv`: period/tool/model totals, tools before models
+  within each period.
+- U `token-monitor-daily.csv`: written only when there is at least one daily row,
+  and removed again when history empties.
+- U `token-monitor-daily-models.csv`: conditional components, including the
+  unclassified remainder rather than a guessed input split.
+- U UTF-8 BOM and CRLF, RFC 4180 quoting, ISO `YYYY-MM-DD` dates and `cost_usd`
+  columns; no device/account/plan/quota identity in any file.
+- U Folder picker, immediate export and configured auto-export cadence (30 s to
+  60 min, default 60 s); unchanged output produces no rewrite.
+
+Evidence. **VERIFIED**: byte-exact CSV goldens (BOM, CRLF, quoting, column order,
+number formatting); the JSON document shape and wire keys; the component-split
+rules including the malformed-row fallback; no-rewrite skip and stale-orphan
+removal against a real temporary directory; the cadence clamp; and
+unknown-versus-empty day semantics. **ASSUMED**: no native folder picker has been
+driven on any platform, no export has been written into a real synced folder, and
+the golden files were reproduced from `docs/export.md` and
+`token-monitor/src/shared/exporter.js` rather than captured from a running
+upstream build.
 
 ## Native UI and settings
 
 Reference: `src/electron/main.js`, `runtimeConfig.js`, `renderer/`, [configuration.md](../../token-monitor/docs/configuration.md) and native controller directories. Reproduce actions and state retention in Slint, not DOM/CSS code or Electron runtime behavior.
 
-Current subset: the Ledger Rail Home, Sessions, Source Health, Gate 1 Settings/migration report, About, Trends and Models surfaces are **U** (implemented, adapter-tested, compiled, and Linux GUI-accepted for the supported states). Home supports Today/Month/All Time selection; Trends shows a contiguous 30-day series; Models shows period-scoped client/model share; Sessions exposes a bounded canonical session detail with per-model share. Settings currently covers client selection, opaque discovered-source selection, IANA timezone, revisioned Save/Cancel, conflict retention, credential availability/pending state and import-report labelsâ€”not the complete upstream settings surface. Week, Limits, transcript-level detail, projects, alerts and quota history remain unavailable rather than aliased to implemented behavior. Cost remains explicitly unavailable. Startup uses validated discovery plus committed native settings; no fixture values are projected in live startup.
+Current subset: the Ledger Rail Home, Sessions, Source Health, Gate 1 Settings/migration report, About, Trends and Models surfaces are **U** (implemented, adapter-tested, compiled, and Linux GUI-accepted for the supported states). Home supports Today/Month/All Time selection; Trends shows a contiguous ~370-day series with monthly rollups and a heatmap; Models shows period-scoped client/model share; Sessions exposes a bounded canonical session detail with per-model share. Settings currently covers client selection, opaque discovered-source selection, IANA timezone, revisioned Save/Cancel, conflict retention, credential availability/pending state and import-report labelsâ€”not the complete upstream settings surface. Week, Limits, transcript-level detail, projects, alerts and quota history remain unavailable rather than aliased to implemented behavior. Cost remains explicitly unavailable. Startup uses validated discovery plus committed native settings; no fixture values are projected in live startup.
 
 | Done | Surface | Acceptance |
 | --- | --- | --- |
 | [ ] | Main / Home / Dashboard | Functional totals, cards, quotas, sessions, models/projects/trends, detail navigation and refresh. No invented demo data in live mode. |
 | [ ] | Subscriptions | Editable backend-scoped list and account binding; healthy unidentified accounts remain selectable. Shared-list revisions and offline-write restrictions also apply to the UI, not only the HTTP endpoint. |
-| U | Settings | Gate 1 collection controls have validated drafts and working revisioned Save/Cancel with stale-conflict retention. General, Main, Window, Appearance, Limits, Subscriptions, Sync, search and display-backed acceptance remain N/open. |
-| [ ] | Theme / typography | Light/dark/system, colors, units, sizing, reduced motion and background settings; readable focus/contrast, consistent density. |
-| [ ] | Localization / currency | en, zh-TW, zh-CN, ko, ja, pt-BR and system auto; USD/TWD/HKD/CNY, auto/manual conversion distinct from USD accounting. |
+| U | Limits (framework + Claude + Codex) | `src/limits/` implements the status vocabulary, last-good retention, bounded concurrency, deadlines, backoff and reset boundaries, with Home quota bars on a Slint-only surface. **Claude and Codex only**: every other provider's quota lane is unimplemented and yields no bar. Credentials come through `CredentialService` only (no plaintext lane, no file lane) and no token is logged. Every probe is **ASSUMED**: no live endpoint has been contacted and all tests replay recorded fixtures. Provider mapping, retention, scheduling, trigger policy and UI projection are VERIFIED by the suite. |
+| U | Settings | Collection controls, Data export, and now **General / Appearance / Currency / Language** have validated drafts and working revisioned Save/Cancel with stale-conflict retention. `themeMode`, `density`, `reduceMotion`, `currency` and `language` are read, defaulted and written as the reference's own field names; unknown fields (including `themeColors`) survive a save with their key set and values intact. Spec: [settings-spec.md](settings-spec.md). Main, Window, Limits, Subscriptions, Sync and display-backed acceptance remain N/open. |
+| U | Theme / typography | Light/dark/system via `themeMode` (a native field; the reference stores `themeColors`, which is preserved untouched), two densities, and reduced motion resolved against the desktop. Every palette pair is contrast-checked at WCAG AA in `src/theme.rs`; that check found the shipped dark faint text at **4.12:1** and lightened it to 4.66:1. **VERIFIED**: palettes, contrast ratios, density metrics, motion resolution. **ASSUMED**: desktop appearance detection reads environment conventions, not a native API. Custom colours, units and background settings remain open. |
+| U | Localization / currency | en, zh-TW, zh-CN, ko, ja, pt-BR plus system auto, bundled as Slint gettext catalogs generated from the upstream 2,428-key catalogue by `scripts/generate-settings-i18n.py`; USD/TWD/HKD/CNY display currencies with the reference's fixed rates and fraction digits, and accounting provably stays in USD (conversion returns text only). **VERIFIED**: catalogue parity across six locales, the generator, rates and formatting, the USD accounting boundary. **ASSUMED**: only the settings section headings and the appearance/currency/language controls are translated — Home, Trends and Models remain hard-coded English. Auto/manual rate modes remain open. |
 | [ ] | Window lifecycle | Position/scale/always-on-top/visibility/fullscreen policies, close/minimize behavior; retain navigation, draft, selection and scroll on ordinary changes. |
 | [ ] | Tray / menu bar | Icon/stat modes, menu/refresh/shortcut, tray-only popover; no duplicate collectors. |
 | [ ] | Floating bubble | Expand/collapse and retained controls/state; disabled surface stops its work. |

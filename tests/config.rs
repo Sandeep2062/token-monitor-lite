@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use token_monitor_lite::config::{Preferences, inspect_settings};
+use token_monitor_lite::config::{ExportEdits, Preferences, inspect_settings};
 
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
 
@@ -162,7 +162,16 @@ fn close_to_tray_is_absent_by_default_and_roundtrips_when_set() {
     let empty: Preferences = serde_json::from_str("{}").unwrap();
     assert!(!empty.close_to_tray());
 
-    let merged = empty.with_native_edits(&[], "UTC", &[], true).unwrap();
+    let merged = empty
+        .with_native_edits(
+            &[],
+            "UTC",
+            &[],
+            true,
+            &ExportEdits::default(),
+            &token_monitor_lite::settings::SettingsEdits::default(),
+        )
+        .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&merged).unwrap();
     assert_eq!(value["closeToTray"], true);
 
@@ -187,6 +196,8 @@ fn supported_native_edits_preserve_every_unedited_json_value() {
             "America/New_York",
             &["source-opaque-a".to_owned()],
             true,
+            &ExportEdits::default(),
+            &token_monitor_lite::settings::SettingsEdits::default(),
         )
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&merged).unwrap();

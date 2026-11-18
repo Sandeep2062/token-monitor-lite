@@ -1,0 +1,3 @@
+﻿date,model,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,unclassified_tokens,total_tokens,cost_usd
+2026-07-02,gpt-5,2,2,1,0,0,5,1
+2026-07-03,opus,0,2,0,0,10,12,2

@@ -11,8 +11,9 @@ use token_monitor_lite::discovery::{HostPaths, resolve_paths};
 use token_monitor_lite::pricing::{self, PricingCatalog};
 use token_monitor_lite::tray;
 use token_monitor_lite::ui::{
-    ImportReportRow, ModelRow, SessionRow, SettingsClientRow, SettingsSourceRow, SourceHealthRow,
-    SourceSeverity, TrendRow, UiController, UiPresentation,
+    ChoiceRow, HeatCell, HeatmapRow, ImportReportRow, ModelRow, MonthRow, SessionRow,
+    SettingsClientRow, SettingsSourceRow, SourceHealthRow, SourceSeverity, TrendRow, UiController,
+    UiPresentation,
 };
 use token_monitor_lite::update::{self, InstallOutcome, UpdateCheck, UpdatePlatform};
 
@@ -138,6 +139,64 @@ fn run(
         })
     });
 
+    // The limits lane. It is created only when a provider this build can probe
+    // has a credential in the keyring, so an unconfigured install never starts a
+    // thread, never schedules a probe, and never touches the network. Its worker
+    // blocks on a condition variable until a probe is due; it does not poll.
+    let limits_worker: Option<std::rc::Rc<token_monitor_lite::limits::scheduler::LimitsWorker>> =
+        application.as_ref().and_then(|application| {
+            use token_monitor_lite::limits::collector::CredentialTickets;
+            let credentials = Arc::new(application.credentials());
+            let now_ms = limits_now_ms();
+            // One ticket allocator for the whole lane, seeded above the application's
+            // own counter so a probe read can never look stale to a settings write.
+            let tickets = CredentialTickets::new(1_000_000);
+            let mut scheduler = token_monitor_lite::limits::scheduler::Scheduler::new(
+                token_monitor_lite::limits::scheduler::INTERVAL_MS,
+            );
+            let mut enabled = 0_usize;
+            for provider in token_monitor_lite::limits::bridge::PROVIDERS {
+                if token_monitor_lite::limits::bridge::should_probe(
+                    credentials.as_ref(),
+                    provider,
+                    tickets.next(),
+                ) {
+                    scheduler.enable(provider, now_ms);
+                    enabled += 1;
+                }
+            }
+            if enabled == 0 {
+                return None;
+            }
+            let source =
+                token_monitor_lite::limits::bridge::CollectorSource::new(credentials, tickets);
+            let weak = window.as_weak();
+            let controller = controller.clone();
+            Some(
+                token_monitor_lite::limits::scheduler::LimitsWorker::spawn(
+                    scheduler,
+                    Box::new(source),
+                    Box::new(move |snapshot| {
+                        let weak = weak.clone();
+                        let controller = controller.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Ok(mut controller) = controller.lock() {
+                                token_monitor_lite::limits::bridge::apply(
+                                    &mut controller,
+                                    &snapshot,
+                                    limits_now_ms(),
+                                );
+                            }
+                            if let Some(window) = weak.upgrade() {
+                                apply_presentation(&window, presentation(&controller));
+                            }
+                        });
+                    }),
+                )
+                .into(),
+            )
+        });
+
     let delivery_timer = slint::Timer::default();
     let tray_for_timer = tray.clone();
     if let Some(application) = application.clone() {
@@ -148,9 +207,19 @@ fn run(
             Duration::from_millis(100),
             move || {
                 let changed = application.snapshot().is_ok_and(|snapshot| {
-                    controller.lock().is_ok_and(|mut controller| {
-                        controller.accept_application_snapshot(snapshot)
-                    })
+                    let accepted = controller.lock().is_ok_and(|mut controller| {
+                        controller.accept_application_snapshot(snapshot.clone())
+                    });
+                    // Quota rows arrive on the same application snapshot, so they
+                    // are applied in the same pass: no extra timer, no extra wake.
+                    let limits_changed = controller.lock().is_ok_and(|mut controller| {
+                        token_monitor_lite::limits::bridge::apply(
+                            &mut controller,
+                            &snapshot.limits,
+                            limits_now_ms(),
+                        )
+                    });
+                    accepted || limits_changed
                 });
                 if changed && let Some(window) = weak.upgrade() {
                     let presentation = presentation(&controller);
@@ -164,9 +233,145 @@ fn run(
     }
 
     {
+        // The folder picker. `rfd` blocks on the dialog, and Slint's event loop is
+        // the one thread that must not block, so the dialog runs on its own thread
+        // and the result comes back through the event loop.
+        let weak = window.as_weak();
+        let controller = controller.clone();
+        window.on_export_folder_pick(move || {
+            let weak = weak.clone();
+            let controller = controller.clone();
+            std::thread::spawn(move || {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose an export folder")
+                    .pick_folder();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    if let Some(folder) = picked {
+                        if let Ok(mut controller) = controller.lock() {
+                            controller.set_export_folder(&folder.to_string_lossy());
+                            controller.set_export_notice(
+                                "Folder chosen. Press Save to keep it, or Export now.",
+                            );
+                        }
+                    } else {
+                        if let Ok(mut controller) = controller.lock() {
+                            controller.set_export_notice("No folder chosen.");
+                        }
+                    }
+                    apply_presentation(&window, presentation(&controller));
+                });
+            });
+        });
+    }
+    {
+        // Turning auto-export on or off. The value goes through the draft, so the
+        // existing revision CAS decides when it is actually persisted.
+        let weak = window.as_weak();
+        let controller = controller.clone();
+        window.on_export_folder_changed(move |folder| {
+            if let Ok(mut controller) = controller.lock() {
+                controller.set_export_folder(&folder);
+                controller.set_export_notice(if folder.is_empty() {
+                    "Auto-export off. Press Save to keep this."
+                } else {
+                    "Auto-export on. Press Save to keep this."
+                });
+            }
+            if let Some(window) = weak.upgrade() {
+                apply_presentation(&window, presentation(&controller));
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let controller = controller.clone();
+        let application = application.clone();
+        window.on_export_now(move || {
+            let Some(application) = application.as_ref() else {
+                return;
+            };
+            // The committed folder is what an explicit export writes to; an
+            // unsaved draft must not silently become the target.
+            let folder = application.snapshot().ok().and_then(|snapshot| {
+                snapshot
+                    .settings
+                    .export_folder
+                    .clone()
+                    .map(std::path::PathBuf::from)
+            });
+            match folder {
+                Some(folder) => {
+                    if let Ok(mut controller) = controller.lock() {
+                        controller.set_export_notice("Exporting…");
+                    }
+                    if let Err(error) = application.submit(ApplicationCommand::ExportNow { folder })
+                    {
+                        show_submit_error(&weak, &controller, error);
+                    }
+                }
+                None => {
+                    if let Ok(mut controller) = controller.lock() {
+                        controller
+                            .set_export_notice("Choose a folder and press Save before exporting.");
+                    }
+                    if let Some(window) = weak.upgrade() {
+                        apply_presentation(&window, presentation(&controller));
+                    }
+                }
+            }
+        });
+    }
+
+    // The auto-export tick. It runs on the same 60-second cadence as the
+    // application's own delivery pass and asks for an attempt; the application
+    // decides whether one is due and whether the payload changed, so an idle
+    // machine neither probes nor rewrites a synced folder.
+    let export_timer = slint::Timer::default();
+    if let Some(application) = application.clone() {
+        let application = application.clone();
+        export_timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_secs(export_tick_seconds()),
+            move || {
+                let _ = application.submit(ApplicationCommand::AutoExport);
+            },
+        );
+    }
+
+    {
+        // Appearance, currency and language choices. Each writes the draft only;
+        // Save is what persists them, through the existing revision CAS.
+        macro_rules! choice_handler {
+            ($callback:ident, $setter:ident) => {{
+                let weak = window.as_weak();
+                let controller = controller.clone();
+                window.$callback(move |value| {
+                    if let Ok(mut controller) = controller.lock() {
+                        controller.$setter(&value);
+                    }
+                    if let Some(window) = weak.upgrade() {
+                        apply_presentation(&window, presentation(&controller));
+                    }
+                });
+            }};
+        }
+        choice_handler!(on_theme_changed, set_theme);
+        choice_handler!(on_density_changed, set_density);
+        choice_handler!(on_motion_changed, set_motion);
+        choice_handler!(on_currency_changed, set_currency);
+        choice_handler!(on_language_changed, set_language);
+    }
+
+    {
         let application = application.clone();
         let weak_tray = tray.as_ref().map(std::rc::Rc::downgrade);
+        // Held until the window closes: dropping the worker stops its thread.
+        let limits_worker = limits_worker.clone();
         window.window().on_close_requested(move || {
+            let _holds_limits_worker = &limits_worker;
             let hides_to_tray = tray_capable
                 && application.as_ref().is_some_and(|application| {
                     application
@@ -303,11 +508,19 @@ fn run(
         let weak = window.as_weak();
         let controller = controller.clone();
         let application = application.clone();
+        let limits = limits_worker.clone();
         window.on_refresh(move || {
             if let Some(application) = application.as_ref()
                 && let Err(error) = application.submit(ApplicationCommand::Refresh)
             {
                 show_submit_error(&weak, &controller, error);
+            }
+            // A person pressing Refresh is an explicit probe reason. It is not a
+            // reason a hover or a focus can produce.
+            if let Some(limits) = limits.as_ref() {
+                for provider in token_monitor_lite::limits::bridge::PROVIDERS {
+                    limits.request(provider, token_monitor_lite::limits::Trigger::Manual);
+                }
             }
         });
     }
@@ -462,6 +675,23 @@ fn show_submit_error(
     }
 }
 
+/// How often the UI asks the application whether an auto-export is due.
+///
+/// One tick per minute matches the default cadence; the application owns the
+/// actual interval and the does-it-change check, so this is only how often it is
+/// asked. A tick that is not due costs a mutex and a comparison.
+fn export_tick_seconds() -> u64 {
+    token_monitor_lite::export::schedule::DEFAULT_INTERVAL_SECONDS
+}
+
+/// Wall clock for the limits lane.
+fn limits_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn presentation(controller: &Mutex<UiController>) -> UiPresentation {
     controller.lock().map_or_else(
         |_| UiController::new().presentation(),
@@ -469,7 +699,51 @@ fn presentation(controller: &Mutex<UiController>) -> UiPresentation {
     )
 }
 
+/// Push the palette, density and motion into the `Theme` global, and select the
+/// interface language.
+///
+/// The palette lives in `src/theme.rs` so its contrast is testable; this is only
+/// the transfer. Language selection is idempotent — Slint re-reads the catalogue
+/// on each call, and re-selecting the same language is a no-op — so calling it on
+/// every presentation is cheaper than tracking the last value.
+fn apply_appearance(window: &AppWindow, presentation: &UiPresentation) {
+    let dark = presentation.appearance.dark;
+    let palette = token_monitor_lite::theme::Palette::for_dark(dark);
+    let theme = window.global::<Theme>();
+    let colour = |value: token_monitor_lite::theme::Rgb| {
+        slint::Color::from_rgb_u8(value.r, value.g, value.b)
+    };
+    theme.set_background(colour(palette.background));
+    theme.set_surface(colour(palette.surface));
+    theme.set_surface_alt(colour(palette.surface_alt));
+    theme.set_text(colour(palette.text));
+    theme.set_text_muted(colour(palette.text_muted));
+    theme.set_text_faint(colour(palette.text_faint));
+    theme.set_border(colour(palette.border));
+    theme.set_accent(colour(palette.accent));
+    theme.set_warning(colour(palette.warning));
+    theme.set_danger(colour(palette.danger));
+    theme.set_success(colour(palette.success));
+
+    let (row_height, row_gap) = presentation.appearance.density.metrics();
+    // Plain integers: the generated setter takes an `int` and the Slint side adds
+    // the unit. Spacing visibly changes, which is what the setting promises.
+    theme.set_row_height(row_height);
+    theme.set_row_gap(row_gap);
+    theme.set_reduced_motion(presentation.appearance.reduced_motion);
+
+    // English is the source language, so selecting it (or failing to find a
+    // catalogue) leaves the built-in strings in place rather than blanking them.
+    let language = presentation.appearance.language;
+    if language != token_monitor_lite::settings::Language::En {
+        let _ = slint::select_bundled_translation(language.catalogue());
+    } else {
+        let _ = slint::select_bundled_translation("en");
+    }
+}
+
 fn apply_presentation(window: &AppWindow, presentation: UiPresentation) {
+    apply_appearance(window, &presentation);
     window.set_tracked_tokens(presentation.home.tracked_tokens.into());
     window.set_input_tokens(presentation.home.input.into());
     window.set_output_tokens(presentation.home.output.into());
@@ -488,6 +762,9 @@ fn apply_presentation(window: &AppWindow, presentation: UiPresentation) {
     window.set_page_label(presentation.page_label.into());
     window.set_trends_headline(presentation.trends.headline.into());
     window.set_trends(trend_model(presentation.trends.rows));
+    window.set_trend_months(month_model(presentation.trends.months));
+    window.set_trend_heatmap(heatmap_model(presentation.trends.heatmap));
+    window.set_heatmap_note(presentation.trends.heatmap_note.into());
     window.set_models_headline(presentation.models.headline.into());
     window.set_models(model_model(presentation.models.rows));
     let detail = presentation.detail;
@@ -536,9 +813,25 @@ fn apply_presentation(window: &AppWindow, presentation: UiPresentation) {
     window.set_settings_clients(settings_client_model(presentation.settings.clients));
     window.set_settings_sources(settings_source_model(presentation.settings.sources));
     window.set_import_report(import_report_model(presentation.settings.import_rows));
+    let quota = presentation.quota;
+    window.set_quota_headline(quota.headline.into());
+    window.set_quota_rows(quota_model(quota.rows));
+    window.set_quota_notice(quota.notice.unwrap_or_default().into());
     window.set_settings_committed_close_to_tray(presentation.settings.committed_close_to_tray);
     window.set_settings_close_to_tray(presentation.settings.draft_close_to_tray);
     window.set_tray_capable(presentation.settings.tray_capable);
+    window.set_export_folder(presentation.settings.export_folder.into());
+    window.set_export_notice(presentation.settings.export_notice.into());
+    window.set_export_enabled(presentation.settings.export_enabled);
+    window.set_theme_options(choice_model(presentation.settings.theme_options));
+    window.set_density_options(choice_model(presentation.settings.density_options));
+    window.set_motion_options(choice_model(presentation.settings.motion_options));
+    window.set_currency_options(choice_model(presentation.settings.currency_options));
+    window.set_language_options(choice_model(presentation.settings.language_options));
+    window.set_appearance_summary(presentation.settings.appearance_summary.into());
+    window.set_currency_summary(presentation.settings.currency_summary.into());
+    window.set_language_summary(presentation.settings.language_summary.into());
+    window.set_settings_warnings(presentation.settings.settings_warnings.into());
 }
 
 /// Render the badge bitmap Slint hands to the platform tray backend.
@@ -689,6 +982,57 @@ fn trend_model(rows: Vec<TrendRow>) -> ModelRc<TrendRowData> {
     ))
 }
 
+fn choice_model(rows: Vec<ChoiceRow>) -> ModelRc<ChoiceRowData> {
+    ModelRc::new(VecModel::from(
+        rows.into_iter()
+            .map(|row| ChoiceRowData {
+                value: row.value.into(),
+                label: row.label.into(),
+                selected: row.selected,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn month_model(rows: Vec<MonthRow>) -> ModelRc<MonthRowData> {
+    ModelRc::new(VecModel::from(
+        rows.into_iter()
+            .map(|row| MonthRowData {
+                month: row.month.into(),
+                total: row.total.into(),
+                permille: row.permille,
+                partial: row.partial,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn heatmap_model(rows: Vec<HeatmapRow>) -> ModelRc<HeatmapRowData> {
+    ModelRc::new(VecModel::from(
+        rows.into_iter()
+            .map(|row| HeatmapRowData {
+                weekday: row.weekday.into(),
+                cells: ModelRc::new(VecModel::from(
+                    row.cells
+                        .into_iter()
+                        .map(|cell| HeatmapCellData {
+                            level: match cell.level {
+                                HeatCell::Unknown => 0,
+                                HeatCell::Empty => 1,
+                                HeatCell::Level1 => 2,
+                                HeatCell::Level2 => 3,
+                                HeatCell::Level3 => 4,
+                                HeatCell::Level4 => 5,
+                            },
+                            tooltip: cell.tooltip.into(),
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
 fn model_model(rows: Vec<ModelRow>) -> ModelRc<ModelRowData> {
     ModelRc::new(VecModel::from(
         rows.into_iter()
@@ -697,6 +1041,31 @@ fn model_model(rows: Vec<ModelRow>) -> ModelRc<ModelRowData> {
                 total: row.total.into(),
                 cost: row.cost.into(),
                 permille: row.permille,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn quota_model(rows: Vec<token_monitor_lite::ui::QuotaRow>) -> ModelRc<QuotaRowData> {
+    ModelRc::new(VecModel::from(
+        rows.into_iter()
+            .map(|row| QuotaRowData {
+                provider: row.provider.into(),
+                heading: row.heading.into(),
+                windows: ModelRc::new(VecModel::from(
+                    row.windows
+                        .into_iter()
+                        .map(|window| QuotaWindowData {
+                            label: window.label.into(),
+                            used_percent: window.used_percent,
+                            amount: window.amount.into(),
+                            reset: window.reset.into(),
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                status: row.status.into(),
+                stale: row.stale,
+                attention: row.attention,
             })
             .collect::<Vec<_>>(),
     ))

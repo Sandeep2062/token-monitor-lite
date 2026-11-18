@@ -347,6 +347,11 @@ impl Drop for CredentialInner {
     }
 }
 
+/// A handle to the credential worker.
+///
+/// Cloning is cheap and keeps **one** worker thread: the application and the
+/// limits lane both hold a clone, and a probe can never start a second keyring
+/// thread. The worker stops when the last handle is shut down or dropped.
 #[derive(Clone)]
 pub struct CredentialService {
     inner: Arc<CredentialInner>,
@@ -430,6 +435,34 @@ impl CredentialService {
             response,
         })
         .map(drop)
+    }
+
+    /// Run `use_secret` with the stored secret, then zero it.
+    ///
+    /// This is the only way a secret leaves the service. It is not handed out by
+    /// value: the borrow ends inside the call, so a caller cannot hold it, store
+    /// it in a struct, or format it after the fact. A missing entry is reported
+    /// as `None` rather than an error, because "no credential configured" is a
+    /// normal state and not a failure.
+    pub fn authorize<R>(
+        &self,
+        generation: u64,
+        credential_id: &str,
+        use_secret: impl FnOnce(&[u8]) -> R,
+    ) -> Result<Option<R>, CredentialError> {
+        let credential_id = validate_credential_id(credential_id)?.to_owned();
+        let mut secret = match self.submit(|response| Command::Get {
+            generation,
+            credential_id,
+            response,
+        }) {
+            Ok(secret) => secret,
+            Err(CredentialError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let outcome = use_secret(&secret.0);
+        secret.0.iter_mut().for_each(|byte| *byte = 0);
+        Ok(Some(outcome))
     }
 
     pub fn delete(&self, generation: u64, credential_id: &str) -> Result<(), CredentialError> {

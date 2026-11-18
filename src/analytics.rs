@@ -246,16 +246,83 @@ pub enum AnalyticsError {
     Capacity(&'static str),
 }
 
+/// What is known about one calendar day.
+///
+/// The distinction between `Empty` and `Unknown` is the whole point: a day inside
+/// the tracked span that the source had available and reported nothing for really
+/// is zero, while a day before tracking began is unknown. Rendering the second
+/// as the first claims the user used nothing, which is a lie the numbers then
+/// carry into every average built on them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DayState {
+    /// The source had the day and reported usage for it.
+    Observed,
+    /// The source had the day and reported nothing.
+    Empty,
+    /// No evidence either way: outside tracked history.
+    Unknown,
+}
+
+impl DayState {
+    /// Whether this day may contribute to a sum or an average.
+    pub fn is_known(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DailyUsage {
     pub day: NaiveDate,
     pub tokens: TokenCounts,
     pub total: u128,
+    pub state: DayState,
 }
 
-/// Returns one entry per local calendar day, oldest first, including explicit
-/// zero days. Retained Today totals apply only to the current day; retained
-/// Month/All Time aggregates cannot be assigned to individual days.
+/// A month of history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonthlyUsage {
+    /// `YYYY-MM`.
+    pub month: String,
+    pub tokens: TokenCounts,
+    pub total: u128,
+    /// Days in this month that are `Unknown`, so a bar can be marked partial.
+    pub unknown_days: usize,
+    pub observed_days: usize,
+    /// The union of the month's observed days, or `None` when the whole month is
+    /// unknown.
+    pub state: Option<DayState>,
+}
+
+impl MonthlyUsage {
+    /// Whether every day of the month is accounted for.
+    pub fn is_complete(&self) -> bool {
+        self.unknown_days == 0
+    }
+
+    pub fn month(&self) -> &str {
+        &self.month
+    }
+}
+
+/// The earliest day this installation can speak about.
+///
+/// Derived from what was actually captured, not from a fixed window: before the
+/// first captured day there is no evidence, so those days are `Unknown` rather
+/// than zero.
+fn tracked_start(snapshot: &CanonicalSnapshot) -> Option<NaiveDate> {
+    let from_session_days = snapshot.session_days.iter().map(|row| row.day).min();
+    let from_day_models = snapshot.day_models.iter().map(|row| row.day).min();
+    match (from_session_days, from_day_models) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+/// Returns one entry per local calendar day, oldest first.
+///
+/// Retained Today totals apply only to the current day; retained Month/All Time
+/// aggregates cannot be assigned to individual days. Days outside the tracked
+/// span are `Unknown`, never zero.
 pub fn daily_series(
     snapshot: &CanonicalSnapshot,
     days: usize,
@@ -272,6 +339,7 @@ pub fn daily_series(
     let start = today
         .checked_sub_days(Days::new(offset.unsigned_abs()))
         .ok_or(AnalyticsError::InvalidTimestamp)?;
+    let tracked = tracked_start(snapshot);
 
     let mut native: BTreeMap<NaiveDate, TokenCounts> = BTreeMap::new();
     for row in snapshot.session_days.iter() {
@@ -290,21 +358,73 @@ pub fn daily_series(
             .checked_add_days(Days::new(shift))
             .ok_or(AnalyticsError::InvalidTimestamp)?;
         if day == today {
+            // Today is always observed: the monitor is running.
             series.push(DailyUsage {
                 day,
                 tokens: period_today.tokens,
                 total: period_today.total,
+                state: DayState::Observed,
             });
-        } else {
-            let tokens = native.remove(&day).unwrap_or_default();
-            series.push(DailyUsage {
-                day,
-                tokens,
-                total: token_total(tokens),
-            });
+            continue;
         }
+        // A day before tracking began is unknown. A day inside the span that has
+        // no row is a real zero: the source was being read and reported nothing.
+        let state = match tracked {
+            Some(tracked_start) if day < tracked_start => DayState::Unknown,
+            Some(_) => DayState::Empty,
+            None => DayState::Unknown,
+        };
+        let tokens = native.remove(&day).unwrap_or_default();
+        let total = token_total(tokens);
+        // A known day is `Observed` when it carried usage and `Empty` otherwise.
+        let state = if !state.is_known() {
+            DayState::Unknown
+        } else if total > 0 || tokens.reasoning > 0 {
+            DayState::Observed
+        } else {
+            DayState::Empty
+        };
+        series.push(DailyUsage {
+            day,
+            tokens,
+            total,
+            state,
+        });
     }
     Ok(series)
+}
+
+/// Monthly rollups over the same span, oldest first.
+///
+/// A month sums its observed days. A month containing an unknown day is reported
+/// with `unknown_days > 0` so a renderer can mark it partial instead of drawing a
+/// complete-looking bar over missing data.
+pub fn monthly_rollups(series: &[DailyUsage]) -> Vec<MonthlyUsage> {
+    let mut months: BTreeMap<String, MonthlyUsage> = BTreeMap::new();
+    for day in series {
+        let key = day.day.format("%Y-%m").to_string();
+        let entry = months.entry(key.clone()).or_insert_with(|| MonthlyUsage {
+            month: key,
+            tokens: TokenCounts::default(),
+            total: 0,
+            unknown_days: 0,
+            observed_days: 0,
+            state: None,
+        });
+        if day.state == DayState::Unknown {
+            entry.unknown_days += 1;
+            continue;
+        }
+        entry.observed_days += 1;
+        // `Observed` wins over `Empty`: a month with any usage is observed.
+        entry.state = Some(match (entry.state, day.state) {
+            (Some(DayState::Observed), _) | (_, DayState::Observed) => DayState::Observed,
+            _ => DayState::Empty,
+        });
+        entry.tokens = add_tokens(entry.tokens, day.tokens).unwrap_or(entry.tokens);
+        entry.total = entry.total.saturating_add(day.total);
+    }
+    months.into_values().collect()
 }
 
 /// Computes the three native periods at `now_ms`.
@@ -408,7 +528,11 @@ fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, A
         .map_err(|_| AnalyticsError::Overflow)
 }
 
-fn token_total(tokens: TokenCounts) -> u128 {
+/// The displayed total of a component set.
+///
+/// Public because the exporter needs the same total the UI shows; a second
+/// implementation there could disagree with this one.
+pub fn token_total(tokens: TokenCounts) -> u128 {
     u128::from(tokens.input)
         + u128::from(tokens.output)
         + u128::from(tokens.cache_read)

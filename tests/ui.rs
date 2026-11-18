@@ -127,6 +127,9 @@ fn application_snapshot(
             timezone: timezone.to_owned(),
             selected_source_ids: vec![SourceId::from_bytes([1; 16]).as_storage_key()],
             close_to_tray: false,
+            export_folder: None,
+            export_interval_seconds: 60,
+            appearance: token_monitor_lite::settings::SettingsValues::default(),
             sources: vec![
                 SourceChoice {
                     id: SourceId::from_bytes([1; 16]).as_storage_key(),
@@ -151,6 +154,7 @@ fn application_snapshot(
             pending: false,
         },
         notice,
+        limits: token_monitor_lite::limits::scheduler::LimitsSnapshot::default(),
     })
 }
 
@@ -238,6 +242,9 @@ fn settings_conflict_retains_user_input_with_a_short_redacted_notice() {
         timezone: "America/Los_Angeles".to_owned(),
         selected_source_ids: vec![SourceId::from_bytes([1; 16]).as_storage_key()],
         close_to_tray: false,
+        export_folder: None,
+        export_interval_seconds: 60,
+        appearance: token_monitor_lite::settings::SettingsValues::default(),
     };
     assert!(controller.accept_application_snapshot(application_snapshot(
         2,
@@ -477,14 +484,102 @@ fn trends_are_contiguous_and_scale_to_the_busiest_day() {
 
     let trends = controller.presentation().trends;
     assert_eq!(trends.rows.len(), token_monitor_lite::ui::TREND_DAYS);
-    assert!(trends.headline.contains("last 30 days"));
-    assert_eq!(trends.rows[28].label, "2026-11-12");
-    assert_eq!(trends.rows[28].total, "20");
-    assert_eq!(trends.rows[28].permille, 1_000);
-    assert_eq!(trends.rows[29].label, "2026-11-13");
-    assert_eq!(trends.rows[29].total, "10");
-    assert_eq!(trends.rows[29].permille, 500);
-    assert_eq!(trends.rows[0].total, "0");
+    // The window is ~370 days, matching the reference's exported history.
+    assert!(
+        trends.headline.contains("last 370 days"),
+        "headline pins the wrong span: {}",
+        trends.headline
+    );
+    let last = trends.rows.len() - 1;
+    let yesterday = last - 1;
+    assert_eq!(trends.rows[yesterday].label, "2026-11-12");
+    assert_eq!(trends.rows[yesterday].total, "20");
+    assert_eq!(trends.rows[yesterday].permille, 1_000);
+    assert_eq!(trends.rows[last].label, "2026-11-13");
+    assert_eq!(trends.rows[last].total, "10");
+    assert_eq!(trends.rows[last].permille, 500);
+    // A day before tracking began is unknown, NOT zero: drawing it as 0 would
+    // claim the user used nothing.
+    assert_eq!(trends.rows[0].total, "unknown");
+    assert_eq!(trends.rows[0].permille, 0);
+    assert!(trends.unknown_days > 0, "the leading days must be unknown");
+    assert_eq!(trends.known_days + trends.unknown_days, trends.rows.len());
+}
+
+#[test]
+fn trends_carry_monthly_rollups_and_a_heatmap() {
+    let day = |value: &str| {
+        chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .expect("test date")
+            .and_hms_opt(12, 0, 0)
+            .expect("test time")
+            .and_utc()
+            .timestamp_millis()
+    };
+    let mut controller = UiController::new();
+    controller.set_clock_ms(day("2026-11-13"));
+    controller.accept_snapshot(snapshot(
+        1,
+        TokenCounts::default(),
+        vec![
+            session(
+                "codex",
+                "today",
+                "gpt-5",
+                day("2026-11-13"),
+                TokenCounts {
+                    input: 10,
+                    ..TokenCounts::default()
+                },
+            ),
+            session(
+                "claude",
+                "yesterday",
+                "sonnet",
+                day("2026-11-12"),
+                TokenCounts {
+                    input: 20,
+                    ..TokenCounts::default()
+                },
+            ),
+        ],
+        Vec::new(),
+        WatchStatus::Available,
+    ));
+
+    let trends = controller.presentation().trends;
+    // A month containing any unknown day is marked partial, never drawn complete.
+    assert!(!trends.months.is_empty(), "no monthly rollups");
+    let november = trends
+        .months
+        .iter()
+        .find(|month| month.month == "2026-11")
+        .expect("November");
+    assert!(
+        november.partial,
+        "November has unknown days but is not partial"
+    );
+    // The heatmap is seven weekday rows of equal width.
+    assert_eq!(trends.heatmap.len(), 7);
+    let widths = trends
+        .heatmap
+        .iter()
+        .map(|row| row.cells.len())
+        .collect::<Vec<_>>();
+    assert!(
+        widths.windows(2).all(|pair| pair[0] == pair[1]),
+        "the heatmap is not rectangular: {widths:?}"
+    );
+    // An unknown cell is a distinct level from an empty one.
+    assert!(
+        trends
+            .heatmap
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .any(|cell| cell.level == token_monitor_lite::ui::HeatCell::Unknown),
+        "no unknown cells were produced"
+    );
+    assert!(!trends.heatmap_note.is_empty());
 }
 
 #[test]

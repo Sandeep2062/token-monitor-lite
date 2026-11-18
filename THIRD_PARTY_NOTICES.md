@@ -87,7 +87,7 @@ The table below is generated from `cargo metadata` for the locked dependency
 graph and records each crate's declared SPDX license expression. Full license
 texts are available from the corresponding crate sources.
 
-Locked graph: **599 registry crates**, 33 distinct license expressions, all with a declared license.
+Locked graph: **600 registry crates**, 33 distinct license expressions, all with a declared license.
 
 | Crate | Version | Declared license |
 | --- | --- | --- |
@@ -461,6 +461,7 @@ Locked graph: **599 registry crates**, 33 distinct license expressions, all with
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
 | resvg | 0.48.1 | Apache-2.0 OR MIT |
+| rfd | 0.15.4 | MIT |
 | rgb | 0.8.53 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rowan | 0.17.0 | MIT OR Apache-2.0 |
@@ -1059,6 +1060,7 @@ Locked graph: **599 registry crates**, 33 distinct license expressions, all with
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
 | resvg | 0.48.1 | Apache-2.0 OR MIT |
+| rfd | 0.15.4 | MIT |
 | rgb | 0.8.53 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rowan | 0.17.0 | MIT OR Apache-2.0 |

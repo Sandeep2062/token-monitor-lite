@@ -1,0 +1,5 @@
+﻿period,dimension,name,tokens,cost_usd
+today,tool,codex,20,2
+today,model,gpt-5,20,2
+month,tool,codex,0,0
+allTime,tool,codex,100,9
