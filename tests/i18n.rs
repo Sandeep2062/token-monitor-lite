@@ -197,12 +197,27 @@ fn no_message_is_an_untranslated_placeholder() {
 fn the_generator_is_committed_so_the_bundle_is_reproducible() {
     // The `.po` files are generated, so without the generator they would be
     // unmaintainable artifacts.
-    let generator = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/generate-settings-i18n.py");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let generator = root.join("scripts/generate-settings-i18n.py");
     assert!(generator.is_file(), "the i18n generator is missing");
-    let upstream =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("token-monitor/src/electron/renderer/i18n.js");
-    assert!(
-        upstream.is_file(),
-        "the upstream catalogue the generator reads is missing"
-    );
+}
+
+#[test]
+fn the_bundle_does_not_depend_on_the_uncommitted_reference_tree() {
+    // `token-monitor/` is gitignored reference material: it exists on a
+    // developer's machine and never in a CI checkout. Anything the build needs
+    // must be committed, so the generated catalogs are what the build reads — the
+    // generator only needs the reference when it is *run* to regenerate them.
+    //
+    // This test exists because the assertion it replaces checked for the
+    // reference tree and therefore failed on every clean CI run.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for locale in LOCALES {
+        let path = catalogue_path(locale);
+        assert!(
+            path.is_file(),
+            "{} must be committed: the build reads it, and the reference tree is not in CI",
+            path.display()
+        );
+    }
 }
