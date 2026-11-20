@@ -12,3 +12,20 @@
 *.cjs text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+
+# Fixtures are byte-exact inputs, not prose. Git must never rewrite them.
+#
+# Two failures this prevents on a Windows checkout with core.autocrlf=true:
+#
+# 1. `codex-parser18-prefix.jsonl` is compared against the decoded bytes of
+#    `codex-parser18-full.jsonl.zst`, which are LF. Rewriting the plain fixture
+#    to CRLF made the two disagree by exactly one byte per line (2015 vs 2004),
+#    failing `pinned_compressed_rollout_matches_record_and_compaction_rows`.
+# 2. The export goldens deliberately use RFC 4180 CRLF, so they must keep it;
+#    but they are compared as exact bytes against generated output. Normalizing
+#    either side breaks the comparison.
+#
+# `-text` disables all conversion and is reset below for the CRLF-by-design file,
+# which declares itself binary to git while remaining CRLF on disk.
+tests/fixtures/** -text
+tests/fixtures/pinned/*.zst binary
