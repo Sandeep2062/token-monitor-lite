@@ -2,8 +2,14 @@ name: macos-acceptance
 
 on:
   workflow_dispatch:
+  # Runs only when a release tag is pushed, never on an ordinary commit.
+  #
+  # These jobs build and ad-hoc sign a bundle — minutes of runner time for every
+  # push, on a project where pushes are frequent and releases are not. Tagging is
+  # the deliberate act that asks for that cost. `workflow_dispatch` stays so a
+  # branch can still be checked on demand.
   push:
-    branches: [main, native-rust-foundation]
+    tags: ["v*"]
 
 permissions:
   contents: read
