@@ -82,3 +82,17 @@ pub fn catalog() -> &'static Catalog {
     static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
     CATALOG.get_or_init(|| load().expect("the bundled catalog must decode"))
 }
+
+/// Every client id the catalog tracks.
+///
+/// The headless agent needs this because discovery treats an *empty* enabled set
+/// as "collect nothing" — the desktop fills it from saved settings, but a CLI run
+/// with no configured selection has to ask the catalog instead of inventing a
+/// list. Deriving it here keeps the catalog the single source of truth.
+pub fn client_ids() -> Vec<&'static str> {
+    catalog()
+        .clients
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect()
+}

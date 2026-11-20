@@ -943,7 +943,12 @@ pub struct PersistedRuntimeSnapshot {
 }
 
 impl PersistedRuntimeSnapshot {
-    fn empty() -> Self {
+    /// A snapshot representing a store that has never been written.
+    ///
+    /// Public because a dry run needs to answer "what would a fresh machine see?"
+    /// through the real persistence trait, and a first-run desktop start sees
+    /// exactly this.
+    pub fn empty() -> Self {
         Self {
             initialized: false,
             generation: 0,
