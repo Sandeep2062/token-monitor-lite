@@ -19,6 +19,12 @@ name = "token-monitor-lite"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+# The headless agent. Not gated on `desktop`, so it builds and runs on a server
+# with no window system at all. See docs/migration/headless-spec.md.
+[[bin]]
+name = "token-monitor-lite-agent"
+path = "src/bin/agent.rs"
+
 [dependencies]
 anyhow = "=1.0.104"
 chrono = { version = "=0.4.45", default-features = false, features = ["std", "clock"] }

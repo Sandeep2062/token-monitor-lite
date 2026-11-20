@@ -1,6 +1,7 @@
 //! Native core. No GUI initialization, source mutations or credential probes.
 
 pub mod accounting;
+pub mod agent;
 pub mod aggregation;
 pub mod analytics;
 pub mod application;
