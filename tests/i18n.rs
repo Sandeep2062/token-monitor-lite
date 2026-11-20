@@ -211,7 +211,6 @@ fn the_bundle_does_not_depend_on_the_uncommitted_reference_tree() {
     //
     // This test exists because the assertion it replaces checked for the
     // reference tree and therefore failed on every clean CI run.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for locale in LOCALES {
         let path = catalogue_path(locale);
         assert!(
