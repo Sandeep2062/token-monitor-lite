@@ -297,12 +297,24 @@ Reference: [serviceStatus.js](../../token-monitor/src/electron/serviceStatus.js)
 
 ## Headless, Hub and synchronization
 
+**Scope decision (confirmed by the owner):** Hub/HTTP sync, iCloud, and plugin
+replacement were **dropped from this migration**, together with the service
+status page and Discord RPC. Hub alone accounted for 14 protocol boundaries plus
+a second device and live network to verify, and iCloud needs macOS with a real
+Apple ID to verify at all. Only the headless agent and native notifications were
+kept. The rows below remain as a record of the reference surface; they are not
+work this migration intends to do.
+
+What that changes: upstream's agent exists to post usage to a hub, so this agent
+is local-only and its continuous mode is refused rather than simulated.
+
+
 Reference: [API.md](../../token-monitor/docs/API.md), [headless-agent.md](../../token-monitor/docs/headless-agent.md), `.env.example`, `src/agent/`, `src/hub/server.js`, `src/shared/sync*` and `src/electron/icloudSync*`.
 
 | Done | Boundary | Required compatibility |
 | --- | --- | --- |
-| [ ] | Rust headless agent | Continuous/once/dry-run, CLI aliases/env precedence, working signals and source health; same collection/accounting core as desktop. |
-| [ ] | Dry-run | No archive/PID/cleanup-state writes or Hub/title requests. It does not promise all ordinary collector/provider network reads are suppressed. |
+| U | Rust headless agent | `token-monitor-lite-agent`, a separate binary not gated on `desktop`, sharing `discover()` and `Monitor` with the window. `--once` and `--dry-run` with CLI → env → default precedence. **Local only**: Hub sync was dropped, so there is no upload, no device identity and no title sync, and continuous mode is refused rather than faked. `--dry-run` runs the real pipeline against a discarding `RuntimePersistence` that accumulates per-source ledgers exactly as a store does: measured **0 files written** and the **same** total as a real run (80,107,916 tokens over 13 codex sources). An earlier version returned only the latest commit and under-reported by two thirds (25.8M vs 80.1M), which a dry run must never do. **VERIFIED**: precedence, empty-vs-unset clients, hub-variable refusal (exit 2), zero-write dry run, per-client rollup summary. **ASSUMED**: server-side source visibility under a different `$HOME`/container. **Known limit**: the timeout cannot interrupt a running pass, because `Monitor`'s drop joins the worker; a real all-source run took over 300 s. Spec: [headless-spec.md](headless-spec.md). |
+| U | Dry-run | No writes at all: measured 0 files against an empty store directory, because the store is never opened. No Hub or title requests exist to suppress — that feature was dropped. Source reads still happen, which is the point. **VERIFIED** by filesystem observation. |
 | [ ] | Service ownership | Live agent makes desktop yield matching archive/upload ownership; verify process identity and avoid concurrent writers. |
 | [ ] | Local/client/host/iCloud modes | Generation-fenced switching, last-good recovery and shared collectors; no agent iCloud sink invented. |
 | [ ] | HTTP auth/admission | Secret/Bearer compatibility, limits/body validation, no-secret Hub loopback-only policy and bounded shutdown. |
