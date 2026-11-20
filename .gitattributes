@@ -13,6 +13,13 @@
 *.json text eol=lf
 *.md text eol=lf
 
+# Workflows are consumed by GitHub, never compiled, so the ending is cosmetic —
+# but pinning it stops an edit on one platform from rewriting the whole file and
+# burying the real change. The two acceptance workflows had been committed as
+# CRLF while `release.yml` was LF.
+*.yml text eol=lf
+*.yaml text eol=lf
+
 # Fixtures are byte-exact inputs, not prose. Git must never rewrite them.
 #
 # Two failures this prevents on a Windows checkout with core.autocrlf=true:
