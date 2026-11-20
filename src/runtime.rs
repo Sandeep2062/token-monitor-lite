@@ -945,7 +945,16 @@ fn worker_loop<F>(
             signals.signal();
             continue;
         }
+        // Publish when something changed, *or* on the first completed pass.
+        //
+        // The first-pass publication is what makes a one-shot consumer (the
+        // headless agent) terminate: on a machine whose files have not changed,
+        // nothing commits and no health flag moves, so a change-only rule would
+        // never emit a snapshot and the caller would wait forever for an answer
+        // that was already sitting in the worker.
+        let first_pass = state.metrics.reconciliations == 1;
         if (outcome.committed
+            || first_pass
             || (settings_changed || outcome.health_changed) && !outcome.storage_delayed)
             && !state.publish_snapshot()
         {
