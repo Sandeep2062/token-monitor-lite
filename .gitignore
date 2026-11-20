@@ -593,5 +593,7 @@ promptfoo-*.json
 *.sqlite3-shm
 
 # Local agent-tooling state (per-machine preferences, not project config).
+# `.perch/cargo-env.ps1` is tracked on purpose, so ignore only the local files.
 /.commandcode/
-/.perch/
+/.perch/mcp.json
+/.perch/PERCH.md
