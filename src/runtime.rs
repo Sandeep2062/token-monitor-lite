@@ -403,8 +403,29 @@ fn event_matches_sources(event: &Event, signals: &Signals) -> bool {
         settings
             .sources
             .iter()
-            .any(|source| event_path == &source.path)
+            .any(|source| same_path(event_path, &source.path))
     })
+}
+
+/// Whether two paths name the same file, tolerating symlinked directories.
+///
+/// macOS reports FSEvents paths with symlinks resolved: a file under
+/// `/var/folders/...` arrives as `/private/var/folders/...`, because `/var` is a
+/// symlink. `std::env::temp_dir()` and user home directories are commonly reached
+/// through such a link, so plain `Path` equality silently stopped matching and no
+/// refresh was ever triggered — the monitor never noticed a changed source.
+///
+/// Comparing canonical forms fixes that. Both sides fall back to the original path
+/// when canonicalisation fails (a deleted file, or a permission error), so this can
+/// only ever widen a match, never lose one.
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 struct WatchControl {
@@ -999,4 +1020,74 @@ fn wait_for_debounced_signal(receiver: &Receiver<()>, signals: &Signals) -> bool
     }
     while receiver.try_recv().is_ok() {}
     !signals.shutdown.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_path;
+    use std::path::Path;
+
+    #[test]
+    fn identical_paths_match() {
+        assert!(same_path(
+            Path::new("/tmp/source.jsonl"),
+            Path::new("/tmp/source.jsonl")
+        ));
+    }
+
+    #[test]
+    fn different_paths_do_not_match() {
+        assert!(!same_path(
+            Path::new("/tmp/a.jsonl"),
+            Path::new("/tmp/b.jsonl")
+        ));
+    }
+
+    #[test]
+    fn a_symlinked_directory_still_matches() {
+        // Reproduces the macOS failure: FSEvents reports `/private/var/...` while
+        // `temp_dir()` yields `/var/...`, because `/var` is a symlink. Exact path
+        // equality therefore never matched and no refresh was ever triggered.
+        //
+        // Built with a temporary symlink so this runs on every platform, rather
+        // than only being observable on macOS.
+        let root = std::env::temp_dir().join(format!(
+            "token-monitor-same-path-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real/source.jsonl"), b"{}\n").unwrap();
+
+        #[cfg(unix)]
+        {
+            let link = root.join("link");
+            if std::os::unix::fs::symlink(root.join("real"), &link).is_err() {
+                // No symlink support on this filesystem: nothing to prove here.
+                let _ = std::fs::remove_dir_all(&root);
+                return;
+            }
+            let direct = root.join("real/source.jsonl");
+            let through_link = link.join("source.jsonl");
+            assert!(same_path(&direct, &through_link));
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        #[cfg(not(unix))]
+        {
+            // Windows needs no symlink to prove the equality path still works.
+            let direct = root.join("real/source.jsonl");
+            assert!(same_path(&direct, &direct.clone()));
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn a_missing_path_does_not_panic() {
+        assert!(!same_path(
+            Path::new("/definitely/not/here/a.jsonl"),
+            Path::new("/definitely/not/here/b.jsonl")
+        ));
+    }
 }

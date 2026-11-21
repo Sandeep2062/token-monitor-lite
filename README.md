@@ -97,7 +97,19 @@ The VS Code `globalStorage` lanes did **not** turn out to need it. Each task log
 
 ## Remote verification
 
-All compilation and tests are intentionally offloaded to `pixvault-vm`:
+All compilation and tests are intentionally offloaded to `pixvault-vm`, a Linux
+build host. Local Windows builds peg every core and fill the disk: the `target/`
+directory reached 29 GB on the development machine.
+
+The host order is `pixvault-vm` first, then `wyse`, then `anuj`. The Azure VM is
+started and deallocated with the scripts in `D:\Github\azure-cleanup`;
+deallocating drops compute billing to zero, so do it when nothing is running.
+
+Source reaches the VM through Mutagen (`D:\Github` → `pixvault-vm:~/Github`,
+session `github-pixvault`). Its ignore policy is `D:\Github\mutagen-sync.yml`,
+installed as `~/.mutagen.yml`; it keeps the sync at 6,210 files / 145 MB instead
+of 32,024 files / 1.8 GB. Global ignores lock in at session creation, so recreating
+the session is required after editing that file.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\remote-core-test.ps1 -Mode desktop-verify
