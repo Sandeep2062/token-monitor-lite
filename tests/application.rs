@@ -642,7 +642,14 @@ fn wait_for(
     application: &ApplicationService,
     ready: impl Fn(&token_monitor_lite::application::ApplicationSnapshot) -> bool,
 ) -> std::sync::Arc<token_monitor_lite::application::ApplicationSnapshot> {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // Generous on purpose. These tests wait on a real worker that opens SQLite
+    // databases and commits through a single writer, so the deadline measures
+    // machine speed as much as correctness. It was 3 seconds, which passed on
+    // Windows and Linux but failed on a macOS CI runner at
+    // `failed_runtime_storage_keeps_the_last_committed_application_monitor`
+    // after 7.56 seconds of test time. The condition being waited for still has
+    // to become true; only the patience changed.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let snapshot = application.snapshot().unwrap();
         if ready(&snapshot) {
