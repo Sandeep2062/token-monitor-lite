@@ -1,0 +1,31 @@
+root = true
+
+# Every text file in this repository is UTF-8 with LF endings.
+#
+# `charset = utf-8` is the important line. Without it an editor is free to save a
+# file in the Windows ANSI codepage, and the result is unreadable to git and
+# unparseable to PowerShell 5.1: a BOM-less .ps1 containing a multi-byte character
+# is decoded as cp1252, which turns one character into mojibake before the shell
+# even tries to run it. `tests/encoding.rs` enforces the outcome; this prevents it.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown keeps trailing spaces, which are a hard line break.
+[*.md]
+trim_trailing_whitespace = false
+
+# PowerShell scripts are ASCII or BOM-prefixed so PowerShell 5.1 can parse them.
+# `tests/encoding.rs` fails the build otherwise. Line endings stay LF, matching
+# `.gitattributes`; PowerShell 5.1 parses LF fine, so the ending is not the issue.
+[*.{ps1,psm1,psd1}]
+end_of_line = lf
+
+# Byte-exact fixtures: no conversion of any kind, ever.
+[tests/fixtures/**]
+charset = utf-8
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = false

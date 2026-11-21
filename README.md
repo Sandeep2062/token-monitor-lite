@@ -117,6 +117,34 @@ Use the pinned toolchain, not `+stable`: the unpinned `stable` on the developmen
 
 The first command runs formatting, all-feature check/test/strict Clippy, and a release desktop build. The second preserves the `--no-default-features` headless boundary. Both use isolated, content-hashed source snapshots, at most two Cargo jobs, and a shared bounded target under the remote `evidence/` root.
 
+### Text encoding
+
+Every text file is UTF-8. On Windows that is worth stating, because the default is
+not: PowerShell 5.1 decodes a `.ps1` file **without a BOM** as the ANSI codepage.
+A script containing a multi-byte character is then unparseable, and text written
+from that script reaches git as mojibake — one em dash becomes four bytes. Both
+happened here; twelve corrupted sequences reached `docs/migration/inventory.md`
+and one reached a commit message before anyone noticed, because a terminal
+re-encodes what it prints and can hide the damage.
+
+Three layers prevent it, cheapest first:
+
+1. **Use PowerShell 7** (`pwsh`), which defaults to UTF-8 and is installed on this
+   host as 7.7.0. Verified: `pwsh` reads a BOM-less UTF-8 `.ps1` containing an em
+   dash correctly (`E2 80 94`), while `powershell.exe` 5.1 fails to parse the same
+   file with `Unexpected token`. If you stay on 5.1, save any script containing
+   non-ASCII **with a BOM**.
+2. **`.editorconfig`** sets `charset = utf-8` for the repository, so editors do not
+   silently fall back to the ANSI codepage.
+3. **`tests/encoding.rs`** fails the build for either failure mode: any tracked
+   text file containing a mojibake sequence, or a PowerShell script with non-ASCII
+   text and no BOM. It runs in both feature configurations because it is an
+   ordinary integration test, so `cargo test` catches it.
+
+When inspecting text for damage, read bytes rather than terminal output:
+`git cat-file commit HEAD` and check for `c3 a2 e2 82 ac`. A terminal may display
+the mojibake as a plausible-looking dash, which is how it survived twelve commits.
+
 Gate 2A retained snapshots are `core-j4ubtphg` (headless/no default features) and `core-fg6breu7` (desktop/all features). Both complete matrices passed the catalog differential, rustfmt, locked all-target checks, all **220 ordinary tests** with two intentional credential probes ignored, strict Clippy, and optimized release builds. The mixed-format acceptance test in each matrix discovers 100 sources, ingests 1,000 canonical sessions and 2,784 canonical observations, reopens without source files, restores them without duplicates, and recovers a corrupted database from its verified backup. With Gate 3 and the updater, Linux passes **268 ordinary tests** with two intentional credential probes ignored (headless `core-um9bzab7`, desktop `core-e5zy76pt`), Linux GUI acceptance `core-gd7_v77h` passed all 17 checks, and the Windows GNU cross-build passes **236 ordinary tests**, two real Credential Manager lifecycle tests, the acceptance fixture, and a real GitHub update check on a real Windows host.
 
 Linux GUI acceptance is retained in `core-cdrti43e/linux-resource-setup` and the resource matrix in `core-cdrti43e/linux-resource-report.json`. Against the 100-source/1,000-session fixture it measured cold-startup p95 **727 ms**, warm-startup p95 **630 ms**, idle RSS max **45,512 KiB**, idle CPU **0.1%**, visible append/rewrite/burst/removal/recovery latency **503–716 ms**, shutdown **95 ms**, 54 file descriptors, 11 threads, 3 inotify watches, and zero child processes or network listeners. All approved resource thresholds passed.

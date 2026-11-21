@@ -317,6 +317,37 @@ host with the pinned GNU toolchain. `--no-default-features` does not build
 `src/main.rs`, so the desktop binary's behaviour is unchanged by this gate and
 still rests on the earlier desktop runs.
 
+### Text encoding guard
+
+Two silent failures motivated `tests/encoding.rs`, both observed on this host
+rather than supposed:
+
+- **PowerShell 5.1 cannot parse a BOM-less `.ps1` containing text.** It decodes
+  the file as the ANSI codepage. Verified directly: the same UTF-8 file gives
+  `Unexpected token` under `powershell.exe` 5.1 and reads correctly under
+  `pwsh` 7.7.0 (`E2 80 94` for an em dash).
+- **Text written through that path reached the repository as mojibake.** One em
+  dash became four bytes. Twelve such sequences were found in this file and one
+  in a commit message, and both survived multiple commits because a terminal
+  re-encodes what it prints and can render the damage as a plausible dash.
+
+| Check | What fails the build | Result |
+| --- | --- | --- |
+| mojibake sweep | any tracked text file containing a cp1252-misread UTF-8 sequence | **VERIFIED**, 3 tests pass |
+| PowerShell source | a `.ps1`/`.psm1`/`.psd1` with non-ASCII and no BOM | **VERIFIED** |
+| guard self-test | the detector must flag a damaged literal and clear a healthy one | **VERIFIED** |
+
+The guard's negative case was proven by injecting the exact damage into
+`headless-spec.md`, confirming the test fails and names the file, then restoring
+it byte-exactly and confirming the suite goes green again. It runs under both
+feature configurations because it is an ordinary integration test.
+
+**VERIFIED** on Windows 11, GNU 1.99.1: 0 tracked PowerShell scripts currently
+have non-ASCII without a BOM, and the repo-wide sweep reports 0 mojibake.
+
+**UNVERIFIED**: that an editor or shell outside this host respects the new
+`.editorconfig`; that is a tooling convention, not something a test can prove.
+
 ## Service status
 
 Reference: [serviceStatus.js](../../token-monitor/src/electron/serviceStatus.js).
