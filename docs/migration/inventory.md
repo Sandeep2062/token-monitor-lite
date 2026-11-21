@@ -287,7 +287,48 @@ Slint itself is not MIT. Preserve applicable upstream MIT notices and satisfy Sl
 
 ## Verification gate
 
-### Linux, first full run (pixvault-vm)
+### macOS, first green run (GitHub Actions, macos-15 arm64)
+
+The macOS lane had never passed. It now passes every step, on commit `1d77c2c`,
+run [44895601209](https://github.com/Sandeep2062/token-monitor-lite/actions/runs/44895601209):
+
+| Step | Result |
+| --- | --- |
+| Format, Check, Test, Clippy | passed |
+| Release build | passed |
+| Bundle and ad-hoc sign | passed |
+| Inspect bundle | passed |
+| Artifact upload | `macos-arm64-unsigned-app`, 9,851,005 bytes, sha256 `2ab11d00…` |
+
+**VERIFIED**: `cargo fmt`, `check`, `test`, and `clippy -D warnings` all pass on
+macOS 15 arm64 with `--all-features`, and the bundle builds, ad-hoc signs, and
+inspects clean. **1348 tests passed** on that runner.
+
+Getting there required fixing two real defects, neither of which was visible from
+Windows:
+
+1. **The watcher never matched a source behind a symlinked directory.** The macOS
+   test appended to a source file and waited for the monitor to notice; it timed
+   out after 33.89 s. The cause was in `event_matches_sources`, which compared the
+   watcher's reported path to the configured path with plain `Path` equality.
+   macOS reports FSEvents paths with symlinks resolved, so a file under
+   `/var/folders/…` arrives as `/private/var/folders/…` because `/var` is a
+   symlink. Nothing matched and no refresh fired. This affected production, not
+   just the test: any source reached through a symlinked directory was silently
+   never refreshed. Fixed by also comparing canonical forms, with a fallback to
+   direct comparison when canonicalisation fails.
+2. **The bundle check matched a CA certificate name.** `grep -Ei 'electron'`
+   matched "Agence Nationale de Certification Electronique", a bundled root
+   certificate, and reported a forbidden runtime on a binary containing none.
+   The patterns are now specific: `electron.asar`, `Electron Framework`,
+   `org.electron`, `chromium`, `libcef`, `cefclient`, `tokscale-core`.
+
+A third change, raising the test helper's wait from 3 s to 30 s, was made first and
+did **not** fix the macOS failure. It is kept because the original deadline was
+measuring runner speed rather than correctness, but it is recorded here as a
+diagnosis that was wrong: the timeout was a symptom, not the cause.
+
+### Linux (pixvault-vm)
 
 Run on the Azure build VM — Ubuntu 24.04, 4 vCPU, 16 GB, **`cargo 1.99.1`
 x86_64-unknown-linux-gnu**. This is the first time the gate ran on a host that is
