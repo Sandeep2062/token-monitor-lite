@@ -335,9 +335,43 @@ rfd = { version = "=0.15.4", optional = true, default-features = false,
 ```
 
 `Cargo.lock` grew by `ashpd`, `pollster`, `ppv-lite86` and `rand` for that
-backend. The `.deb`/`.tar.zst` still need a Linux release build to confirm the
-portal actually links at runtime, which is **UNVERIFIED** — compiling and linking
-is not the same as a working folder picker under a real desktop portal.
+backend.
+
+#### The portal backend really is linked, and the package declares it
+
+Compiling only proves a feature is enabled. The release binary was inspected to
+confirm the backend is actually reachable, and a real `.deb` was built and read
+back:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| portal interface in the binary | `strings` for `org.freedesktop.portal` | `FileChooser`, `Request`, `Settings`, `Desktop` present |
+| direct link | `readelf -d` `NEEDED` | `libdbus-1.so.3` (plus fontconfig, gcc_s, m, libc) |
+| no GTK drag-in | `readelf -d` grep `gtk\|glib` | none — `xdg-portal` chosen, not `gtk3` |
+| all libraries resolve | `ldd` | **0 "not found"** |
+| no init at startup | `nm` for `rfd` symbols | 0 — the dialog is only touched on demand |
+| package builds | `scripts/build-linux-packages.py` | `token-monitor-lite_0.1.0_amd64.deb`, 10,033,476 bytes |
+| `Depends` covers every `NEEDED` | `dpkg-deb --field Depends` | `libdbus-1-3` **and** every other soname declared |
+
+**VERIFIED**: the desktop build compiles, links the portal backend, resolves all
+its libraries, and the `.deb` declares exactly the libraries it needs. This closes
+the risk that a Linux release would ship a binary whose dialog backend was never
+actually enabled.
+
+**ASSUMED, not verified**: whether the picker *opens*. The VM is a headless tty
+with no `DISPLAY` or `WAYLAND_DISPLAY`, so the window cannot be created; the
+binary fails cleanly from winit (`neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor
+DISPLAY is set`, exit 1) rather than from the dialog code. Seeing a folder
+chooser actually appear needs a real desktop session.
+
+One behaviour worth knowing: when the portal is unavailable, `rfd` falls back to
+running the `zenity` helper (`xdg_desktop_portal.rs` calls `zenity::pick_folder`
+inside its `if let Err(err)` branch). That is a **fallback, not a runtime
+dependency** — the portal path is the primary one and `zenity` is not declared in
+`Depends`. On a desktop without a portal the picker will silently do nothing
+unless `zenity` is installed; declaring it as `Suggests` would make that
+discoverable.
+
 
 ### Windows (earlier, same session)
 

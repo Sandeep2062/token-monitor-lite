@@ -137,6 +137,11 @@ def build(arguments: argparse.Namespace) -> list[Path]:
         f"Installed-Size: {installed_size}\n"
         "Depends: libc6 (>= 2.38), libdbus-1-3, libfontconfig1, libgcc-s1, "
         "libxkbcommon0, libxkbcommon-x11-0, libxcb1, libxcb-xkb1\n"
+        # The folder picker uses the XDG desktop portal (libdbus-1-3 above). rfd
+        # falls back to running `zenity` when no portal is present, so it is a
+        # recommendation rather than a dependency: without it the picker silently
+        # does nothing instead of failing loudly.
+        "Suggests: zenity\n"
         "Description: Native token usage monitor\n"
         " Monitor supported local AI coding-session token usage with a native desktop application.\n"
     ).encode("utf-8")
