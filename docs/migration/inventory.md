@@ -287,6 +287,60 @@ Slint itself is not MIT. Preserve applicable upstream MIT notices and satisfy Sl
 
 ## Verification gate
 
+### Linux, first full run (pixvault-vm)
+
+Run on the Azure build VM — Ubuntu 24.04, 4 vCPU, 16 GB, **`cargo 1.99.1`
+x86_64-unknown-linux-gnu**. This is the first time the gate ran on a host that is
+not Windows.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | exit 0 |
+| clippy, desktop | `cargo clippy --locked --all-targets --all-features -- -D warnings` | exit 0 |
+| clippy, headless | `cargo clippy --locked --no-default-features --all-targets -- -D warnings` | exit 0 |
+| tests, headless | `cargo test --locked --no-default-features --no-fail-fast` | 86 suites, **0 failed** |
+| tests, desktop | `cargo test --locked --all-targets --all-features` | 86 suites, **0 failed** |
+| totals | both configurations | **2688 passed, 0 failed** |
+
+**VERIFIED** on Linux. Windows had passed earlier; this is a second platform, not
+a replacement for that.
+
+#### The desktop build had never compiled on Linux
+
+`--all-features` had only ever run on Windows, and it failed immediately here:
+
+```
+rfd-0.15.4/build.rs:14: You need to choose at least one backend: `gtk3` or `xdg-portal`
+```
+
+The cause is in `Cargo.toml`: `rfd` is declared `default-features = false` with no
+backend, while its own `default` enables `xdg-portal`. Disabling default features
+therefore removed the only thing that made the Linux build possible, and the
+comment claiming "`xdg-portal` on Linux" described a feature that was never
+enabled. Windows and macOS supply native dialogs without a feature, so nothing
+failed until a Linux build was attempted.
+
+Two declarations are needed, and the second was a mistake worth recording: the
+feature union is added under `[target.'cfg(target_os = "linux")'.dependencies]`,
+**merged into the existing Linux table** that other keys use. Adding a second table
+with the same name is a hard error (`duplicate key`), which the first attempt did.
+
+`xdg-portal` also requires an async runtime; `rfd`'s `build.rs` panics without
+`tokio` or `async-std`. Both are enabled for Linux only, so Windows and macOS pay
+nothing:
+
+```toml
+rfd = { version = "=0.15.4", optional = true, default-features = false,
+        features = ["xdg-portal", "async-std"] }
+```
+
+`Cargo.lock` grew by `ashpd`, `pollster`, `ppv-lite86` and `rand` for that
+backend. The `.deb`/`.tar.zst` still need a Linux release build to confirm the
+portal actually links at runtime, which is **UNVERIFIED** — compiling and linking
+is not the same as a working folder picker under a real desktop portal.
+
+### Windows (earlier, same session)
+
 Both feature sets are now run, not just the desktop one. The headless half had
 only ever been *compiled*; rule 6 requires the tests to run under
 `--no-default-features` too, and that had never been executed.
