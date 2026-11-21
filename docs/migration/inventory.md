@@ -285,6 +285,38 @@ Current subset: the Ledger Rail Home, Sessions, Source Health, Gate 1 Settings/m
 
 Slint itself is not MIT. Preserve applicable upstream MIT notices and satisfy Slint Royalty-free 2.0 attribution through accessible About/allowed public badge. A custom extension API must not expose Slint APIs under that license without separate review.
 
+## Verification gate
+
+Both feature sets are now run, not just the desktop one. The headless half had
+only ever been *compiled*; rule 6 requires the tests to run under
+`--no-default-features` too, and that had never been executed.
+
+| Check | Command | Result | Platform |
+| --- | --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | exit 0 | Windows 11, GNU 1.99.1 |
+| clippy, headless | `cargo clippy --locked --no-default-features --all-targets -- -D warnings` | exit 0 | Windows 11, GNU 1.99.1 |
+| clippy, desktop | `cargo clippy --locked --all-targets --all-features -- -D warnings` | exit 0 | Windows 11, GNU 1.99.1 |
+| tests, headless | `cargo test --locked --no-default-features --no-fail-fast` | **1335 passed, 3 ignored, 0 failed** | Windows 11, GNU 1.99.1 |
+| tests, desktop | `cargo test --locked --all-targets --all-features` | **1335 passed, 3 ignored, 0 failed** | Windows 11, GNU 1.99.1 |
+| release, headless | `cargo build --locked --no-default-features --release` | exit 0; produces **only** `token-monitor-lite-agent.exe` (6,269,440 bytes) | Windows 11, GNU 1.99.1 |
+
+**VERIFIED.** The two test totals being identical is correct, not a skipped
+suite. There is no `cfg(feature = "desktop")` in `src/`: the desktop feature gates
+only the `[[bin]]` at `src/main.rs` and the `slint`/`slint-build`/`rfd`
+dependencies, so the library and every integration test compile the same way in
+both configurations. The boundary was checked by deleting
+`target/release/token-monitor-lite.exe` and rebuilding headless — it was not
+regenerated, and `cargo tree --no-default-features` shows no `slint` or `rfd`.
+
+The 3 ignored tests are intentional and unchanged in both configurations: two
+real platform credential-store probes and one probe that reads a real Command
+Code transcript rather than a fixture.
+
+**ASSUMED.** Nothing above is Linux or macOS runtime evidence; it is one Windows
+host with the pinned GNU toolchain. `--no-default-features` does not build
+`src/main.rs`, so the desktop binary's behaviour is unchanged by this gate and
+still rests on the earlier desktop runs.
+
 ## Service status
 
 Reference: [serviceStatus.js](../../token-monitor/src/electron/serviceStatus.js).
